@@ -1,0 +1,22 @@
+Resume OMRON super miner setup from RETURN_POINT_OMRON_SUPER_MINER_v1
+
+Outstanding decisions — FINAL
+1) Image tag to pin:
+   - Pin to the CI-built GHCR tag format: ghcr.io/<org>/omron:omron-znver2-<DATE>-<GITSHA>.
+   - Action: after PR merges and CI finishes, run: scripts/pin_image.sh <TAG>.
+
+2) Wallet details:
+   - WALLET_PATH=/root/.bittensor/wallets
+   - WALLET_NAME=<REDACTED_NAME>
+   - HOTKEY=<REDACTED_HOTKEY>
+   (Fill in actual names before deploy.)
+
+3) Monitoring exposure (9100, 8080, 9101):
+   - Keep internal (MONITORING_PUBLIC=false). Do not expose publicly.
+
+4) Off-host wallet backups:
+   - Default: disabled (ENABLE_BACKUP=false). Enable only when S3/R2 creds are ready.
+
+5) Provisioning method:
+   - Use manual deploy via deploy_super_miner.sh for this server.
+   - Use cloud-init only for brand-new hosts.
