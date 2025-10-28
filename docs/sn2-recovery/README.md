@@ -1,5 +1,5 @@
 # SN2 Dominating Miner — Recovery & Ops Guide
-**Prereqs:** The deploy/ops scripts (e.g. `deploy_super_miner.sh`, `scripts/pin_image.sh`, `scripts/rollback.sh`), the `Makefile` targets (e.g. `loadtest`), and `scripts/acceptance.sh` are part of the main SN2 miner code PR. This recovery PR only contains docs and helper scripts to apply those changes. Do not run the deployment steps here until those files exist in your working tree (after the main code PR merges or you add them).
+**Prereqs:** The deploy/ops scripts (e.g. `deploy_super_miner.sh`, `scripts/pin_image.sh`, `scripts/rollback.sh`), the `Makefile` targets (e.g. `loadtest`), and `scripts/acceptance.sh` are part of the main SN2 miner code PR. This PR is docs-only. Deployment/ops scripts, Makefile targets and acceptance checks live in the main SN2 miner code PR. Do not run the deployment steps here until those files exist in your working tree (after the main code PR merges or you add them).
 
 
 This folder contains copy‑paste commands and scripts to:
