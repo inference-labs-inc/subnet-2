@@ -195,3 +195,5 @@ competition_circuit/**
 
 # intellij files
 .idea/
+.env.super
+sn2-keys-ADDRESSES.txt

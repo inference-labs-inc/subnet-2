@@ -1,0 +1,5 @@
+﻿# DECISIONS (SN2)
+1) Image tag format: ghcr.io/<org>/omron:omron-znver2-YYYYMMDD-<GITSHA_SHORT>
+2) .env.super is gitignored; wallets only on server.
+3) Monitoring private; if exposing, use VPN or UFW allowlist (never 0.0.0.0/0).
+4) Off-host backups only with encryption and 30d retention.
