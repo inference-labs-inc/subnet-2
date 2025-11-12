@@ -6,6 +6,9 @@
 
 ### Proof of Inference
 
+Autonomy unbridled.
+Governed by math, not blind faith.
+
 [Documentation](https://sn2-docs.inferencelabs.com/) • [Inference Labs](https://x.com/inference_labs) • [Stats](https://sn2-stats.inferencelabs.com/) • [Studio](https://sn2-studio.inferencelabs.com/) • [Dashboard](https://wandb.ai/inferencelabs/subnet-2)
 
 </div>
