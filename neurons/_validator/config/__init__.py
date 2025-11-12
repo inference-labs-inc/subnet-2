@@ -10,7 +10,7 @@ class ValidatorConfig:
     """
     Configuration class for the Validator.
 
-    This class initializes and manages the configuration settings for the Omron validator.
+    This class initializes and manages the configuration settings for the validator.
 
     Attributes:
         config (bt.config): The Bittensor configuration object.

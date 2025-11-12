@@ -23,7 +23,7 @@ class CircuitManager:
             if os.path.exists(circuit_dir):
                 shutil.rmtree(circuit_dir)
             temp_files = [
-                os.path.join("/tmp/omron", f)
+                os.path.join("/tmp/subnet-2", f)
                 for f in ["temp_proof.json", "temp_witness.json"]
             ]
             for f in temp_files:

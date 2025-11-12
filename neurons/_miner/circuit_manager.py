@@ -262,7 +262,7 @@ class CircuitManager:
                     if not new_vk_hash:
                         bt.logging.warning(
                             "No verification key found. This means you are not participating in the competition.\n"
-                            "See https://accelerate.omron.ai for details."
+                            "See https://sn2-accelerate.inferencelabs.com for details."
                         )
                         time.sleep(self.check_interval)
                         continue

@@ -1,6 +1,6 @@
 # Developer Guide
 
-This document provides a guide for developers who contribute to the Omron subnet.
+This document provides a guide for developers who contribute to subnet 2.
 
 ## Adding Dependencies
 
@@ -44,7 +44,7 @@ $ uv sync --upgrade-package bittensor --upgrade-package requests==2.0.0
 
 For local development, we recommend using our devcontainer which provides a pre-configured development environment. The devcontainer image is pulled from `ghcr.io/inference-labs-inc/bittensor-devcontainer:latest`.
 
-1. Create the `~/.bittensor/omron` directory on your host machine if it doesn't exist
+1. Create the `~/.bittensor/subnet-2` directory on your host machine if it doesn't exist
 2. Open the project in VS Code with the Dev Containers extension installed
 3. VS Code will prompt you to "Reopen in Container" - click this to start the devcontainer
 4. Once the container starts, run:

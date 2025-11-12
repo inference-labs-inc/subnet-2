@@ -2,8 +2,7 @@
 
 ## Important Port Configuration
 
-> [!WARNING] 
-> **Port Conflicts**
+> [!WARNING] > **Port Conflicts**
 > By default, both prometheus server and the validator prometheus exporter use port 9090. If installing on the same machine, you must either:
 >
 > - Change the validator exporter port: `--prometheus-port <port>`
@@ -34,11 +33,11 @@ Take a note by default Prometheus and validator data source use the same port. S
 ### Step 2: Configure Prometheus
 
 1. Open the `prometheus.yml` configuration file in a text editor.
-2. Add a new job under the `omron-validator-metrics` section to scrape metrics from the validator instance:
+2. Add a new job under the `subnet-2-validator-metrics` section to scrape metrics from the validator instance:
 
 ```yaml
 scrape_configs:
-  - job_name: "omron-validator-metrics"
+  - job_name: "subnet-2-validator-metrics"
     static_configs:
       - targets: ["localhost:9090"] # Replace with validator IP if needed
 ```
@@ -56,7 +55,7 @@ scrape_configs:
 
 3. Prometheus will start and begin scraping metrics from the validator instance on port 9090.
 
-Your Prometheus instance is now set up to fetch metrics exposed by the validator instance. You can verify the setup by opening `http://localhost:9090/targets` in a web browser and checking that the `omron-validator-metrics` job is listed and the endpoint is up.
+Your Prometheus instance is now set up to fetch metrics exposed by the validator instance. You can verify the setup by opening `http://localhost:9090/targets` in a web browser and checking that the `subnet-2-validator-metrics` job is listed and the endpoint is up.
 
 Take a look at the [Prometheus documentation](https://prometheus.io/docs/introduction/overview/) for more information on how to use Prometheus.
 
@@ -154,8 +153,7 @@ For more information on using Docker Compose with Prometheus and Grafana, refer 
 
 ## Security Considerations
 
-> [!WARNING]
-> **Production Deployment Warning**
+> [!WARNING] > **Production Deployment Warning**
 > The setup described above is suitable for local development. For production deployments:
 >
 > - Use strong passwords for Grafana

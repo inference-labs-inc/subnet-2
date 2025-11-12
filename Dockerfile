@@ -21,9 +21,9 @@ RUN apt update && \
     && apt clean && rm -rf /var/lib/apt/lists/*
 
 # Make directories under opt and set owner to ubuntu
-RUN mkdir -p /opt/.cargo /opt/.nvm /opt/.npm /opt/.snarkjs /opt/omron/neurons && \
+RUN mkdir -p /opt/.cargo /opt/.nvm /opt/.npm /opt/.snarkjs /opt/subnet-2/neurons && \
     chown -R ubuntu:ubuntu /opt && \
-    chmod -R 775 /opt/omron && \
+    chmod -R 775 /opt/subnet-2 && \
     chown root:root /opt
 
 # Use ubuntu user
@@ -44,24 +44,24 @@ RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | b
     chmod -R 775 /opt/.nvm /opt/.npm /opt/.snarkjs
 ENV PATH="/home/ubuntu/.local/bin:${PATH}"
 
-# Copy omron and install Python dependencies (make sure owner is ubuntu)
-COPY --chown=ubuntu:ubuntu --chmod=775 neurons /opt/omron/neurons
-COPY --chown=ubuntu:ubuntu --chmod=775 pyproject.toml /opt/omron/pyproject.toml
-COPY --chown=ubuntu:ubuntu --chmod=775 uv.lock /opt/omron/uv.lock
+# Copy subnet-2 and install Python dependencies (make sure owner is ubuntu)
+COPY --chown=ubuntu:ubuntu --chmod=775 neurons /opt/subnet-2/neurons
+COPY --chown=ubuntu:ubuntu --chmod=775 pyproject.toml /opt/subnet-2/pyproject.toml
+COPY --chown=ubuntu:ubuntu --chmod=775 uv.lock /opt/subnet-2/uv.lock
 RUN pipx install uv && \
-    cd /opt/omron && \
+    cd /opt/subnet-2 && \
     ~/.local/bin/uv sync --frozen --no-dev --compile-bytecode && \
     ~/.local/bin/uv cache clean && \
-    echo "source /opt/omron/.venv/bin/activate" >> ~/.bashrc && \
-    chmod -R 775 /opt/omron/.venv
-ENV PATH="/opt/omron/.venv/bin:${PATH}"
+    echo "source /opt/subnet-2/.venv/bin/activate" >> ~/.bashrc && \
+    chmod -R 775 /opt/subnet-2/.venv
+ENV PATH="/opt/subnet-2/.venv/bin:${PATH}"
 
 # Set workdir for running miner.py or validator.py and compile circuits
-WORKDIR /opt/omron/neurons
-ENV OMRON_NO_AUTO_UPDATE=1
-RUN OMRON_DOCKER_BUILD=1 /opt/omron/.venv/bin/python3 miner.py && \
+WORKDIR /opt/subnet-2/neurons
+ENV SUBNET_2_NO_AUTO_UPDATE=1
+RUN SUBNET_2_DOCKER_BUILD=1 /opt/subnet-2/.venv/bin/python3 miner.py && \
     rm -rf ~/.bittensor && \
-    rm -rf /tmp/omron
+    rm -rf /tmp/subnet-2
 USER root
 RUN cat <<'EOF' > /entrypoint.sh
 #!/usr/bin/env bash
@@ -69,21 +69,21 @@ set -e
 if [ -n "$PUID" ]; then
     if [ "$PUID" = "0" ]; then
         echo "Running as root user"
-        /opt/omron/.venv/bin/python3 "$@"
+        /opt/subnet-2/.venv/bin/python3 "$@"
     else
         echo "Changing ubuntu user id to $PUID"
         usermod -u "$PUID" ubuntu
-        gosu ubuntu /opt/omron/.venv/bin/python3 "$@"
+        gosu ubuntu /opt/subnet-2/.venv/bin/python3 "$@"
     fi
 else
-    gosu ubuntu /opt/omron/.venv/bin/python3 "$@"
+    gosu ubuntu /opt/subnet-2/.venv/bin/python3 "$@"
 fi
 EOF
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["-c", "import subprocess; \
-    subprocess.run(['/opt/omron/.venv/bin/python3', '/opt/omron/neurons/miner.py', '--help']); \
-    subprocess.run(['/opt/omron/.venv/bin/python3', '/opt/omron/neurons/validator.py', '--help']);" \
+    subprocess.run(['/opt/subnet-2/.venv/bin/python3', '/opt/subnet-2/neurons/miner.py', '--help']); \
+    subprocess.run(['/opt/subnet-2/.venv/bin/python3', '/opt/subnet-2/neurons/validator.py', '--help']);" \
     ]
 # Axon server
 EXPOSE 8091/tcp

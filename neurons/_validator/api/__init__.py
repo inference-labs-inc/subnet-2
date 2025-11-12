@@ -116,8 +116,8 @@ class ValidatorAPI:
                     data,
                     context=websocket,
                     methods={
-                        "omron.proof_of_weights": self.handle_proof_of_weights,
-                        "omron.proof_of_computation": self.handle_proof_of_computation,
+                        "subnet-2.proof_of_weights": self.handle_proof_of_weights,
+                        "subnet-2.proof_of_computation": self.handle_proof_of_computation,
                     },
                 )
                 await websocket.send_text(str(response))

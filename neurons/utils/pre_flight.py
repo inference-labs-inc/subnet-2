@@ -64,7 +64,7 @@ def run_shared_preflight_checks(role: Optional[Roles] = None):
     bt.logging.info(" PreFlight | Running pre-flight checks")
 
     # Skip sync_model_files during docker build
-    if os.getenv("OMRON_DOCKER_BUILD", False):
+    if os.getenv("SUBNET_2_DOCKER_BUILD", False):
         bt.logging.info(" PreFlight | Skipping model file sync")
         _ = preflight_checks.pop("Syncing model files")
 

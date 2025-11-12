@@ -6,7 +6,7 @@
     "proof_system": "CIRCOM",
     "type": "proof_of_computation",
     "external_files": {
-        "circuit.zkey": "https://storage.omron.ai/4a87c995300f4e9ad9add9d5b800eb93bb3ecd3f9459b617f9924a211407a88c/circuit.zkey"
+        "circuit.zkey": "https://sn2-storage.inferencelabs.com/4a87c995300f4e9ad9add9d5b800eb93bb3ecd3f9459b617f9924a211407a88c/circuit.zkey"
     },
     "benchmark_choice_weight": 0.2
 }

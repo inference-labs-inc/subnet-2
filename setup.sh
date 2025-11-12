@@ -4,7 +4,7 @@ set -eo pipefail
 
 
 NODE_VERSION="20"
-INSTALL_PATH="./omron"
+INSTALL_PATH="./subnet-2"
 if git rev-parse --is-inside-work-tree &>/dev/null; then
     INSTALL_PATH="."
 fi
@@ -86,8 +86,8 @@ echo "Installing btcli..."
 "$HOME/.local/bin/uv" tool install --python 3.12 bittensor-cli
 
 if [[ ! -d ${INSTALL_PATH} ]]; then
-    echo "Cloning omron-subnet repository..."
-    if ! git clone https://github.com/inference-labs-inc/omron-subnet.git "${INSTALL_PATH}"; then
+    echo "Cloning subnet-2 repository..."
+    if ! git clone https://github.com/inference-labs-inc/subnet-2.git "${INSTALL_PATH}"; then
         echo "Failed to clone repository. Check your internet connection and try again."
         exit 1
     fi
@@ -118,13 +118,7 @@ echo "
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
- ██████╗ ███╗   ███╗██████╗  ██████╗ ███╗   ██╗
-██╔═══██╗████╗ ████║██╔══██╗██╔═══██╗████╗  ██║
-██║   ██║██╔████╔██║██████╔╝██║   ██║██╔██╗ ██║
-██║   ██║██║╚██╔╝██║██╔══██╗██║   ██║██║╚██╗██║
-╚██████╔╝██║ ╚═╝ ██║██║  ██║╚██████╔╝██║ ╚████║
- ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
-███████╗██╗   ██╗██████╗ ███╗   ██╗███████╗████████╗
+███████╗██╗   ██╗██████╗ ███╗   ██╗███████╗████████╗ 2
 ██╔════╝██║   ██║██╔══██╗████╗  ██║██╔════╝╚══██╔══╝
 ███████╗██║   ██║██████╔╝██╔██╗ ██║█████╗     ██║
 ╚════██║██║   ██║██╔══██╗██║╚██╗██║██╔══╝     ██║

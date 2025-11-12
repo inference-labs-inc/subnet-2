@@ -1,7 +1,7 @@
 # Versioning and Auto-Update
 
 > [!NOTE]
-> Semantic Versioning was adopted by Omron starting from version 1.0.0.
+> Semantic Versioning was adopted by Subnet 2 starting from version 1.0.0.
 
 This project uses Semantic Versioning (SemVer) for version numbering and includes an auto-update feature to ensure users are running the latest version.
 
@@ -50,8 +50,7 @@ pm2 restart all
 
 ## Version History
 
-For a detailed changelog of version updates, please refer to [the releases section of the repository] or [release notes on Omron's GitBook].
+For a detailed changelog of version updates, please refer to [the releases section of the repository] or [release notes on Subnet 2's GitBook].
 
-
-[the releases section of the repository](https://github.com/inference-labs-inc/omron-subnet/releases)
-[release notes on Omron's GitBook](https://docs.omron.ai/release-notes)
+[the releases section of the repository](https://github.com/inference-labs-inc/subne-2t/releases)
+[release notes on Subnet 2's GitBook](https://sn2-docs.inferencelabs.com/release-notes)

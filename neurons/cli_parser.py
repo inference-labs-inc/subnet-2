@@ -30,8 +30,8 @@ config: Optional[bt.config]
 
 
 DESCRIPTION = {
-    Roles.MINER: "Omron Miner. Starts a Bittensor node that mines on the Omron subnet.",
-    Roles.VALIDATOR: "Omron Validator. Starts a Bittensor node that validates on the Omron subnet.",
+    Roles.MINER: "Subnet 2 Miner. Starts a Bittensor node that mines on the subnet.",
+    Roles.VALIDATOR: "Subnet 2 Validator. Starts a Bittensor node that validates on the subnet.",
 }
 
 
@@ -52,7 +52,7 @@ def init_config(role: Optional[str] = None):
 
     parser = argparse.ArgumentParser(
         description=DESCRIPTION.get(role, ""),
-        epilog="For more information, visit https://omron.ai/",
+        epilog="For more information, visit https://sn2-docs.inferencelabs.com",
         allow_abbrev=False,
     )
 
@@ -60,7 +60,7 @@ def init_config(role: Optional[str] = None):
     parser.add_argument("--netuid", type=int, default=1, help="The UID of the subnet.")
     parser.add_argument(
         "--no-auto-update",
-        default=bool(os.getenv("OMRON_NO_AUTO_UPDATE", False)),
+        default=bool(os.getenv("SUBNET_2_NO_AUTO_UPDATE", False)),
         help="Whether this miner should NOT automatically update upon new release.",
         action="store_true",
     )
@@ -129,7 +129,7 @@ def init_config(role: Optional[str] = None):
         config.disable_wandb = True
         config.verbose = config.verbose if config.verbose is None else True
 
-    config.full_path = os.path.expanduser("~/.bittensor/omron")  # type: ignore
+    config.full_path = os.path.expanduser("~/.bittensor/subnet-2")  # type: ignore
     config.full_path_score = os.path.join(config.full_path, "scores", "scores.pt")
     if not config.certificate_path:
         config.certificate_path = os.path.join(config.full_path, "cert")
@@ -347,7 +347,7 @@ def _validator_config():
         help="A custom path to a directory containing a public and private SSL certificate. "
         "(cert.pem and key.pem) "
         "Please note that this should not be used unless you have issued your own certificate. "
-        "Omron will issue a certificate for you by default.",
+        "A certificate will be issued for you by default.",
     )
 
     parser.add_argument(

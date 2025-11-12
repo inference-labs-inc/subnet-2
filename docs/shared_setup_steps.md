@@ -4,13 +4,13 @@ For miners and validators.
 
 ## 1. Install Prerequisites
 
-To mine and validate for the Omron subnet, you'll need to install several prerequisite tools. For convenience, we offer a shell script to install all of the required tools automatically. To run the script, use the below command. Some dependencies will be installed automatically upon starting the miner or validator, as part of pre-flight checks. Otherwise, to manually install the necessary tools, please find links to all relevant installation documentation below.
+To mine and validate for the subnet, you'll need to install several prerequisite tools. For convenience, we offer a shell script to install all of the required tools automatically. To run the script, use the below command. Some dependencies will be installed automatically upon starting the miner or validator, as part of pre-flight checks. Otherwise, to manually install the necessary tools, please find links to all relevant installation documentation below.
 
 > [!IMPORTANT]
 > When starting the miner or validator, you must monitor initial startup logs. If any dependencies are missing, the script will automatically attempt to install them. It _may_ prompt you to restart your system if necessary. Once all dependencies are installed, the pre-flight checks will pass without any further action required from you.
 
 ```console
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/omron-subnet/main/setup.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/main/setup.sh)"
 ```
 
 | Tool       | Description                                                                                               |

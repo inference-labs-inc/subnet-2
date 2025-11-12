@@ -96,7 +96,7 @@ class CircuitPaths:
             self.external_base_path = os.path.join(
                 os.path.expanduser("~"),
                 ".bittensor",
-                "omron",
+                "subnet-2",
                 "models",
                 f"model_{self.model_id}",
             )

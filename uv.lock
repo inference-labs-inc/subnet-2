@@ -1329,7 +1329,7 @@ wheels = [
 ]
 
 [[package]]
-name = "omron"
+name = "subnet-2"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

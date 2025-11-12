@@ -13,18 +13,18 @@ if TYPE_CHECKING:
     from _validator.models.miner_response import MinerResponse
 
 LOGGING_URL = os.getenv(
-    "OMRON_LOGGING_URL",
-    "https://api.omron.ai/statistics/log/",
+    "SUBNET_2_LOGGING_URL",
+    "https://sn2-api.inferencelabs.com/statistics/log/",
 )
 
 COMPETITION_LOGGING_URL = os.getenv(
     "COMPETITION_LOGGING_URL",
-    "https://api.omron.ai/statistics/competition/log/",
+    "https://sn2-api.inferencelabs.com/statistics/competition/log/",
 )
 
 EVAL_LOGGING_URL = os.getenv(
     "EVAL_LOGGING_URL",
-    "https://api.omron.ai/statistics/eval/log/",
+    "https://sn2-api.inferencelabs.com/statistics/eval/log/",
 )
 
 session = requests.Session()
