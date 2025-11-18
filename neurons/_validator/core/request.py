@@ -18,8 +18,8 @@ class Request:
     hotkey: str
     coldkey: str
     url_path: str
-    circuit: Circuit
     request_type: RequestType
+    circuit: Circuit | None = None
     data: dict[str, Any] | None = None
     inputs: GenericInput | None = None
     request_hash: str | None = None

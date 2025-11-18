@@ -12,8 +12,10 @@ from typing import NoReturn
 
 import bittensor as bt
 import httpx
+from bittensor.core.chain_data import AxonInfo
 
 from _validator.api import ValidatorAPI
+from _validator.api.client import query_miner
 from _validator.competitions.competition import Competition
 from _validator.config import ValidatorConfig
 from _validator.core.capacity_manager import CapacityManager
@@ -33,7 +35,6 @@ from _validator.models.miner_response import MinerResponse
 from _validator.models.request_type import RequestType, ValidatorMessage
 from _validator.scoring.score_manager import ScoreManager
 from _validator.scoring.weights import WeightsManager
-from _validator.utils.axon import query_miner
 from _validator.utils.logging import log_responses as console_log_responses
 from _validator.utils.proof_of_weights import save_proof_of_weights
 from _validator.utils.uid import get_queryable_uids
@@ -73,7 +74,7 @@ class ValidatorLoop:
         self.validator_to_competition_queue = MPQueue()  # Messages TO competition
         self.competition_to_validator_queue = MPQueue()  # Messages FROM competition
         self.current_concurrency = MAX_CONCURRENT_REQUESTS
-        self.capacity_manager = CapacityManager(self.config)
+        self.capacity_manager = CapacityManager(self.config, self.httpx_client)
         try:
             competition_id = 1
             bt.logging.info("Initializing competition module...")
@@ -173,7 +174,7 @@ class ValidatorLoop:
         self.config.metagraph.sync(subtensor=self.config.subtensor)
 
     @with_rate_limit(period=ONE_HOUR)
-    async def sync_capacities(self, axons: list[bt.Axon]):
+    async def sync_capacities(self, axons: list[AxonInfo]):
         capacities = await self.capacity_manager.sync_capacities(axons)
         bt.logging.debug(f"Synced capacities: {capacities}")
         return capacities
