@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, Optional
+from typing import ClassVar, Dict, Optional
 
 import bittensor as bt
 from pydantic import BaseModel
@@ -12,6 +12,8 @@ class QueryZkProof(BaseModel):
     """
     Data model for querying zk proofs.
     """
+
+    name: ClassVar = "query-zk-proof"
 
     # Required request input, filled by sending dendrite caller.
     query_input: Optional[Dict] = None
@@ -32,6 +34,7 @@ class QueryForProvenInference(BaseModel):
     DEV: This synapse is a placeholder.
     """
 
+    name: ClassVar = "prove-inference"
     query_input: Optional[dict] = None
     query_output: Optional[dict] = None
 
@@ -42,11 +45,12 @@ class QueryForProvenInference(BaseModel):
         return self.query_output
 
 
-class ProofOfWeightsSynapse(BaseModel):
+class ProofOfWeightsDataModel(BaseModel):
     """
     Data model for conveying proof of weights messages
     """
 
+    name: ClassVar = "proof-of-weights"
     subnet_uid: int = 2
     verification_key_hash: str
     proof_system: ProofSystem = ProofSystem.CIRCOM
@@ -70,6 +74,7 @@ class Competition(BaseModel):
     A synapse for conveying competition messages and circuit files
     """
 
+    name: ClassVar = "competition"
     id: int  # Competition ID
     hash: str  # Circuit hash
     file_name: str  # Name of file being requested
@@ -95,6 +100,7 @@ class QueryForCapacities(BaseModel):
     Query for capacities allocated to each circuit
     """
 
+    name: ClassVar = "capacities"
     capacities: Optional[dict[str, int]] = None
 
     def deserialize(self) -> dict[str, int]:

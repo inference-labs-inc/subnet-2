@@ -7,7 +7,6 @@ import bittensor as bt
 import httpx
 from aiohttp.client_exceptions import InvalidUrlClientError
 
-# from substrateinterface.keypair import Keypair
 from _validator.core.request import Request
 from utils.signatures import Headers
 
@@ -26,18 +25,11 @@ async def query_miner(
         start_time = time.perf_counter()
         response = await httpx_client.post(
             content=content,
-            timeout=request.circuit.timeout,
+            timeout=request.circuit.timeout if request.circuit else None,
             headers=headers,
             url=url,
         )
         end_time = time.perf_counter()
-
-        # TODO: handle non-200 responses
-        if response.status_code != 200:
-            bt.logging.warning(
-                f"Received non-200 response from miner {request.uid} at {url}: {response.status_code}"
-            )
-            return None
 
         result = response.json()
 

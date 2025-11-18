@@ -3,7 +3,7 @@ import json
 import os
 import time
 import traceback
-from typing import Tuple, Union
+from typing import Union
 
 import bittensor as bt
 import websocket
@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 import cli_parser
-from _miner.server import MinerServer, ZKRequestModel
+from _miner.server import MinerServer
 from _validator.models.request_type import RequestType
 from constants import (
     CIRCUIT_TIMEOUT_SECONDS,
@@ -23,15 +23,13 @@ from constants import (
     ONE_HOUR,
     ONE_MINUTE,
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
-    STEAK,
-    VALIDATOR_STAKE_THRESHOLD,
 )
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.generic_input import GenericInput
 from execution_layer.verified_model_session import VerifiedModelSession
 from protocol import (
     Competition,
-    ProofOfWeightsSynapse,
+    ProofOfWeightsDataModel,
     QueryForCapacities,
     QueryZkProof,
 )
@@ -70,15 +68,17 @@ class MinerSession:
             f"which are usually sufficient. {cli_parser.config.axon}"
         )
 
-        self.server.register_route(path="/QueryZkProof", endpoint=self.queryZkProof)
         self.server.register_route(
-            path="/ProofOfWeightsSynapse", endpoint=self.handle_pow_request
+            path=f"/{QueryZkProof.name}", endpoint=self.queryZkProof
         )
         self.server.register_route(
-            path="/Competition", endpoint=self.handleCompetitionRequest
+            path=f"/{ProofOfWeightsDataModel.name}", endpoint=self.handle_pow_request
         )
         self.server.register_route(
-            path="/QueryForCapacities", endpoint=self.handleCapacityRequest
+            path=f"/{Competition.name}", endpoint=self.handleCompetitionRequest
+        )
+        self.server.register_route(
+            path=f"/{QueryForCapacities.name}", endpoint=self.handleCapacityRequest
         )
         self.server.start()
 
@@ -563,7 +563,7 @@ class MinerSession:
             )
         return JSONResponse(content=output)
 
-    def handle_pow_request(self, data: ProofOfWeightsSynapse) -> JSONResponse:
+    def handle_pow_request(self, data: ProofOfWeightsDataModel) -> JSONResponse:
         """
         Handles a proof of weights request
         """
