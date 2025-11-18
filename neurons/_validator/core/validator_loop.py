@@ -1,53 +1,54 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-import traceback
-import time
-from typing import NoReturn
 import concurrent.futures
 import os
+import sys
+import time
+import traceback
+from multiprocessing import Queue as MPQueue
+from queue import Empty
+from typing import NoReturn
 
 import bittensor as bt
+import httpx
 
-from _validator.config import ValidatorConfig
 from _validator.api import ValidatorAPI
+from _validator.competitions.competition import Competition
+from _validator.config import ValidatorConfig
+from _validator.core.capacity_manager import CapacityManager
 from _validator.core.prometheus import (
+    log_error,
+    log_queue_metrics,
+    log_score_change,
+    log_system_metrics,
+    log_weight_update,
     start_prometheus_logging,
     stop_prometheus_logging,
-    log_system_metrics,
-    log_queue_metrics,
-    log_weight_update,
-    log_score_change,
-    log_error,
 )
 from _validator.core.request import Request
 from _validator.core.request_pipeline import RequestPipeline
 from _validator.core.response_processor import ResponseProcessor
 from _validator.models.miner_response import MinerResponse
+from _validator.models.request_type import RequestType, ValidatorMessage
 from _validator.scoring.score_manager import ScoreManager
 from _validator.scoring.weights import WeightsManager
-from _validator.utils.axon import query_single_axon
-from _validator.models.request_type import RequestType, ValidatorMessage
+from _validator.utils.axon import query_miner
+from _validator.utils.logging import log_responses as console_log_responses
 from _validator.utils.proof_of_weights import save_proof_of_weights
 from _validator.utils.uid import get_queryable_uids
-from utils import AutoUpdate, clean_temp_files, with_rate_limit
-from utils.gc_logging import log_responses as gc_log_responses
-from utils.gc_logging import gc_log_competition_metrics
-from _validator.utils.logging import log_responses as console_log_responses
 from constants import (
-    LOOP_DELAY_SECONDS,
-    EXCEPTION_DELAY_SECONDS,
-    MAX_CONCURRENT_REQUESTS,
-    ONE_MINUTE,
-    FIVE_MINUTES,
-    ONE_HOUR,
     DEFAULT_PROOF_SIZE,
+    EXCEPTION_DELAY_SECONDS,
+    FIVE_MINUTES,
+    LOOP_DELAY_SECONDS,
+    MAX_CONCURRENT_REQUESTS,
+    ONE_HOUR,
+    ONE_MINUTE,
 )
-from _validator.competitions.competition import Competition
-from _validator.core.capacity_manager import CapacityManager
-from multiprocessing import Queue as MPQueue
-from queue import Empty
+from utils import AutoUpdate, clean_temp_files, with_rate_limit
+from utils.gc_logging import gc_log_competition_metrics
+from utils.gc_logging import log_responses as gc_log_responses
 
 
 class ValidatorLoop:
@@ -67,6 +68,7 @@ class ValidatorLoop:
         self.config = config
         self.config.check_register()
         self.auto_update = AutoUpdate()
+        self.httpx_client = httpx.AsyncClient()
 
         self.validator_to_competition_queue = MPQueue()  # Messages TO competition
         self.competition_to_validator_queue = MPQueue()  # Messages FROM competition
@@ -347,7 +349,9 @@ class ValidatorLoop:
                     ]
 
                     for uid in available_uids[:slots_available]:
-                        request = self.request_pipeline.prepare_single_request(uid)
+                        request: Request = self.request_pipeline.prepare_single_request(
+                            uid
+                        )
                         if request:
                             task = asyncio.create_task(
                                 self._process_single_request(request)
@@ -435,7 +439,11 @@ class ValidatorLoop:
         try:
             response = await asyncio.get_event_loop().run_in_executor(
                 self.thread_pool,
-                lambda: query_single_axon(self.config.dendrite, request),
+                lambda: query_miner(
+                    self.httpx_client,
+                    request,
+                    self.config.wallet,
+                ),
             )
             response = await response
             processed_response = await asyncio.get_event_loop().run_in_executor(

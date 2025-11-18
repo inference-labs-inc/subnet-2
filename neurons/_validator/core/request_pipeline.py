@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import copy
-import traceback
 import random
+import traceback
 
 import bittensor as bt
+from bittensor.core.chain_data import AxonInfo
 
 from _validator.api import ValidatorAPI
 from _validator.config import ValidatorConfig
@@ -18,11 +19,11 @@ from constants import (
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
 )
 from deployment_layer.circuit_store import circuit_store
+from execution_layer.base_input import BaseInput
 from execution_layer.circuit import Circuit, CircuitType
 from execution_layer.generic_input import GenericInput
 from protocol import ProofOfWeightsSynapse, QueryZkProof
 from utils.wandb_logger import safe_log
-from execution_layer.base_input import BaseInput
 
 
 class RequestPipeline:
@@ -79,12 +80,19 @@ class RequestPipeline:
                 )
             return None
 
+        axon: AxonInfo = self.config.metagraph.axons[uid]
+
         return Request(
             uid=uid,
-            axon=self.config.metagraph.axons[uid],
-            synapse=synapse,
+            ip=axon.ip,
+            port=axon.port,
+            hotkey=axon.hotkey,
+            coldkey=axon.coldkey,
+            data=synapse.model_dump(),
+            url_path=synapse.__class__.__name__,
             circuit=circuit,
             request_type=request_type,
+            # 'inputs' are used for verification later on validator side:
             inputs=GenericInput(RequestType.RWR, input_data),
             request_hash=request_hash,
             save=save,

@@ -2,15 +2,15 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 import bittensor as bt
+from pydantic import BaseModel
 
 import toml
 from execution_layer.circuit import ProofSystem
 
 
-class QueryZkProof(bt.Synapse):
+class QueryZkProof(BaseModel):
     """
-    QueryZkProof class inherits from bt.Synapse.
-    It is used to query zkproof of certain model.
+    Data model for querying zk proofs.
     """
 
     # Required request input, filled by sending dendrite caller.
@@ -26,9 +26,9 @@ class QueryZkProof(bt.Synapse):
         return self.query_output
 
 
-class QueryForProvenInference(bt.Synapse):
+class QueryForProvenInference(BaseModel):
     """
-    A Synapse for querying proven inferences.
+    Data model for querying proven inferences.
     DEV: This synapse is a placeholder.
     """
 
@@ -42,9 +42,9 @@ class QueryForProvenInference(bt.Synapse):
         return self.query_output
 
 
-class ProofOfWeightsSynapse(bt.Synapse):
+class ProofOfWeightsSynapse(BaseModel):
     """
-    A synapse for conveying proof of weights messages
+    Data model for conveying proof of weights messages
     """
 
     subnet_uid: int = 2
@@ -65,7 +65,7 @@ class ProofOfWeightsSynapse(bt.Synapse):
         }
 
 
-class Competition(bt.Synapse):
+class Competition(BaseModel):
     """
     A synapse for conveying competition messages and circuit files
     """
@@ -90,7 +90,7 @@ class Competition(bt.Synapse):
 
 
 # Note these are going to need to change to lighting.Synapse
-class QueryForCapacities(bt.Synapse):
+class QueryForCapacities(BaseModel):
     """
     Query for capacities allocated to each circuit
     """

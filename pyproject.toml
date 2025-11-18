@@ -18,6 +18,7 @@ dependencies = [
   "ezkl==22.0.1",
   "fastapi==0.110.3",
   "gitpython>=3.1.44",
+  "httpx>=0.28.1",
   "jsonrpcserver>=5.0.9",
   "matplotlib>=3.10.1",
   "numpy==2.0.2",
