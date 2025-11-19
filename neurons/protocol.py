@@ -15,7 +15,7 @@ class QueryZkProof(BaseModel):
 
     name: ClassVar = "query-zk-proof"
 
-    # Required request input, filled by sending dendrite caller.
+    # Required request input, filled by caller.
     query_input: Optional[Dict] = None
 
     # Optional request output, filled by receiving axon.
