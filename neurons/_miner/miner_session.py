@@ -497,7 +497,6 @@ class MinerSession:
 
         if not data.query_input or not data.query_input.get("public_inputs", None):
             bt.logging.error("Received empty query input")
-            breakpoint()
             return JSONResponse(
                 # TODO: non-200 response?
                 content="Empty query input",
@@ -604,7 +603,6 @@ class MinerSession:
             response["proof"] = proof.hex() if isinstance(proof, bytes) else proof
             response["public_signals"] = public
         except Exception as e:
-            # breakpoint()
             bt.logging.error(
                 f"An error occurred while generating proof of weights\n{e}"
             )

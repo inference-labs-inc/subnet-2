@@ -15,7 +15,6 @@ class CapacityManager:
     def __init__(self, config: ValidatorConfig, httpx_client: httpx.AsyncClient):
         self.config = config
         self.httpx_client = httpx_client
-        self.dendrite = self.config.dendrite
 
     async def sync_capacities(self, miners_info: list[AxonInfo]):
         bt.logging.info(f"Syncing capacities for {len(miners_info)} miners...")
