@@ -18,7 +18,7 @@ class QueryZkProof(BaseModel):
     # Required request input, filled by caller.
     query_input: Optional[Dict] = None
 
-    # Optional request output, filled by receiving axon.
+    # Optional request output, filled by receiving miner.
     query_output: Optional[str] = None
 
     def deserialize(self: QueryZkProof) -> str | None:

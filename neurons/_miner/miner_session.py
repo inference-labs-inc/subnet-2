@@ -46,8 +46,6 @@ COMPETITION_DIR = os.path.join(
 
 class MinerSession:
 
-    axon: Union[bt.axon, None] = None
-
     def __init__(self):
         self.configure()
         self.check_register(should_exit=True)
@@ -82,19 +80,19 @@ class MinerSession:
         )
         self.server.start()
 
-        existing_axon = self.metagraph.axons[self.subnet_uid]
+        existing_miner = self.metagraph.axons[self.subnet_uid]
 
         if (
-            existing_axon
-            and existing_axon.port == self.server.external_port
-            and existing_axon.ip == self.server.external_ip
+            existing_miner
+            and existing_miner.port == self.server.external_port
+            and existing_miner.ip == self.server.external_ip
         ):
             bt.logging.debug(
-                f"Axon already serving on ip {self.server.external_ip} and port {self.server.external_port}"
+                f"Miner already serving on ip {self.server.external_ip} and port {self.server.external_port}"
             )
             return
         bt.logging.info(
-            f"Serving axon on network: {self.subtensor.chain_endpoint} with netuid: {cli_parser.config.netuid}"
+            f"Serving on network: {self.subtensor.chain_endpoint} with netuid: {cli_parser.config.netuid}"
         )
 
         # Subscribe to chain
