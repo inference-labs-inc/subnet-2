@@ -51,7 +51,7 @@ async def query_miner(
     except httpx.HTTPError as e:
         bt.logging.warning(f"Failed to query miner for UID: {request.uid}. Error: {e}")
         traceback.print_exc()
-        raise e
+        return None
 
 
 def get_headers(request: Request, content: str, wallet: bt.wallet) -> dict:
