@@ -16,17 +16,23 @@ async def query_miner(
     wallet: bt.wallet,
 ) -> Request | None:
     try:
-        url = f"http://{request.ip}:{request.port}/{request.url_path}"
+        # Use httpx.URL for safer URL construction
+        url = httpx.URL(
+            scheme="http",
+            host=request.ip,
+            port=request.port,
+            path=f"/{request.url_path.lstrip('/')}",
+        )
         content = json.dumps(request.data)
 
         headers = get_headers(request, content, wallet)
 
         start_time = time.perf_counter()
         response = await httpx_client.post(
+            url=url,
             content=content,
             timeout=request.circuit.timeout if request.circuit else None,
             headers=headers,
-            url=url,
         )
         response.raise_for_status()
         end_time = time.perf_counter()
