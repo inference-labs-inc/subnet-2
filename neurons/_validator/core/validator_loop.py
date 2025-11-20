@@ -174,7 +174,7 @@ class ValidatorLoop:
         self.config.metagraph.sync(subtensor=self.config.subtensor)
 
     @with_rate_limit(period=ONE_HOUR)
-    async def sync_capacities(self, axons: list[AxonInfo]):
+    async def sync_capacities(self, axons: dict[int, AxonInfo]):
         capacities = await self.capacity_manager.sync_capacities(axons)
         bt.logging.debug(f"Synced capacities: {capacities}")
         return capacities
