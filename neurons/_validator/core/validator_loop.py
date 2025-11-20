@@ -438,16 +438,16 @@ class ValidatorLoop:
         Process a single request and return the response.
         """
         try:
-            response = await asyncio.get_event_loop().run_in_executor(
-                self.thread_pool,
-                lambda: query_miner(
-                    self.httpx_client,
-                    request,
-                    self.config.wallet,
-                ),
+            response = await query_miner(
+                self.httpx_client,
+                request,
+                self.config.wallet,
             )
-            response = await response
-            processed_response = await asyncio.get_event_loop().run_in_executor(
+            if response is None:
+                return request
+            processed_response: (
+                MinerResponse | None
+            ) = await asyncio.get_event_loop().run_in_executor(
                 self.response_thread_pool,
                 self.response_processor.process_single_response,
                 response,
@@ -530,6 +530,7 @@ class ValidatorLoop:
         bt.logging.success("Keyboard interrupt detected. Exiting validator.")
         loop = asyncio.get_event_loop()
         loop.run_until_complete(self.api.stop())
+        loop.run_until_complete(self.httpx_client.aclose())
         stop_prometheus_logging()
         clean_temp_files()
         if self.competition:

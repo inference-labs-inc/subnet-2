@@ -5,7 +5,6 @@ import traceback
 
 import bittensor as bt
 import httpx
-from aiohttp.client_exceptions import InvalidUrlClientError
 
 from _validator.core.request import Request
 from utils.signatures import Headers
@@ -29,27 +28,24 @@ async def query_miner(
             headers=headers,
             url=url,
         )
+        response.raise_for_status()
         end_time = time.perf_counter()
 
         result = response.json()
-
-        if not result:
-            return None
         request.response_time = end_time - start_time
-
         request.deserialized = result
         return request
 
-    except InvalidUrlClientError:
+    except httpx.InvalidURL:
         bt.logging.warning(
             f"Ignoring UID as there is not a valid URL: {request.uid}. {request.ip}:{request.port}"
         )
         return None
 
-    except Exception as e:
+    except httpx.HTTPError as e:
         bt.logging.warning(f"Failed to query miner for UID: {request.uid}. Error: {e}")
         traceback.print_exc()
-        return None
+        raise e
 
 
 def get_headers(request: Request, content: str, wallet: bt.wallet) -> dict:

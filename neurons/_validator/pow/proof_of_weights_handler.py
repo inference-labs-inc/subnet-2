@@ -18,7 +18,7 @@ class ProofOfWeightsHandler:
     @staticmethod
     def prepare_pow_request(
         circuit: Circuit, score_manager
-    ) -> ProofOfWeightsDataModel | QueryZkProof:
+    ) -> tuple[ProofOfWeightsDataModel | QueryZkProof | None, bool]:
         pow_manager = score_manager.get_pow_manager()
         queue = pow_manager.get_pow_queue()
         batch_size = 1024
@@ -62,6 +62,7 @@ class ProofOfWeightsHandler:
                 public_signals="",
             )
         return QueryZkProof(
-            query_input={"public_inputs": inputs, "model_id": circuit.id},
+            query_input=inputs,
+            model_id=circuit.id,
             query_output="",
         )

@@ -3,7 +3,6 @@ import json
 import os
 import time
 import traceback
-from typing import Union
 
 import bittensor as bt
 import websocket
@@ -381,19 +380,19 @@ class MinerSession:
         bt.logging.info(
             f"Handling competition request for id={data.id} hash={data.hash}"
         )
+        content = {
+            "id": data.id,
+            "hash": data.hash,
+            "file_name": data.file_name,
+        }
         try:
             if not self.circuit_manager:
                 bt.logging.critical(
                     "Circuit manager not initialized, unable to respond to validator."
                 )
                 return JSONResponse(
-                    # TODO: non-200 response?
-                    content={
-                        "id": data.id,
-                        "hash": data.hash,
-                        "file_name": data.file_name,
-                        "error": "Circuit manager not initialized",
-                    }
+                    content={"error": "Circuit manager not initialized", **content},
+                    status_code=503,
                 )
 
             bt.logging.info("Getting current commitment from circuit manager")
@@ -403,13 +402,11 @@ class MinerSession:
                     "No valid circuit commitment available. Unable to respond to validator."
                 )
                 return JSONResponse(
-                    # TODO: non-200 response?
                     content={
-                        "id": data.id,
-                        "hash": data.hash,
-                        "file_name": data.file_name,
                         "error": "No valid circuit commitment available",
-                    }
+                        **content,
+                    },
+                    status_code=503,
                 )
 
             bt.logging.info("Getting chain commitment from subtensor")
@@ -423,13 +420,11 @@ class MinerSession:
                     f"chain: {chain_commitment[:8]}"
                 )
                 return JSONResponse(
-                    # TODO: non-200 response?
                     content={
-                        "id": data.id,
-                        "hash": data.hash,
-                        "file_name": data.file_name,
                         "error": "Hash mismatch between local and chain commitment",
-                    }
+                        **content,
+                    },
+                    status_code=503,
                 )
 
             bt.logging.info("Generating signed URLs for required files")
@@ -441,43 +436,27 @@ class MinerSession:
             if not signed_urls:
                 bt.logging.error("Failed to get signed URLs")
                 return JSONResponse(
-                    # TODO: non-200 response?
-                    content={
-                        "id": data.id,
-                        "hash": data.hash,
-                        "file_name": data.file_name,
-                        "error": "Failed to get signed URLs",
-                    }
+                    content={"error": "Failed to get signed URLs", **content},
+                    status_code=503,
                 )
 
             bt.logging.info("Preparing commitment data response")
             commitment_data = commitment.model_dump()
             commitment_data["signed_urls"] = signed_urls
 
-            response = JSONResponse(
+            bt.logging.info("Successfully prepared competition response")
+            return JSONResponse(
                 content={
-                    "id": data.id,
-                    "hash": data.hash,
-                    "file_name": data.file_name,
                     "commitment": json.dumps(commitment_data),
                     "error": None,
+                    **content,
                 }
             )
-            bt.logging.info("Successfully prepared competition response")
-            return response
 
         except Exception as e:
             bt.logging.error(f"Error handling competition request: {str(e)}")
             traceback.print_exc()
-            return JSONResponse(
-                # TODO: non-200 response?
-                content={
-                    "id": data.id,
-                    "hash": data.hash,
-                    "file_name": data.file_name,
-                    "error": str(e),
-                }
-            )
+            return JSONResponse(content={"error": str(e), **content}, status_code=500)
 
     def queryZkProof(self, data: QueryZkProof) -> JSONResponse:
         """
@@ -486,35 +465,30 @@ class MinerSession:
         if cli_parser.config.competition_only:
             bt.logging.info("Competition only mode enabled. Skipping proof generation.")
             return JSONResponse(
-                content="Competition only mode enabled", media_type="application/json"
+                content="Competition only mode enabled", status_code=422
             )
 
         time_in = time.time()
         bt.logging.debug("Received request from validator")
         bt.logging.debug(f"Input data: {data.query_input} \n")
 
-        if not data.query_input or not data.query_input.get("public_inputs", None):
+        if not data.query_input:
             bt.logging.error("Received empty query input")
-            return JSONResponse(
-                # TODO: non-200 response?
-                content="Empty query input",
-                media_type="application/json",
-            )
+            return JSONResponse(content="Empty query input", status_code=422)
 
-        model_id = data.query_input.get("model_id", SINGLE_PROOF_OF_WEIGHTS_MODEL_ID)
-        public_inputs = data.query_input["public_inputs"]
-
+        model_id = str(data.model_id or SINGLE_PROOF_OF_WEIGHTS_MODEL_ID)
         circuit_timeout = CIRCUIT_TIMEOUT_SECONDS
         try:
-            circuit = circuit_store.get_circuit(str(model_id))
+            circuit = circuit_store.get_circuit(model_id)
             if not circuit:
-                raise ValueError(
-                    f"Circuit {model_id} not found. This indicates a missing deployment layer folder or invalid request"
+                return JSONResponse(
+                    content=f"'{model_id}' Circuit not found", status_code=422
                 )
+
             circuit_timeout = circuit.timeout
             bt.logging.info(f"Running proof generation for {circuit}")
             model_session = VerifiedModelSession(
-                GenericInput(RequestType.RWR, public_inputs), circuit
+                GenericInput(RequestType.RWR, data.query_input), circuit
             )
             bt.logging.debug("Model session created successfully")
             proof, public, proof_time = model_session.gen_proof()
@@ -532,10 +506,9 @@ class MinerSession:
             except UnicodeEncodeError:
                 bt.logging.info(f"Proof completed for {circuit}\n")
         except Exception as e:
-            output = "An error occurred"
             bt.logging.error(f"An error occurred while generating proven output\n{e}")
             traceback.print_exc()
-            proof_time = time.time() - time_in
+            return JSONResponse(content="An error occurred", status_code=500)
 
         time_out = time.time()
         delta_t = time_out - time_in
@@ -545,7 +518,7 @@ class MinerSession:
         )
         self.log_batch.append(
             {
-                str(model_id): {
+                model_id: {
                     "proof_time": proof_time,
                     "overhead_time": delta_t - proof_time,
                     "total_response_time": delta_t,
@@ -576,16 +549,15 @@ class MinerSession:
 
         if not data.inputs:
             bt.logging.error("Received empty input for proof of weights")
-            raise RequestValidationError(errors=["Empty input for proof of weights"])
+            return JSONResponse(
+                content="Empty input for proof of weights", status_code=422
+            )
         circuit_timeout = CIRCUIT_TIMEOUT_SECONDS
         response = {}
         try:
             circuit = circuit_store.get_circuit(str(data.verification_key_hash))
             if not circuit:
-                raise ValueError(
-                    f"Circuit {data.verification_key_hash} not found. "
-                    "This indicates a missing deployment layer folder or invalid request"
-                )
+                return JSONResponse(content="Circuit not found", status_code=422)
             circuit_timeout = circuit.timeout
             bt.logging.info(f"Running proof generation for {circuit}")
             model_session = VerifiedModelSession(
@@ -605,7 +577,7 @@ class MinerSession:
                 f"An error occurred while generating proof of weights\n{e}"
             )
             traceback.print_exc()
-            proof_time = time.time() - time_in
+            return JSONResponse(content="An error occurred", status_code=500)
 
         time_out = time.time()
         delta_t = time_out - time_in

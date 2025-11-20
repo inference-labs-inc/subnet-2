@@ -68,7 +68,7 @@ class RequestPipeline:
             if isinstance(request_data, ProofOfWeightsDataModel):
                 input_data = request_data.inputs
             else:
-                input_data = request_data.query_input["public_inputs"]
+                input_data = request_data.query_input
             self.hash_guard.check_hash(input_data)
         except Exception as e:
             bt.logging.error(f"Hash already exists: {e}")
@@ -160,13 +160,6 @@ class RequestPipeline:
             k=1,
         )[0]
 
-    def format_for_query(
-        self, inputs: dict[str, object] | BaseInput, circuit: Circuit
-    ) -> dict[str, object]:
-        if hasattr(inputs, "to_json"):
-            inputs = inputs.to_json()
-        return {"public_inputs": inputs, "model_id": circuit.id}
-
     def get_request_data(
         self,
         request_type: RequestType,
@@ -181,6 +174,7 @@ class RequestPipeline:
                 copy.deepcopy(request.inputs),
             )
         )
+        inputs = inputs.to_json() if hasattr(inputs, "to_json") else inputs
 
         if request_type == RequestType.RWR:
             if circuit.metadata.type == CircuitType.PROOF_OF_WEIGHTS:
@@ -189,18 +183,14 @@ class RequestPipeline:
                         subnet_uid=circuit.metadata.netuid,
                         verification_key_hash=circuit.id,
                         proof_system=circuit.proof_system,
-                        inputs=inputs.to_json(),
+                        inputs=inputs,
                         proof="",
                         public_signals="",
                     ),
                     True,
                 )
             return (
-                QueryZkProof(
-                    model_id=circuit.id,
-                    query_input=self.format_for_query(inputs, circuit),
-                    query_output="",
-                ),
+                QueryZkProof(query_input=inputs, model_id=circuit.id, query_output=""),
                 True,
             )
 
@@ -215,11 +205,7 @@ class RequestPipeline:
                 return request_data, save
         if circuit.metadata.type == CircuitType.PROOF_OF_COMPUTATION:
             return (
-                QueryZkProof(
-                    model_id=circuit.id,
-                    query_input=self.format_for_query(inputs, circuit),
-                    query_output="",
-                ),
+                QueryZkProof(query_input=inputs, model_id=circuit.id, query_output=""),
                 False,
             )
 
@@ -228,7 +214,7 @@ class RequestPipeline:
                 subnet_uid=circuit.metadata.netuid,
                 verification_key_hash=circuit.id,
                 proof_system=circuit.proof_system,
-                inputs=inputs.to_json(),
+                inputs=inputs,
                 proof="",
                 public_signals="",
             ),

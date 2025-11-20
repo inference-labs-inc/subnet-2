@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import ClassVar, Dict, Optional
+from typing import Any, ClassVar, Optional
 
 import bittensor as bt
 from pydantic import BaseModel
@@ -16,7 +16,8 @@ class QueryZkProof(BaseModel):
     name: ClassVar = "query-zk-proof"
 
     # Required request input, filled by caller.
-    query_input: Optional[Dict] = None
+    model_id: Optional[str] = None
+    query_input: Optional[Any] = None
 
     # Optional request output, filled by receiving miner.
     query_output: Optional[str] = None
@@ -24,23 +25,6 @@ class QueryZkProof(BaseModel):
     def deserialize(self: QueryZkProof) -> str | None:
         """
         unpack query_output
-        """
-        return self.query_output
-
-
-class QueryForProvenInference(BaseModel):
-    """
-    Data model for querying proven inferences.
-    DEV: This synapse is a placeholder.
-    """
-
-    name: ClassVar = "prove-inference"
-    query_input: Optional[dict] = None
-    query_output: Optional[dict] = None
-
-    def deserialize(self) -> dict | None:
-        """
-        Deserialize the query_output into a dictionary.
         """
         return self.query_output
 
@@ -60,7 +44,7 @@ class ProofOfWeightsDataModel(BaseModel):
 
     def deserialize(self) -> dict | None:
         """
-        Return the proof
+        Return the proof and input data
         """
         return {
             "inputs": self.inputs,
@@ -103,7 +87,7 @@ class QueryForCapacities(BaseModel):
     name: ClassVar = "capacities"
     capacities: Optional[dict[str, int]] = None
 
-    def deserialize(self) -> dict[str, int]:
+    def deserialize(self) -> Optional[dict[str, int]]:
         """
         Return the capacities
         """

@@ -27,7 +27,9 @@ class ResponseProcessor:
         self.proof_batches_queue = []
         self.completed_proof_of_weights_queue: list[CompletedProofOfWeightsItem] = []
 
-    def process_single_response(self, response: Request) -> MinerResponse:
+    def process_single_response(self, response: Request | None) -> MinerResponse | None:
+        if response is None:
+            return None
         miner_response = MinerResponse.from_raw_response(response)
         if miner_response.proof_content is None:
             bt.logging.debug(

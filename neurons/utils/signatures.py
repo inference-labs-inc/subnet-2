@@ -1,4 +1,3 @@
-import hashlib
 from dataclasses import dataclass
 
 from substrateinterface import Keypair

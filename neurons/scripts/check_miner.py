@@ -68,18 +68,6 @@ args, unknown = parser.parse_known_args()
 if args.trace:
     bt.logging.set_trace(True)
 
-query_input = {
-    "public_inputs": {
-        "list_items": [
-            0.6357621247078922,
-            0.6049274246433166,
-            0.550940686379023,
-            0.3682035751100801,
-            0.12160811389801046,
-        ]
-    },
-    "model_id": "31df94d233053d9648c3c57362d9aa8aaa0f77761ac520af672103dbb387a6a5",
-}
 
 if __name__ == "__main__":
     bt.logging.info(
@@ -101,7 +89,18 @@ if __name__ == "__main__":
         port=args.port,
         hotkey=wallet.hotkey.ss58_address,
         coldkey="",  # Not needed for this script
-        data=QueryZkProof(query_input=query_input).model_dump(),
+        data=QueryZkProof(
+            query_input={
+                "list_items": [
+                    0.6357621247078922,
+                    0.6049274246433166,
+                    0.550940686379023,
+                    0.3682035751100801,
+                    0.12160811389801046,
+                ]
+            },
+            model_id="31df94d233053d9648c3c57362d9aa8aaa0f77761ac520af672103dbb387a6a5",
+        ).model_dump(),
         url_path=QueryZkProof.name,
         request_type=RequestType.BENCHMARK,
         circuit=[

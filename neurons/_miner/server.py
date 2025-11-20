@@ -3,7 +3,7 @@ import hashlib
 import bittensor as bt
 import uvicorn
 from bittensor_wallet import Wallet
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from constants import (
@@ -67,14 +67,6 @@ class MinerServer:
         miner_hotkey: str = Header(..., alias=Headers.MINER_HOTKEY),
         nonce: str = Header(..., alias=Headers.NONCE),
     ) -> None:
-        # TODO: Add nonce management???
-        # if not config.nonce_manager.nonce_is_valid(nonce):
-        #     bt.logging.debug("Nonce is not valid!")
-        #     raise HTTPException(
-        #         status_code=401,
-        #         detail="Oi, that nonce is not valid!",
-        #     )
-
         body = await request.body()
         payload_hash = hashlib.sha256(body).hexdigest()
         message = f"{nonce}:{validator_hotkey}:{payload_hash}"
