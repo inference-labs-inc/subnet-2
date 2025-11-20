@@ -131,10 +131,10 @@ class MinerServer:
         try:
             if self.config.disable_blacklist:
                 bt.logging.trace("Blacklist disabled, allowing request.")
-                return False, "Allowed"
+                return
 
             if validator_hotkey not in self.metagraph.hotkeys:  # type: ignore
-                return True, "Hotkey is not registered"
+                raise HTTPException(status_code=403, detail="Hotkey is not registered")
 
             requesting_uid = self.metagraph.hotkeys.index(validator_hotkey)  # type: ignore
             stake = self.metagraph.S[requesting_uid].item()
@@ -150,15 +150,18 @@ class MinerServer:
                 )
 
             if stake < VALIDATOR_STAKE_THRESHOLD:
-                return True, "Stake below minimum"
+                raise HTTPException(status_code=403, detail="Stake below minimum")
 
             validator_permit = self.metagraph.validator_permit[requesting_uid].item()
             if not validator_permit:
-                return True, "Requesting UID has no validator permit"
+                raise HTTPException(
+                    status_code=403, detail="Requesting UID has no validator permit"
+                )
 
             bt.logging.trace(f"Allowing request from UID: {requesting_uid}")
-            return False, "Allowed"
 
         except Exception as e:
             bt.logging.error(f"Error during blacklist {e}")
-            return True, "An error occurred while filtering the request"
+            raise HTTPException(
+                status_code=500, detail="An error occurred while filtering the request"
+            )
