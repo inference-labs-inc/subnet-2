@@ -113,6 +113,13 @@ if __name__ == "__main__":
             return await query_miner(client, request, wallet)
 
     response = asyncio.run(run_query())
+
+    if response is None:
+        bt.logging.error(
+            "No response from miner. Check your port is exposed correctly and the miner is running."
+        )
+        sys.exit(1)
+
     response = MinerResponse.from_raw_response(response)
 
     bt.logging.trace(f"Miner query response: {response}")
