@@ -103,10 +103,15 @@ if __name__ == "__main__":
         ).model_dump(),
         url_path=QueryZkProof.name,
         request_type=RequestType.BENCHMARK,
-        circuit=[
-            c for c in circuit_store.circuits.values() if c.metadata.name == "LSTM"
-        ][0],
+        circuit=next(
+            (c for c in circuit_store.circuits.values() if c.metadata.name == "LSTM"),
+            None,
+        ),
     )
+
+    if request.circuit is None:
+        bt.logging.error("No circuit with name 'LSTM' found. Aborting miner check.")
+        sys.exit(1)
 
     async def run_query():
         async with httpx.AsyncClient() as client:
