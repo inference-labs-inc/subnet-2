@@ -174,8 +174,8 @@ class ValidatorLoop:
         self.config.metagraph.sync(subtensor=self.config.subtensor)
 
     @with_rate_limit(period=ONE_HOUR)
-    async def sync_capacities(self, axons: dict[int, AxonInfo]):
-        capacities = await self.capacity_manager.sync_capacities(axons)
+    async def sync_capacities(self, miners_info: dict[int, AxonInfo]):
+        capacities = await self.capacity_manager.sync_capacities(miners_info)
         bt.logging.debug(f"Synced capacities: {capacities}")
         return capacities
 
@@ -431,10 +431,12 @@ class ValidatorLoop:
             )
         except KeyboardInterrupt:
             self._should_run = False
-            await self._handle_keyboard_interrupt()
+            bt.logging.success("Keyboard interrupt detected. Exiting validator.")
         except Exception as e:
             bt.logging.error(f"Fatal error in validator loop: {e}")
             raise
+        finally:
+            await self._cleanup()
 
     async def _process_single_request(self, request: Request) -> Request:
         """
@@ -528,10 +530,9 @@ class ValidatorLoop:
         else:
             bt.logging.debug("Automatic updates are disabled, skipping version check")
 
-    async def _handle_keyboard_interrupt(self):
+    async def _cleanup(self):
         """Handle keyboard interrupt by cleaning up and exiting."""
         bt.logging.success("Keyboard interrupt detected. Exiting validator.")
-        loop = asyncio.get_event_loop()
         await self.api.stop()
         await self.httpx_client.aclose()
         stop_prometheus_logging()
