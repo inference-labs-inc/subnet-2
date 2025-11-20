@@ -21,8 +21,6 @@ class ZKRequestModel(BaseModel):
 class MinerServer:
 
     def __init__(self, wallet: Wallet, config: bt.config, metagraph: bt.metagraph):
-        self.app = FastAPI()
-        self.router = APIRouter()
         self.wallet = wallet
         self.config = config
         self.metagraph = metagraph
@@ -42,17 +40,12 @@ class MinerServer:
 
         # Instantiate FastAPI
         self.app = FastAPI()
-        self.fast_config = uvicorn.Config(
-            self.app,
-            host="0.0.0.0",
-            loop="none",
-            port=self.external_port,
-        )
+        self.router = APIRouter()
 
     def _run_server(self):
         """Internal method to run the server in a thread."""
         self.server = uvicorn.Server(
-            uvicorn.Config(self.app, host=self.ip, port=self.port)
+            uvicorn.Config(self.app, host=self.external_ip, port=self.external_port)
         )
         self.server.run()
 
@@ -162,6 +155,4 @@ class MinerServer:
 
         except Exception as e:
             bt.logging.error(f"Error during blacklist {e}")
-            raise HTTPException(
-                status_code=500, detail="An error occurred while filtering the request"
-            )
+            raise

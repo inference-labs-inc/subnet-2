@@ -92,7 +92,7 @@ class MinerSession:
             bt.logging.debug(
                 f"Miner already serving on ip {self.server.external_ip} and port {self.server.external_port}"
             )
-            return
+            return True
         bt.logging.info(
             f"Serving on network: {self.subtensor.chain_endpoint} with netuid: {cli_parser.config.netuid}"
         )
