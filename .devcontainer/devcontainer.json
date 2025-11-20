@@ -24,12 +24,17 @@
         "ms-python.black-formatter",
         "ms-python.python",
         "ms-python.isort",
-        "ms-toolsai.jupyter"
+        "tamasfe.even-better-toml",
+        "ms-toolsai.jupyter",
+        "eamodio.gitlens",
+        "github.copilot",
+        "github.copilot-chat"
       ]
     }
   },
   // Install ezkl cli, done here instead of the Dockerfile to test new versions without rebuilding the image.
   "onCreateCommand": "curl https://raw.githubusercontent.com/zkonduit/ezkl/main/install_ezkl_cli.sh | bash -s v19.0.7",
+  "postCreateCommand": "uv tool install bittensor-cli",
   "remoteEnv": {
     "PATH": "${containerEnv:PATH}:/home/vscode/.ezkl"
   },
