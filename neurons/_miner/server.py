@@ -1,4 +1,5 @@
 import hashlib
+import threading
 
 import bittensor as bt
 import uvicorn
@@ -33,7 +34,8 @@ class MinerServer:
             if self.config.axon.external_port is not None
             else self.config.axon.port
         )
-        self.full_address = str(self.config.axon.ip) + ":" + str(self.config.axon.port)
+        self.server = None
+        self.server_thread = None
         self.started = False
 
         self.nonces: dict[str, int] = {}
@@ -47,9 +49,33 @@ class MinerServer:
             port=self.external_port,
         )
 
+    def _run_server(self):
+        """Internal method to run the server in a thread."""
+        self.server = uvicorn.Server(
+            uvicorn.Config(self.app, host=self.ip, port=self.port)
+        )
+        self.server.run()
+
     def start(self):
+        """Start the server in a background thread."""
+        if self.started:
+            bt.logging.warning("Server already started")
+            return
+
         self.app.include_router(self.router)
-        uvicorn.run(self.app, host=self.ip, port=self.port)
+        self.server_thread = threading.Thread(target=self._run_server, daemon=True)
+        self.server_thread.start()
+        self.started = True
+        bt.logging.info(f"Server started on {self.ip}:{self.port} in background thread")
+
+    def stop(self):
+        """Stop the uvicorn server gracefully."""
+        if self.server is not None:
+            self.server.should_exit = True
+            if self.server_thread and self.server_thread.is_alive():
+                self.server_thread.join(timeout=5)
+            bt.logging.info("Miner server stopped")
+        self.started = False
 
     def register_route(self, path: str, endpoint):
         self.router.add_api_route(

@@ -7,7 +7,6 @@ import traceback
 import bittensor as bt
 import websocket
 from bittensor.core.extrinsics.serving import serve_extrinsic
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from rich.console import Console
 from rich.table import Table
@@ -59,6 +58,10 @@ class MinerSession:
         websocket.setdefaulttimeout(30)
 
     def start_server(self) -> bool:
+        if self.server.started:
+            bt.logging.debug("Server already started, skipping start_server call")
+            return True
+
         bt.logging.info(
             "Starting server. Custom arguments include the following.\n"
             "Note that any null values will fallback to defaults, "
@@ -290,6 +293,8 @@ class MinerSession:
 
             except KeyboardInterrupt:
                 bt.logging.success("Miner killed via keyboard interrupt.")
+                if self.server.started:
+                    self.server.stop()
                 clean_temp_files()
                 break
             except Exception:
