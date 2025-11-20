@@ -428,7 +428,7 @@ class ValidatorLoop:
             )
         except KeyboardInterrupt:
             self._should_run = False
-            self._handle_keyboard_interrupt()
+            await self._handle_keyboard_interrupt()
         except Exception as e:
             bt.logging.error(f"Fatal error in validator loop: {e}")
             raise
@@ -525,16 +525,16 @@ class ValidatorLoop:
         else:
             bt.logging.debug("Automatic updates are disabled, skipping version check")
 
-    def _handle_keyboard_interrupt(self):
+    async def _handle_keyboard_interrupt(self):
         """Handle keyboard interrupt by cleaning up and exiting."""
         bt.logging.success("Keyboard interrupt detected. Exiting validator.")
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.api.stop())
-        loop.run_until_complete(self.httpx_client.aclose())
+        await self.api.stop()
+        await self.httpx_client.aclose()
         stop_prometheus_logging()
         clean_temp_files()
         if self.competition:
             self.competition.competition_thread.stop()
             if hasattr(self.competition.circuit_manager, "close"):
-                loop.run_until_complete(self.competition.circuit_manager.close())
+                await self.competition.circuit_manager.close()
         sys.exit(0)
