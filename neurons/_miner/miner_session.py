@@ -461,7 +461,10 @@ class MinerSession:
         except Exception as e:
             bt.logging.error(f"Error handling competition request: {str(e)}")
             traceback.print_exc()
-            return JSONResponse(content={"error": str(e), **content}, status_code=500)
+            return JSONResponse(
+                content={"error": "An internal error occurred.", **content},
+                status_code=500,
+            )
 
     def queryZkProof(self, data: QueryZkProof) -> JSONResponse:
         """

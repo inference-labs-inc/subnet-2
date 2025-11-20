@@ -400,7 +400,10 @@ class ValidatorLoop:
                 self.update_competition_metrics()
                 self.update_queryable_uids()
                 await self.sync_capacities(
-                    [self.config.metagraph.axons[uid] for uid in self.queryable_uids]
+                    {
+                        uid: self.config.metagraph.axons[uid]
+                        for uid in self.queryable_uids
+                    }
                 )
                 self.update_processed_uids()
                 self.log_health()

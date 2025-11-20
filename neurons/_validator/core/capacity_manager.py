@@ -16,13 +16,13 @@ class CapacityManager:
         self.config = config
         self.httpx_client = httpx_client
 
-    async def sync_capacities(self, miners_info: list[AxonInfo]):
+    async def sync_capacities(self, miners_info: dict[int, AxonInfo]):
         bt.logging.info(f"Syncing capacities for {len(miners_info)} miners...")
         request_data = QueryForCapacities()
 
         requests = [
             Request(
-                uid=0,  # UID is not used in this context
+                uid=uid,
                 ip=miner_info.ip,
                 port=miner_info.port,
                 hotkey=miner_info.hotkey,
@@ -31,7 +31,7 @@ class CapacityManager:
                 url_path=request_data.name,
                 request_type=RequestType.BENCHMARK,
             )
-            for miner_info in miners_info
+            for uid, miner_info in miners_info.items()
         ]
         return await asyncio.gather(
             *(
