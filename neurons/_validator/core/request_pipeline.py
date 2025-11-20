@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import copy
-import traceback
 import random
+import traceback
 
 import bittensor as bt
+from bittensor.core.chain_data import AxonInfo
 
 from _validator.api import ValidatorAPI
 from _validator.config import ValidatorConfig
@@ -20,9 +21,8 @@ from constants import (
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.circuit import Circuit, CircuitType
 from execution_layer.generic_input import GenericInput
-from protocol import ProofOfWeightsSynapse, QueryZkProof
+from protocol import ProofOfWeightsDataModel, QueryZkProof
 from utils.wandb_logger import safe_log
-from execution_layer.base_input import BaseInput
 
 
 class RequestPipeline:
@@ -56,7 +56,7 @@ class RequestPipeline:
     def _check_and_create_request(
         self,
         uid: int,
-        synapse: ProofOfWeightsSynapse | QueryZkProof,
+        request_data: ProofOfWeightsDataModel | QueryZkProof,
         circuit: Circuit,
         request_type: RequestType,
         request_hash: str | None = None,
@@ -64,11 +64,10 @@ class RequestPipeline:
     ) -> Request | None:
         """Check hash and create request if valid."""
         try:
-            if isinstance(synapse, ProofOfWeightsSynapse):
-                input_data = synapse.inputs
+            if isinstance(request_data, ProofOfWeightsDataModel):
+                input_data = request_data.inputs
             else:
-                input_data = synapse.query_input["public_inputs"]
-
+                input_data = request_data.query_input
             self.hash_guard.check_hash(input_data)
         except Exception as e:
             bt.logging.error(f"Hash already exists: {e}")
@@ -79,12 +78,19 @@ class RequestPipeline:
                 )
             return None
 
+        axon: AxonInfo = self.config.metagraph.axons[uid]
+
         return Request(
             uid=uid,
-            axon=self.config.metagraph.axons[uid],
-            synapse=synapse,
+            ip=axon.ip,
+            port=axon.port,
+            hotkey=axon.hotkey,
+            coldkey=axon.coldkey,
+            data=request_data.model_dump(),
+            url_path=request_data.name,
             circuit=circuit,
             request_type=request_type,
+            # 'inputs' are used for verification later on validator side:
             inputs=GenericInput(RequestType.RWR, input_data),
             request_hash=request_hash,
             save=save,
@@ -96,12 +102,12 @@ class RequestPipeline:
 
         for uid in filtered_uids:
             try:
-                synapse, save = self.get_synapse_request(
+                request_data, save = self.get_request_data(
                     RequestType.RWR, external_request.circuit, external_request
                 )
                 request = self._check_and_create_request(
                     uid=uid,
-                    synapse=synapse,
+                    request_data=request_data,
                     circuit=external_request.circuit,
                     request_type=RequestType.RWR,
                     request_hash=external_request.hash,
@@ -127,10 +133,10 @@ class RequestPipeline:
 
         requests = []
         for uid in filtered_uids:
-            synapse, save = self.get_synapse_request(RequestType.BENCHMARK, circuit)
+            request_data, save = self.get_request_data(RequestType.BENCHMARK, circuit)
             request = self._check_and_create_request(
                 uid=uid,
-                synapse=synapse,
+                request_data=request_data,
                 circuit=circuit,
                 request_type=RequestType.BENCHMARK,
                 save=save,
@@ -153,19 +159,12 @@ class RequestPipeline:
             k=1,
         )[0]
 
-    def format_for_query(
-        self, inputs: dict[str, object] | BaseInput, circuit: Circuit
-    ) -> dict[str, object]:
-        if hasattr(inputs, "to_json"):
-            inputs = inputs.to_json()
-        return {"public_inputs": inputs, "model_id": circuit.id}
-
-    def get_synapse_request(
+    def get_request_data(
         self,
         request_type: RequestType,
         circuit: Circuit,
         request: any | None = None,
-    ) -> tuple[ProofOfWeightsSynapse | QueryZkProof, bool]:
+    ) -> tuple[ProofOfWeightsDataModel | QueryZkProof, bool]:
         inputs = (
             circuit.input_handler(request_type)
             if request_type == RequestType.BENCHMARK
@@ -174,26 +173,23 @@ class RequestPipeline:
                 copy.deepcopy(request.inputs),
             )
         )
+        inputs = inputs.to_json() if hasattr(inputs, "to_json") else inputs
 
         if request_type == RequestType.RWR:
             if circuit.metadata.type == CircuitType.PROOF_OF_WEIGHTS:
                 return (
-                    ProofOfWeightsSynapse(
+                    ProofOfWeightsDataModel(
                         subnet_uid=circuit.metadata.netuid,
                         verification_key_hash=circuit.id,
                         proof_system=circuit.proof_system,
-                        inputs=inputs.to_json(),
+                        inputs=inputs,
                         proof="",
                         public_signals="",
                     ),
                     True,
                 )
             return (
-                QueryZkProof(
-                    model_id=circuit.id,
-                    query_input=self.format_for_query(inputs, circuit),
-                    query_output="",
-                ),
+                QueryZkProof(query_input=inputs, model_id=circuit.id, query_output=""),
                 True,
             )
 
@@ -201,28 +197,23 @@ class RequestPipeline:
             SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
             BATCHED_PROOF_OF_WEIGHTS_MODEL_ID,
         ]:
-            synapse_request, save = ProofOfWeightsHandler.prepare_pow_request(
+            request_data, save = ProofOfWeightsHandler.prepare_pow_request(
                 circuit, self.score_manager
             )
-            if synapse_request:
-                return synapse_request, save
-
+            if request_data:
+                return request_data, save
         if circuit.metadata.type == CircuitType.PROOF_OF_COMPUTATION:
             return (
-                QueryZkProof(
-                    model_id=circuit.id,
-                    query_input=self.format_for_query(inputs, circuit),
-                    query_output="",
-                ),
+                QueryZkProof(query_input=inputs, model_id=circuit.id, query_output=""),
                 False,
             )
 
         return (
-            ProofOfWeightsSynapse(
+            ProofOfWeightsDataModel(
                 subnet_uid=circuit.metadata.netuid,
                 verification_key_hash=circuit.id,
                 proof_system=circuit.proof_system,
-                inputs=inputs.to_json(),
+                inputs=inputs,
                 proof="",
                 public_signals="",
             ),

@@ -17,7 +17,6 @@ class ValidatorConfig:
         subnet_uid (int): The unique identifier for the subnet.
         wallet (bt.wallet): The Bittensor wallet object.
         subtensor (bt.subtensor): The Bittensor subtensor object.
-        dendrite (bt.dendrite): The Bittensor dendrite object.
         metagraph (bt.metagraph): The Bittensor metagraph object.
         user_uid (int): The unique identifier for the validator within the subnet's metagraph.
         api_enabled (bool): Whether the API is enabled.
@@ -38,7 +37,6 @@ class ValidatorConfig:
             self.bt_config.netuid if self.bt_config.netuid else DEFAULT_NETUID
         )
         self.wallet = bt.wallet(config=self.bt_config)
-        self.dendrite = bt.dendrite(wallet=self.wallet)
         self.subtensor = bt.subtensor(config=self.bt_config)
         try:
             self.metagraph = self.subtensor.metagraph(self.subnet_uid)

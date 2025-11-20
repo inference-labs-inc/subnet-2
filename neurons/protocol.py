@@ -1,22 +1,25 @@
 from __future__ import annotations
-from typing import Dict, Optional
+from typing import Any, ClassVar, Optional
 
 import bittensor as bt
+from pydantic import BaseModel
 
 import toml
 from execution_layer.circuit import ProofSystem
 
 
-class QueryZkProof(bt.Synapse):
+class QueryZkProof(BaseModel):
     """
-    QueryZkProof class inherits from bt.Synapse.
-    It is used to query zkproof of certain model.
+    Data model for querying zk proofs.
     """
 
-    # Required request input, filled by sending dendrite caller.
-    query_input: Optional[Dict] = None
+    name: ClassVar = "query-zk-proof"
 
-    # Optional request output, filled by receiving axon.
+    # Required request input, filled by caller.
+    model_id: Optional[str] = None
+    query_input: Optional[Any] = None
+
+    # Optional request output, filled by receiving miner.
     query_output: Optional[str] = None
 
     def deserialize(self: QueryZkProof) -> str | None:
@@ -26,27 +29,12 @@ class QueryZkProof(bt.Synapse):
         return self.query_output
 
 
-class QueryForProvenInference(bt.Synapse):
+class ProofOfWeightsDataModel(BaseModel):
     """
-    A Synapse for querying proven inferences.
-    DEV: This synapse is a placeholder.
-    """
-
-    query_input: Optional[dict] = None
-    query_output: Optional[dict] = None
-
-    def deserialize(self) -> dict | None:
-        """
-        Deserialize the query_output into a dictionary.
-        """
-        return self.query_output
-
-
-class ProofOfWeightsSynapse(bt.Synapse):
-    """
-    A synapse for conveying proof of weights messages
+    Data model for conveying proof of weights messages
     """
 
+    name: ClassVar = "proof-of-weights"
     subnet_uid: int = 2
     verification_key_hash: str
     proof_system: ProofSystem = ProofSystem.CIRCOM
@@ -56,7 +44,7 @@ class ProofOfWeightsSynapse(bt.Synapse):
 
     def deserialize(self) -> dict | None:
         """
-        Return the proof
+        Return the proof and input data
         """
         return {
             "inputs": self.inputs,
@@ -65,11 +53,12 @@ class ProofOfWeightsSynapse(bt.Synapse):
         }
 
 
-class Competition(bt.Synapse):
+class Competition(BaseModel):
     """
     A synapse for conveying competition messages and circuit files
     """
 
+    name: ClassVar = "competition"
     id: int  # Competition ID
     hash: str  # Circuit hash
     file_name: str  # Name of file being requested
@@ -90,14 +79,15 @@ class Competition(bt.Synapse):
 
 
 # Note these are going to need to change to lighting.Synapse
-class QueryForCapacities(bt.Synapse):
+class QueryForCapacities(BaseModel):
     """
     Query for capacities allocated to each circuit
     """
 
+    name: ClassVar = "capacities"
     capacities: Optional[dict[str, int]] = None
 
-    def deserialize(self) -> dict[str, int]:
+    def deserialize(self) -> Optional[dict[str, int]]:
         """
         Return the capacities
         """
