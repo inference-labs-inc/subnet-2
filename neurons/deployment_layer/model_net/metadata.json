@@ -1,0 +1,14 @@
+{
+  "id": "model_net",
+  "name": "Model Net (DSperse)",
+  "description": "Net model prepared for DSperse per-slice proving.",
+  "author": "Inference Labs",
+  "version": "1.0.0",
+  "proof_system": "dsperse",
+  "netuid": 2,
+  "benchmark_choice_weight": 0.2,
+  "dsperse": {
+    "slices_dir": "slices",
+    "default_slice": "slice_0.dslice"
+  }
+}
