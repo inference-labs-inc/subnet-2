@@ -33,7 +33,7 @@
     }
   },
   // Install ezkl cli, done here instead of the Dockerfile to test new versions without rebuilding the image.
-  "onCreateCommand": "curl https://raw.githubusercontent.com/zkonduit/ezkl/main/install_ezkl_cli.sh | bash -s v19.0.7",
+  "onCreateCommand": "curl https://raw.githubusercontent.com/zkonduit/ezkl/main/install_ezkl_cli.sh | bash -s v22.2.1",
   "postCreateCommand": "uv tool install bittensor-cli",
   "remoteEnv": {
     "PATH": "${containerEnv:PATH}:/home/vscode/.ezkl"

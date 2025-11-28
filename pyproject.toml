@@ -15,13 +15,14 @@ dependencies = [
   "bittensor==9.9.0",
   "boto3>=1.36.13",
   "botocore>=1.37.19",
-  "ezkl==22.0.1",
+  "dsperse",
+  "ezkl==22.2.1",
   "fastapi==0.110.3",
   "gitpython>=3.1.44",
   "httpx>=0.28.1",
   "jsonrpcserver>=5.0.9",
   "matplotlib>=3.10.1",
-  "numpy==2.0.2",
+  "numpy~=2.2.3",
   "onnxruntime>=1.21.0",
   "opencv-contrib-python-headless>=4.11.0.86",
   "opencv-python>=4.11.0.86",
@@ -74,6 +75,7 @@ pythonpath = [".", "neurons"]
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
+dsperse = { git = "https://github.com/inference-labs-inc/dsperse.git", rev = "dsperse-integration" }
 
 [[tool.uv.index]]
 name = "pytorch"
