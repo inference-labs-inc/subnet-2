@@ -102,7 +102,9 @@ class RemoteDataSource(CompetitionDataSource):
             os.makedirs(extracted_path, exist_ok=True)
             zip_path = os.path.join(self.competition_directory, "age.zip")
 
-            url = self.data_config.get("url", "https://storage.omron.ai/age.zip")
+            url = self.data_config.get(
+                "url", "https://sn2-storage.inferencelabs.com/age.zip"
+            )
             if not self._validate_url(url):
                 bt.logging.error(f"Invalid URL: {url}")
                 return False
@@ -161,7 +163,7 @@ class RemoteDataSource(CompetitionDataSource):
                     "r2.cloudflarestorage.com",
                     "s3.amazonaws.com",
                     ".r2.dev",
-                    "storage.omron.ai",
+                    "sn2-storage.inferencelabs.com",
                 ]
             )
         except Exception:

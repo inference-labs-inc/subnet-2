@@ -1,7 +1,7 @@
 # PM2 Configuration
 
 > [!NOTE]
-> Setting up a PM2 configuration file is completely optional. By default, all documentation assumes running omron without a configuration file.
+> Setting up a PM2 configuration file is completely optional. By default, all documentation assumes running subnet 2 without a configuration file.
 
 To simplify the process of running miners and validators, we offer a template PM2 file at `ecosystem.config.tmpl.js`. This file can be modified and copied into a `ecosystem.config.js` for convenient use when starting a miner or validator.
 

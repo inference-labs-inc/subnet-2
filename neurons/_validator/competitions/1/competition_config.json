@@ -64,7 +64,7 @@
         }
     },
     "data_source": {
-        "url": "https://storage.omron.ai/age.zip",
+        "url": "https://sn2-storage.inferencelabs.com/age.zip",
         "format": "zip",
         "type": "remote"
     },

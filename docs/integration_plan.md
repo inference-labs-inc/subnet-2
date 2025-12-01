@@ -6,9 +6,9 @@ The scope of this document includes an overview of Proof of Weights as a feature
 
 Proof of Weights is a feature that allows validators within Bittensor to prove that they have correctly and faithfully run each subnet's incentive mechanism as per the subnet owner's specification. This allows trustless verification of validator behavior across subnets.
 
-To achieve this, Omron (Bittensor subnet 2) has created several reference implementations of Proof of Weights mechanisms which it continues to expand to cover an increasing amount of the subnet landscape. Technically, Proof of Weights is implemented through the use of Zero Knowledge Circuits, which represent the subnet's incentive mechanism as a set of constraints.
+To achieve this, Bittensor subnet 2 has created several reference implementations of Proof of Weights mechanisms which it continues to expand to cover an increasing amount of the subnet landscape. Technically, Proof of Weights is implemented through the use of Zero Knowledge Circuits, which represent the subnet's incentive mechanism as a set of constraints.
 
-One of the trade-offs of Proof of Weights is that it requires a significant amount of computational resources to produce a proof. This is why Omron has positioned itself as the "execution layer" for Proof of Weights, showing the capability of producing over 300,000 proofs per day. By leveraging Omron as an extremely performant decentralized proving cluster that constantly evolves to support the growing needs of the Bittensor network, validators can trustlessly prove their compliance with the incentive mechanism of any subnet.
+One of the trade-offs of Proof of Weights is that it requires a significant amount of computational resources to produce a proof. This is why Subnet 2 has positioned itself as the "execution layer" for Proof of Weights, showing the capability of producing over 300,000 proofs per day. By leveraging SN2 as an extremely performant decentralized proving cluster that constantly evolves to support the growing needs of the Bittensor network, validators can trustlessly prove their compliance with the incentive mechanism of any subnet.
 
 At present, the [Proof of Weights SDK] provided by the Inference Labs team exists to support the integration of Proof of Weights into existing validator codebases. This SDK is fully featured and serves as a reference implementation for integration with the BTSDK. Once integrated, adoption of Proof of Weights will be easier than ever as all validators already leverage BTSDK to interact with the Bittensor network.
 
@@ -29,17 +29,17 @@ At a high level the architecture of Proof of Weights is illustrated in the below
 
 ### BTSDK
 
-- Serves as an interface between the Origin Validator and Omron Validator, facilitating the communication and data flow between them.
+- Serves as an interface between the Origin Validator and SN2 Validator, facilitating the communication and data flow between them.
 - Uses the validator's hotkey to sign over a timestamp.
-- Queries the metagraph of the Omron Subnet to get the axon information for the delegate hotkey.
-- Opens a WebSocket connection to the Omron Validator, providing the signed timestamp as a header.
-- Provides the request body to the Omron Validator through the open WebSocket connection.
-- Waits for the proof to be completed by the Omron Validator.
+- Queries the metagraph of Subnet 2 to get the axon information for the delegate hotkey.
+- Opens a WebSocket connection to the SN2 Validator, providing the signed timestamp as a header.
+- Provides the request body to the SN2 Validator through the open WebSocket connection.
+- Waits for the proof to be completed by the SN2 Validator.
 - Closes the WebSocket connection once the proof is received.
 - Returns the payload back to the Origin Validator.
 - Responsible for raising exceptions if the Proof of Weights request fails for any reason.
 
-### Omron Validator
+### Subnet 2 Validator
 
 - Produces Proof of Weights proofs for Origin Validators.
 - Accepts WebSocket connections from the BTSDK, verifying liveness through the signed timestamp header.
@@ -50,10 +50,10 @@ At a high level the architecture of Proof of Weights is illustrated in the below
 1. An Origin Validator collects the necessary miner evaluation data for an epoch.
 2. The Origin Validator calls `bt.proof_of_weights`, providing their current `netuid`, their evaluation data, optionally a delegate hotkey and a weights version.
 3. The BTSDK uses the validator's hotkey to sign over a current timestamp.
-4. The BTSDK queries the metagraph of the Omron Subnet to get the axon information for the delegate hotkey.
-5. The BTSDK submits a WebSocket CONNECT request to the Omron Validator's axon with the signed timestamp, netuid, and delegate hotkey as headers.
-6. The BTSDK uses the WebSocket connection to send the evaluation data to the Omron Validator.
-7. The BTSDK waits with a timeout for the proof to be completed by the Omron Validator.
+4. The BTSDK queries the metagraph of Subnet 2 to get the axon information for the delegate hotkey.
+5. The BTSDK submits a WebSocket CONNECT request to the SN2 Validator's axon with the signed timestamp, netuid, and delegate hotkey as headers.
+6. The BTSDK uses the WebSocket connection to send the evaluation data to the SN2 Validator.
+7. The BTSDK waits with a timeout for the proof to be completed by the SN2 Validator.
 8. Once the proof is ready, the BTSDK returns the payload back to the Origin Validator.
 9. The Origin Validator optionally stores and/or logs the proof to WandB.
 10. The Origin Validator submits weights to the chain, provided from the Proof of Weights payload.
@@ -69,17 +69,17 @@ As illustrated in the below workflow diagram, there are several logical steps to
 
 ### Weights Version
 
-1. If the Origin Validator does not provide a weights version, the Omron Validator will choose the most up to date weights version for the provided netuid, automatically.
-2. If the Origin Validator does provide a weights version, the Omron Validator will use the provided weights version to select the correct proving circuit.
+1. If the Origin Validator does not provide a weights version, the SN2 Validator will choose the most up to date weights version for the provided netuid, automatically.
+2. If the Origin Validator does provide a weights version, the SN2 Validator will use the provided weights version to select the correct proving circuit.
 
-### CONNECT request to Omron Validator
+### CONNECT request to SN2 Validator
 
-1. If the CONNECT request to the Omron Validator fails for any reason, the BTSDK will raise an exception and the Origin Validator _should_ fallback to the default weight calculation logic.
-2. If the CONNECT request to the Omron Validator succeeds, the BTSDK will open a WebSocket connection to the Omron Validator, providing the signed timestamp as a header.
+1. If the CONNECT request to the SN2 Validator fails for any reason, the BTSDK will raise an exception and the Origin Validator _should_ fallback to the default weight calculation logic.
+2. If the CONNECT request to the SN2 Validator succeeds, the BTSDK will open a WebSocket connection to the SN2 Validator, providing the signed timestamp as a header.
 
 ### Awaiting Proof Completion
 
-1. The BTSDK will maintain an open WebSocket connection with the Omron Validator for up to 2 minutes, waiting for the proof to be sent back through the connection.
+1. The BTSDK will maintain an open WebSocket connection with the SN2 Validator for up to 2 minutes, waiting for the proof to be sent back through the connection.
 2. If the WebSocket connection is closed unexpectedly or times out after 2 minutes, the BTSDK will raise an exception and the Origin Validator _should_ fallback to the default weight calculation logic.
 3. Once the proof is received through the WebSocket connection, the BTSDK will return the payload back to the Origin Validator.
 
@@ -107,7 +107,7 @@ The endpoint for WebSocket connections is described as `wss://{validator ip}:{va
 
 ### Requesting Proof of Weights
 
-The following [JSON-RPC] request will request a Proof of Weights proof from the Omron Validator.
+The following [JSON-RPC] request will request a Proof of Weights proof from the SN2 Validator.
 
 | Key               | Required | Description                                                                                                                                                  |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -117,7 +117,7 @@ The following [JSON-RPC] request will request a Proof of Weights proof from the 
 ```json
 {
   "jsonrpc": "2.0",
-  "method": "omron.proof_of_weights",
+  "method": "subnet-2.proof_of_weights",
   "params": {
     "evaluation_data": {...},
     "weights_version": ...
@@ -128,7 +128,7 @@ The following [JSON-RPC] request will request a Proof of Weights proof from the 
 
 ### Response
 
-Once complete, the Omron Validator will return the Proof of Weights proof to the BTSDK in the form of a JSON-RPC response.
+Once complete, the SN2 Validator will return the Proof of Weights proof to the BTSDK in the form of a JSON-RPC response.
 
 | Key       | Description                                         |
 | --------- | --------------------------------------------------- |
@@ -148,7 +148,7 @@ Once complete, the Omron Validator will return the Proof of Weights proof to the
 
 ### Errors
 
-Should an error occur, the Omron Validator will return an error response in the form of a [JSON-RPC] error response.
+Should an error occur, the SN2 Validator will return an error response in the form of a [JSON-RPC] error response.
 
 | Key       | Description                        |
 | --------- | ---------------------------------- |
@@ -172,21 +172,21 @@ Should an error occur, the Omron Validator will return an error response in the 
 
 ### Signature Verification
 
-To remove the risk of DDOS and related flooding attacks, each call to the Omron Validator's API is protected by signature verification. This means that only validators that have a VPermit on their claimed origin subnet can use the Proof of Weights service. Liveness is guaranteed through the use of a timestamp within each signature, preventing replay attacks.
+To remove the risk of DDOS and related flooding attacks, each call to the SN2 Validator's API is protected by signature verification. This means that only validators that have a VPermit on their claimed origin subnet can use the Proof of Weights service. Liveness is guaranteed through the use of a timestamp within each signature, preventing replay attacks.
 
 - Signature provided must match the timestamp and ss58 address provided in the headers.
 - Timestamp must be within the last 5 minutes to prevent replay attacks.
 - Origin SS58 address must either:
-  - Be explicitly whitelisted by the Omron Validator
+  - Be explicitly whitelisted by the SN2 Validator
   - Be present in the metagraph of the origin subnet, and have a VPermit on the origin subnet
 
 ### Proof Verification
 
-Omron validators check that the proof provided by the miner is fully verified before returning the proof to the BTSDK, ensuring cryptographic security.
+SN2 validators check that the proof provided by the miner is fully verified before returning the proof to the BTSDK, ensuring cryptographic security.
 
 ### Transport Layer Security
 
-The BTSDK and Omron Validator communicate over a secure TLS-encrypted WebSocket connection using the [WSS] protocol.
+The BTSDK and SN2 Validator communicate over a secure TLS-encrypted WebSocket connection using the [WSS] protocol.
 
 ## Definitions
 
@@ -195,21 +195,21 @@ The BTSDK and Omron Validator communicate over a secure TLS-encrypted WebSocket 
 | Delegate Hotkey  | A hotkey not controlled by the Origin Validator that is used to produce the Proof of Weights proof. If no delegate hotkey is provided, the Origin Validator will use their own hotkey. |
 | Epoch            | A 360 block period that defines intervals at which consensus is calculated on the Bittensor network.                                                                                   |
 | `netuid`         | A unique identifier for a subnet on the Bittensor network.                                                                                                                             |
-| Omron Subnet     | Subnet number 2 on the Bittensor network which serves as a decentralized proving service for Proof of Weights and is operated by Inference Labs.                                       |
-| Omron Validator  | A validator operating on the Omron subnet, which is responsible for producing Proof of Weights proofs for Origin Validators.                                                           |
+| Subnet 2         | Subnet number 2 on the Bittensor network which serves as a decentralized proving service for Proof of Weights and is operated by Inference Labs.                                       |
+| SN2 Validator    | A validator operating on subnet 2, which is responsible for producing Proof of Weights proofs for Origin Validators.                                                                   |
 | Origin Validator | A validator operating on any subnet within the Bittensor network, which requests a Proof of Weights proof from a remote proving service.                                               |
 | Proof of Weights | A mechanism that allows validators to prove that they have correctly and faithfully run each subnet's incentive mechanism as per the subnet owner's specification.                     |
-| Proving Service  | A remote service that produces Proof of Weights proofs for Origin Validators, in this case Omron (Subnet 2).                                                                           |
+| Proving Service  | A remote service that produces Proof of Weights proofs for Origin Validators, in this case Subnet 2.                                                                                   |
 | Subnet           | A specialized network within Bittensor that serves a specific purpose or runs a particular type of service.                                                                            |
 | TAO              | The native token of the Bittensor network used for staking, rewards, and governance.                                                                                                   |
 | Validator        | A node in the Bittensor network that validates and scores the performance of miners, helping maintain network integrity.                                                               |
 | Weights Version  | An integer representing the version of validator software on the origin subnet. Used to determine which proving circuit to use.                                                        |
 
 > [!NOTE]
-> The term "Omron Validator" is used to refer to the validator on the Omron subnet that produces Proof of Weights proofs for Origin Validators. It is assumed that by default, the hotkey of the Omron Validator and the Origin Validator are the same, though the Origin Validator may choose to delegate to a different hotkey on the Omron subnet.
+> The term "SN2 Validator" is used to refer to the validator on subnet 2 that produces Proof of Weights proofs for Origin Validators. It is assumed that by default, the hotkey of the SN2 Validator and the Origin Validator are the same, though the Origin Validator may choose to delegate to a different hotkey on subnet 2.
 
 > [!NOTE]
-> It is possible for the Omron Validator and Origin Validator to be the same instance entirely, in the case that the Origin Validator is operating on the Omron subnet. For this case, the Omron Subnet automatically satisfies the Proof of Weights requirements for the Origin Validator through internal logic.
+> It is possible for the NS2 Validator and Origin Validator to be the same instance entirely, in the case that the Origin Validator is operating on subnet 2. For this case, Subnet 2 automatically satisfies the Proof of Weights requirements for the Origin Validator through internal logic.
 
 [Proof of Weights SDK]: https://github.com/inference-labs-inc/proof-of-weights-sdk "Proof of Weights SDK"
 [JSON-RPC]: https://www.jsonrpc.org/specification "JSON-RPC"

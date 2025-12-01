@@ -43,7 +43,7 @@ STORAGE_REGION="auto"
 > **Port `8091` must be open** for your circuit to function properly. This requires configuration on your local machine and router, or, if you're using a cloud provider, adjustments to your network settings. Validators cannot query your circuit if port `8091` remains closed.
 
 ```bash
-pm2 start neurons/miner.py --name omron_miner -- --netuid 2 --wallet.name your_wallet --logging.debug
+pm2 start neurons/miner.py --name subnet_2_miner -- --netuid 2 --wallet.name your_wallet --logging.debug
 ```
 
 ## Circuit Submission Flow
@@ -93,8 +93,8 @@ The miner will automatically:
 ### Monitor Evaluation
 
 - Watch validator requests: `pm2 logs miner`
-- View metrics: https://wandb.ai/inferencelabs/omron
-- View leaderboard: https://accelerate.omron.ai
+- View metrics: https://wandb.ai/inferencelabs/sn2
+- View leaderboard: https://sn2-accelerate.inferencelabs.com
 
 ### 🏆 EZKL Performance Evaluation
 
@@ -107,7 +107,7 @@ Upon completion of the Subnet 2 competition phase, [EZKL](https://ezkl.xyz) will
 #### Submission Process
 
 1. Submit your implementation via PR to https://github.com/zkonduit/ezkl
-2. Include the tag `omron-subnet-competition-1`
+2. Include the tag `subnet-2-competition-1`
 3. Await automated evaluation results
 
 High-performing circuits that demonstrate excellence across these metrics will be eligible for additional grant funding. EZKL's evaluation criteria are designed to identify implementations that achieve an optimal balance of performance, efficiency, and accuracy.
@@ -152,7 +152,6 @@ The competition will end on 2025-04-27.
 ## For additional assistance
 
 - Join Discord and reach out via the Subnet 2 channel: https://discord.gg/bittensor
-- For security reports, please see our bug bounty program: https://immunefi.com/bug-bounty/omron/
 - Otherwise, feel free to open a GitHub issue within the repository.
 
 [testnet]: ../running_on_testnet.md

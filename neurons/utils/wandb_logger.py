@@ -12,7 +12,7 @@ from queue import Queue
 from typing import Dict, Any
 
 ENTITY_NAME = "inferencelabs"
-PROJECT_NAME = "omron"
+PROJECT_NAME = "subnet-2"
 WANDB_ENABLED = False
 _log_queue = Queue()
 _log_thread = None

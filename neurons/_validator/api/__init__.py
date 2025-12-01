@@ -9,7 +9,7 @@ from fastapi import (
     Request,
     Response,
 )
-
+from proof_of_portfolio import verify
 from fastapi.responses import JSONResponse
 
 from jsonrpcserver import (
@@ -41,7 +41,8 @@ from _validator.api.websocket_manager import WebSocketManager
 import asyncio
 from OpenSSL import crypto
 from deployment_layer.circuit_store import circuit_store
-
+from _validator.utils.pps import ProofPublishingService
+from constants import PPS_URL, TESTNET_PPS_URL
 
 app = FastAPI()
 
@@ -115,8 +116,8 @@ class ValidatorAPI:
                     data,
                     context=websocket,
                     methods={
-                        "omron.proof_of_weights": self.handle_proof_of_weights,
-                        "omron.proof_of_computation": self.handle_proof_of_computation,
+                        "subnet-2.proof_of_weights": self.handle_proof_of_weights,
+                        "subnet-2.proof_of_computation": self.handle_proof_of_computation,
                     },
                 )
                 await websocket.send_text(str(response))
@@ -136,10 +137,110 @@ class ValidatorAPI:
             traceback.print_exc()
         return Response(status_code=500)
 
+    async def submit_proof(self, request: Request) -> Response:
+        """
+        Handles proof submission from authorized hotkeys.
+        Verifies the proof and uploads to PPS if successful.
+        """
+        try:
+            if not await self.validate_connection(request.headers):
+                bt.logging.warning("Unauthorized proof submission attempt")
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+            proof_data = body.get("proof")
+            public_signals = body.get("public_signals")
+
+            if not proof_data:
+                return JSONResponse({"error": "Missing proof data"}, status_code=400)
+            try:
+                verification_result = verify(proof_data, public_signals)
+
+                if not verification_result:
+                    return JSONResponse(
+                        {"error": "Proof verification failed"}, status_code=400
+                    )
+            except Exception as e:
+                bt.logging.error(f"Uploaded proof failed to verify {e}")
+                return JSONResponse(
+                    {"error": "Proof verification failed"}, status_code=400
+                )
+
+            try:
+                pps_url = self._upload_to_pps(
+                    proof_data, public_signals, request.headers
+                )
+
+                if pps_url:
+                    return JSONResponse(
+                        {
+                            "verified": True,
+                            "url": pps_url,
+                        }
+                    )
+                else:
+                    return JSONResponse(
+                        {"verified": True, "error": "Failed to upload proof to PPS"},
+                        status_code=200,
+                    )
+
+            except Exception as e:
+                bt.logging.error(f"Error processing proof: {str(e)}")
+                traceback.print_exc()
+                return JSONResponse({"error": "Internal server error"}, status_code=500)
+
+        except Exception as e:
+            bt.logging.error(f"Error handling proof submission: {str(e)}")
+            traceback.print_exc()
+            return JSONResponse({"error": "Internal server error"}, status_code=500)
+
+    def _upload_to_pps(self, proof_data, public_signals, headers) -> str | None:
+        """
+        Upload verified proof to PPS and return URL.
+        """
+        try:
+
+            pps_url = TESTNET_PPS_URL if self.is_testnet else PPS_URL
+
+            hotkey_ss58 = headers.get("x-origin-ss58")
+            if not hotkey_ss58:
+                bt.logging.error("No hotkey found in headers")
+                return None
+
+            pps = ProofPublishingService(pps_url)
+
+            proof_json = {
+                "proof": proof_data,
+                "public_signals": public_signals,
+                "submitter_hotkey": hotkey_ss58,
+                "validator_hotkey": self.config.wallet.hotkey.ss58_address,
+            }
+
+            result = pps.publish_proof(proof_json, self.config.wallet.hotkey)
+
+            if result and "gatewayUrl" in result:
+                return result["gatewayUrl"]
+            elif result:
+                return f"{pps_url}/proof/{result.get('id', 'unknown')}"
+
+            return None
+
+        except Exception as e:
+            bt.logging.error(f"PPS upload error: {str(e)}")
+            traceback.print_exc()
+            return None
+
     def _get_routes(self) -> list[APIWebSocketRoute | APIRoute]:
         rpc_endpoint = APIWebSocketRoute("/rpc", self.handle_ws)
         get_circuits_endpoint = APIRoute("/circuits", self.get_circuits)
-        return [rpc_endpoint, get_circuits_endpoint]
+        submit_proof_endpoint = APIRoute(
+            "/verify-and-upload", self.submit_proof, methods=["POST"]
+        )
+        return [rpc_endpoint, get_circuits_endpoint, submit_proof_endpoint]
 
     async def handle_proof_of_weights(
         self, websocket: WebSocket, **params: dict[str, object]

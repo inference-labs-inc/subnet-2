@@ -14,25 +14,25 @@ VALIDATOR_PORT ?= 8443
 .PHONY: build stop clean miner-logs validator-logs miner validator test-miner test-validator
 
 build:
-	docker build -t omron -f Dockerfile .
+	docker build -t subnet-2 -f Dockerfile .
 
 stop:
-	docker stop omron-miner || true
-	docker stop omron-validator || true
+	docker stop subnet-2-miner || true
+	docker stop subnet-2-validator || true
 
 clean:
-	docker stop omron-miner || true
-	docker stop omron-validator || true
-	docker rm omron-miner || true
-	docker rm omron-validator || true
-	docker image rm omron || true
+	docker stop subnet-2-miner || true
+	docker stop subnet-2-validator || true
+	docker rm subnet-2-miner || true
+	docker rm subnet-2-validator || true
+	docker image rm subnet-2 || true
 	docker image prune -f
 
 miner-logs:
-	docker logs -f omron-miner
+	docker logs -f subnet-2-miner
 
 validator-logs:
-	docker logs -f omron-validator
+	docker logs -f subnet-2-validator
 
 check-extra-args:
 	@if [ -n "$(ARGS)" ]; then \
@@ -42,15 +42,15 @@ check-extra-args:
 miner: check-extra-args
 	@echo "Using wallet path: $(WALLET_PATH)"
 	@echo "Setting PUID to $(PUID)"
-	docker stop omron-miner || true
-	docker rm omron-miner || true
+	docker stop subnet-2-miner || true
+	docker rm subnet-2-miner || true
 	docker run \
 		--detach \
-		--name omron-miner \
+		--name subnet-2-miner \
 		-p $(MINER_PORT):8091 \
 		-v $(WALLET_PATH):/home/ubuntu/.bittensor \
 		-e PUID=$(PUID) \
-		omron miner.py \
+		subnet-2 miner.py \
 		--wallet.name $(WALLET_NAME) \
 		--wallet.hotkey $(WALLET_HOTKEY) \
 		--netuid $(NETUID) \
@@ -59,15 +59,15 @@ miner: check-extra-args
 validator: check-extra-args
 	@echo "Using wallet path: $(WALLET_PATH)"
 	@echo "Setting PUID to $(PUID)"
-	docker stop omron-validator || true
-	docker rm omron-validator || true
+	docker stop subnet-2-validator || true
+	docker rm subnet-2-validator || true
 	docker run \
 		--detach \
-		--name omron-validator \
+		--name subnet-2-validator \
 		-p $(VALIDATOR_PORT):8443 \
 		-v $(WALLET_PATH):/home/ubuntu/.bittensor \
 		-e PUID=$(PUID) \
-		omron validator.py \
+		subnet-2 validator.py \
 		--wallet.name $(WALLET_NAME) \
 		--wallet.hotkey $(WALLET_HOTKEY) \
 		--netuid $(NETUID) \
@@ -76,15 +76,15 @@ validator: check-extra-args
 test-miner: check-extra-args
 	@echo "Using wallet path: $(WALLET_PATH)"
 	@echo "Setting PUID to $(PUID)"
-	docker stop omron-miner || true
-	docker rm omron-miner || true
+	docker stop subnet-2-miner || true
+	docker rm subnet-2-miner || true
 	docker run \
 		--detach \
-		--name omron-miner \
+		--name subnet-2-miner \
 		-p $(MINER_PORT):8091 \
 		-v $(WALLET_PATH):/home/ubuntu/.bittensor \
 		-e PUID=$(PUID) \
-		omron miner.py \
+		subnet-2 miner.py \
 		--wallet.name $(WALLET_NAME) \
 		--wallet.hotkey $(WALLET_HOTKEY) \
 		--netuid 118 \
@@ -95,15 +95,15 @@ test-miner: check-extra-args
 test-validator: check-extra-args
 	@echo "Using wallet path: $(WALLET_PATH)"
 	@echo "Setting PUID to $(PUID)"
-	docker stop omron-validator || true
-	docker rm omron-validator || true
+	docker stop subnet-2-validator || true
+	docker rm subnet-2-validator || true
 	docker run \
 		--detach \
-		--name omron-validator \
+		--name subnet-2-validator \
 		-p $(VALIDATOR_PORT):8443 \
 		-v $(WALLET_PATH):/home/ubuntu/.bittensor \
 		-e PUID=$(PUID) \
-		omron validator.py \
+		subnet-2 validator.py \
 		--wallet.name $(WALLET_NAME) \
 		--wallet.hotkey $(WALLET_HOTKEY) \
 		--netuid 118 \
@@ -174,13 +174,13 @@ pm2-setup:
 	./setup.sh
 
 pm2-stop:
-	pm2 stop omron-miner || true
-	pm2 stop omron-validator || true
+	pm2 stop subnet-2-miner || true
+	pm2 stop subnet-2-validator || true
 
 pm2-miner: check-extra-args
 	uv sync --frozen --no-dev
 	cd neurons; \
-	pm2 start miner.py --name omron-miner --interpreter ../.venv/bin/python --kill-timeout 3000 -- \
+	pm2 start miner.py --name subnet-2-miner --interpreter ../.venv/bin/python --kill-timeout 3000 -- \
 	--wallet.path $(WALLET_PATH)/wallets \
 	--wallet.name $(WALLET_NAME) \
 	--wallet.hotkey $(WALLET_HOTKEY) \
@@ -190,7 +190,7 @@ pm2-miner: check-extra-args
 pm2-validator: check-extra-args
 	uv sync --frozen --no-dev
 	cd neurons; \
-	pm2 start validator.py --name omron-validator --interpreter ../.venv/bin/python --kill-timeout 3000 -- \
+	pm2 start validator.py --name subnet-2-validator --interpreter ../.venv/bin/python --kill-timeout 3000 -- \
 	--wallet.path $(WALLET_PATH)/wallets \
 	--wallet.name $(WALLET_NAME) \
 	--wallet.hotkey $(WALLET_HOTKEY) \
@@ -200,7 +200,7 @@ pm2-validator: check-extra-args
 pm2-test-miner: check-extra-args
 	uv sync --frozen --no-dev
 	cd neurons; \
-	pm2 start miner.py --name omron-miner --interpreter ../.venv/bin/python --kill-timeout 3000 -- \
+	pm2 start miner.py --name subnet-2-miner --interpreter ../.venv/bin/python --kill-timeout 3000 -- \
 	--wallet.path $(WALLET_PATH)/wallets \
 	--wallet.name $(WALLET_NAME) \
 	--wallet.hotkey $(WALLET_HOTKEY) \
@@ -212,7 +212,7 @@ pm2-test-miner: check-extra-args
 pm2-test-validator: check-extra-args
 	uv sync --frozen --no-dev
 	cd neurons; \
-	pm2 start validator.py --name omron-validator --interpreter ../.venv/bin/python --kill-timeout 3000 -- \
+	pm2 start validator.py --name subnet-2-validator --interpreter ../.venv/bin/python --kill-timeout 3000 -- \
 	--wallet.path $(WALLET_PATH)/wallets \
 	--wallet.name $(WALLET_NAME) \
 	--wallet.hotkey $(WALLET_HOTKEY) \

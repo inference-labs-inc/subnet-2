@@ -26,7 +26,6 @@
     "metagraph",
     "ndarray",
     "netuid",
-    "Omron",
     "onnxruntime",
     "Opentensor",
     "pydantic",

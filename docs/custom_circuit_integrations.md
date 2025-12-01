@@ -1,14 +1,14 @@
 # Custom Circuit Integrations
 
-The purpose of this document is to provide an overview of how third parties can integrate their own zero-knowledge circuits into the Omron subnet.
+The purpose of this document is to provide an overview of how third parties can integrate their own zero-knowledge circuits into subnet 2.
 
 ## Adding a new circuit
 
-To add a new circuit into Omron, the following high-level steps are required:
+To add a new circuit into Subnet 2, the following high-level steps are required:
 
 1. Open a PR on [this repository] describing the new circuit.
 2. The PR will be reviewed by core contributors, and merged into the main branch upon acceptance.
-3. A release will be created by the Omron team and the new circuit will be available to the network in approximately 24 hours.
+3. A release will be created by the Subnet 2 team and the new circuit will be available to the network in approximately 24 hours.
 
 Please see the below sections for a comprehensive tutorial on how to add a new circuit.
 
@@ -20,7 +20,7 @@ Building your circuit is easiest through the EZKL proof system. Please see the [
 
 > [!IMPORTANT]
 >
-> One of the inputs to your circuit must be an F32 field named `nonce`. Though it does not need to be used in the circuit, it is required to be present in the input to allow the subnet to secure it's internal state. If you are unsure about this step, please reach out to the Omron team for assistance.
+> One of the inputs to your circuit must be an F32 field named `nonce`. Though it does not need to be used in the circuit, it is required to be present in the input to allow the subnet to secure it's internal state. If you are unsure about this step, please reach out to the Inference Labs team for assistance.
 
 Once you have built your circuit, you will possess the following files which are necessary for circuit integration:
 
@@ -35,7 +35,7 @@ Once you have built your circuit, you will possess the following files which are
 
 ### Gather the necessary files
 
-Omron requires that circuits are added with several supporting files to facilitate the circuit's integration into the subnet.
+Subnet 2 requires that circuits are added with several supporting files to facilitate the circuit's integration into the subnet.
 
 | File            | Description                                                                                          |
 | --------------- | ---------------------------------------------------------------------------------------------------- |
@@ -86,9 +86,9 @@ This file is responsible for describing the circuit's properties, and contains b
 | `weights_version`         | `int`           | For Proof of Weights, the version of subnet weights that the circuit corresponds to. | ❌       |
 | `benchmark_choice_weight` | `float`         | The probability of the circuit being selected for benchmark request.                 | ❌       |
 
-[See it's class definition here for more information](https://github.com/inference-labs-inc/omron-subnet/blob/main/neurons/execution_layer/circuit.py#L100)
+[See it's class definition here for more information](https://github.com/inference-labs-inc/subnet-2/blob/main/neurons/execution_layer/circuit.py#L100)
 
-[See an example `metadata.json` file here](https://github.com/inference-labs-inc/omron-subnet/blob/main/neurons/deployment_layer/model_33b92394b18412622adad75733a6fc659b4e202b01ee8a5465958a6bad8ded62/metadata.json)
+[See an example `metadata.json` file here](https://github.com/inference-labs-inc/subnet-2/blob/main/neurons/deployment_layer/model_33b92394b18412622adad75733a6fc659b4e202b01ee8a5465958a6bad8ded62/metadata.json)
 
 #### `settings.json`
 
@@ -96,7 +96,7 @@ This file is generated automatically by the EZKL proof system (if using EZKL). A
 
 Locate the `model_input_scales` field in the `settings.json` file. This field is a list of floats, where each float corresponds to the scale of the input for a specific input field.
 
-[See an example `settings.json` file here](https://github.com/inference-labs-inc/omron-subnet/blob/main/neurons/deployment_layer/model_33b92394b18412622adad75733a6fc659b4e202b01ee8a5465958a6bad8ded62/settings.json#L82)
+[See an example `settings.json` file here](https://github.com/inference-labs-inc/subnet-2/blob/main/neurons/deployment_layer/model_33b92394b18412622adad75733a6fc659b4e202b01ee8a5465958a6bad8ded62/settings.json#L82)
 
 ### Create the circuit directory
 
@@ -119,7 +119,7 @@ Ensure all the following files are copied into this directory or are listed in t
 
 ### Adding benchmark requests
 
-The last step after adding your circuit is to add an allocation of benchmark requests to the circuit. This is done through a modification to the circuit `metadata.json` file. The `benchmark_choice_weight` value is the percentage of requests that should be allocated to the circuit. Percentages should be between 0 and 1 and sum of them for all models do not need to be equal to 1. A reasonable starting point is 0.20 for each circuit. The omron team will adjust these weights as necessary to ensure a healthy distribution of requests across all circuits.
+The last step after adding your circuit is to add an allocation of benchmark requests to the circuit. This is done through a modification to the circuit `metadata.json` file. The `benchmark_choice_weight` value is the percentage of requests that should be allocated to the circuit. Percentages should be between 0 and 1 and sum of them for all models do not need to be equal to 1. A reasonable starting point is 0.20 for each circuit. The Inference Labs team will adjust these weights as necessary to ensure a healthy distribution of requests across all circuits.
 
 A higher percentage will result in more requests being allocated to the circuit, increasing the circuit's optimization pressure.
 
@@ -144,7 +144,7 @@ To query a circuit, the following high-level steps are required:
 
 ### Selecting a validator
 
-Bittensor subnets work based on a validator<->miner relationship. Validators are responsible for evaluating the miner's responses to it's requests. As such, to query into the Omron subnet, you will need to connect to a validator directly.
+Bittensor subnets work based on a validator<->miner relationship. Validators are responsible for evaluating the miner's responses to it's requests. As such, to query into the subnet, you will need to connect to a validator directly.
 
 For those unfamiliar with Bittensor validators, please reach out using the [Seeking Assistance](#seeking-assistance) section below. We'll be happy to work with you to get connected through a subnet validator.
 
@@ -152,9 +152,9 @@ For those who have a validator to connect with, please proceed to the next step.
 
 ### Connecting
 
-#### Through Omron's API
+#### Through the API
 
-For those who are interested in querying a circuit through Omron's API, please reach out using the [Seeking Assistance](#seeking-assistance) section below. We'll be happy to work with you to get connected.
+For those who are interested in querying a circuit through the Subnet 2 API, please reach out using the [Seeking Assistance](#seeking-assistance) section below. We'll be happy to work with you to get connected.
 
 #### Through a validator
 
@@ -164,7 +164,7 @@ For those who are interested in querying a circuit through Omron's API, please r
 
 Validator APIs are available at `wss://<validator_ip>:<validator_port>/rpc`. These are WebSocket servers which use the [JSON-RPC 2.0](https://www.jsonrpc.org/specification) protocol.
 
-Omron implements the `wss` protocol for all validator APIs, which use self-signed certificates for connection security. Each validator commits their self-signed certificate to the blockchain as a `SHA256` hash. To perform verification on the connection please see the below example, which demonstrates connection validation through the `wss` protocol.
+Subnet 2 implements the `wss` protocol for all validator APIs, which use self-signed certificates for connection security. Each validator commits their self-signed certificate to the blockchain as a `SHA256` hash. To perform verification on the connection please see the below example, which demonstrates connection validation through the `wss` protocol.
 
 [`verify_ssl.py`]
 
@@ -194,7 +194,7 @@ To request a circuit execution, send an RPC request to the validator's WebSocket
 ```json
 {
   "jsonrpc": "2.0",
-  "method": "omron.proof_of_computation",
+  "method": "subnet-2.proof_of_computation",
   "params": {
     "input": {...},
     "circuit": "..."
@@ -236,14 +236,13 @@ Once complete, the validator will respond with the circuit's output or provide a
 
 ## Seeking Assistance
 
-If you have any questions or need assistance with the process of adding a new circuit, please reach out to the Omron team through the subnet 2 channel within the Bittensor Discord using the badge below, or via our contact form on [omron.ai].
+If you have any questions or need assistance with the process of adding a new circuit, please reach out to the Inference Labs team through the subnet 2 channel within the Bittensor Discord using the badge below, or via our contact form on [sn2.inferencelabs.com].
 
 [![Discord](https://img.shields.io/badge/Join-gray?style=for-the-badge&logo=Discord&logoColor=blue&link=https%3A%2F%2Fdiscord.gg%2FBECadXnAtE)](https://discord.gg/BECadXnAtE)
 
-[this repository]: https://github.com/inference-labs-inc/omron-subnet
-[omron.ai]: https://omron.ai
-[`ProofSystem`]: https://github.com/inference-labs-inc/omron-subnet/blob/main/neurons/execution_layer/circuit.py#L22
-[`CircuitType`]: https://github.com/inference-labs-inc/omron-subnet/blob/main/neurons/execution_layer/circuit.py#L13
-[`BaseInput`]: https://github.com/inference-labs-inc/omron-subnet/blob/main/neurons/execution_layer/base_input.py#L6
-[input.py file for one of the existing circuits]: https://github.com/inference-labs-inc/omron-subnet/blob/b321b84519456fbe7f17adbda629c1c92bda32bd/neurons/deployment_layer/model_33b92394b18412622adad75733a6fc659b4e202b01ee8a5465958a6bad8ded62/input.py
-[`verify_ssl.py`]: https://github.com/inference-labs-inc/omron-subnet/blob/scripts/neurons/scripts/verify_ssl.py
+[this repository]: https://github.com/inference-labs-inc/subnet-2
+[`ProofSystem`]: https://github.com/inference-labs-inc/subnet-2/blob/main/neurons/execution_layer/circuit.py#L22
+[`CircuitType`]: https://github.com/inference-labs-inc/subnet-2/blob/main/neurons/execution_layer/circuit.py#L13
+[`BaseInput`]: https://github.com/inference-labs-inc/subnet-2/blob/main/neurons/execution_layer/base_input.py#L6
+[input.py file for one of the existing circuits]: https://github.com/inference-labs-inc/subnet-2/blob/b321b84519456fbe7f17adbda629c1c92bda32bd/neurons/deployment_layer/model_33b92394b18412622adad75733a6fc659b4e202b01ee8a5465958a6bad8ded62/input.py
+[`verify_ssl.py`]: https://github.com/inference-labs-inc/subnet-2/blob/scripts/neurons/scripts/verify_ssl.py

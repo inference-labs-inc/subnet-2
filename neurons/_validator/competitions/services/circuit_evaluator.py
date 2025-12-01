@@ -78,7 +78,7 @@ class CircuitEvaluator:
                 try:
                     import resource
 
-                    limit_gb = int(os.getenv("OMRON_EZKL_SETUP_MEMORY_GB", "16"))
+                    limit_gb = int(os.getenv("SUBNET_2_EZKL_SETUP_MEMORY_GB", "16"))
                     limit_bytes = limit_gb * 1024 * 1024 * 1024
                     resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
                 except Exception:

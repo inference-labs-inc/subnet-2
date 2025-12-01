@@ -4,24 +4,24 @@ These are options configurable via command line arguments or environment variabl
 
 ## General Environment Variables
 
-| Variable Name              | Required | Default               | Accepted Values | Description                                                |
-| -------------------------- | :------: | --------------------- | --------------- | ---------------------------------------------------------- |
-| `OMRON_EXTERNAL_MODEL_DIR` |    No    | `~/.bittensor/omron/` | String          | The directory used to store large circuit files.           |
-| `OMRON_NO_AUTO_UPDATE`     |    No    | `False`               | `True`, `False` | Whether to disable automatic updates.                      |
-| `OMRON_DOCKER_BUILD`       |    No    | `False`               | `True`, `False` | Whether we are running within a docker build / CI process. |
+| Variable Name                 | Required | Default                  | Accepted Values | Description                                                |
+| ----------------------------- | :------: | ------------------------ | --------------- | ---------------------------------------------------------- |
+| `SUBNET_2_EXTERNAL_MODEL_DIR` |    No    | `~/.bittensor/subnet-2/` | String          | The directory used to store large circuit files.           |
+| `SUBNET_2_NO_AUTO_UPDATE`     |    No    | `False`                  | `True`, `False` | Whether to disable automatic updates.                      |
+| `SUBNET_2_DOCKER_BUILD`       |    No    | `False`                  | `True`, `False` | Whether we are running within a docker build / CI process. |
 
 ## Validator specific environment variables
 
 These variables are specific to validator software and have no effect on miner software.
 
-| Variable Name       | Required | Default                                | Accepted Values | Description                               |
-| ------------------- | :------: | -------------------------------------- | --------------- | ----------------------------------------- |
-| `OMRON_LOGGING_URL` |    No    | `https://api.omron.ai/statistics/log/` | String          | The URL for metrics logging.              |
-| `OMRON_PPS_URL`     |    No    | `https://pps.omron.ai`                 | String          | The URL for the proof publishing service. |
+| Variable Name          | Required | Default                                             | Accepted Values | Description                               |
+| ---------------------- | :------: | --------------------------------------------------- | --------------- | ----------------------------------------- |
+| `SUBNET_2_LOGGING_URL` |    No    | `https://sn2-api.inferencelabs.com/statistics/log/` | String          | The URL for metrics logging.              |
+| `SUBNET_2_PPS_URL`     |    No    | `https://pps.inferencelabs.com`                     | String          | The URL for the proof publishing service. |
 
 ## General Arguments
 
-Arguments that are present within the Omron miner and validator software. The below arguments apply to both miner and validator software.
+Arguments that are present within the Subnet 2 miner and validator software. The below arguments apply to both miner and validator software.
 
 | Argument           | Required | Default | Accepted Values | Description                                                                |
 | ------------------ | :------: | ------- | --------------- | -------------------------------------------------------------------------- |
@@ -38,7 +38,7 @@ The below arguments are specific to miner software and have no effect on validat
 
 | Argument              | Required | Default | Accepted Values | Description                                                  |
 | --------------------- | :------: | ------- | --------------- | ------------------------------------------------------------ |
-| `--disable-blacklist` |    No    | `False` | `True`, `False` | Disables request filtering and allows all incoming requests.  |
+| `--disable-blacklist` |    No    | `False` | `True`, `False` | Disables request filtering and allows all incoming requests. |
 
 ### Validator specific arguments
 
@@ -84,8 +84,8 @@ Bittensor subtensor configuration options.
 
 | Argument                     | Required | Default            | Accepted Values                      | Description                                                                                                                |
 | ---------------------------- | :------: | ------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `--subtensor.network`        |    No    | `finney`           | `finney`, `test`, `archive`, `local`   | The subtensor network to connect to. Overrides `--subtensor.chain_endpoint` with a default node from the selected network. |
-| `--subtensor.chain_endpoint` |    No    | Depends on network | String                               | The specific blockchain endpoint to connect to. Overrides the network default endpoint if set.                              |
+| `--subtensor.network`        |    No    | `finney`           | `finney`, `test`, `archive`, `local` | The subtensor network to connect to. Overrides `--subtensor.chain_endpoint` with a default node from the selected network. |
+| `--subtensor.chain_endpoint` |    No    | Depends on network | String                               | The specific blockchain endpoint to connect to. Overrides the network default endpoint if set.                             |
 | `--subtensor._mock`          |    No    | `False`            | `True`, `False`                      | If true, uses a mocked connection to the chain for testing purposes.                                                       |
 
 ### Axon
@@ -94,12 +94,12 @@ Bittensor Axon configuration options.
 
 [View in code →](https://github.com/opentensor/bittensor/blob/master/bittensor/core/axon.py#L608)
 
-| Argument               | Required | Default | Accepted Values | Description                                                                               |
-| ---------------------- | :------: | ------- | --------------- | ----------------------------------------------------------------------------------------- |
-| `--axon.port`          |    No    | 8091    | Integer         | The local port this axon endpoint is bound to.                                            |
-| `--axon.ip`            |    No    | `[::]`  | String          | The local IP this axon binds to.                                                          |
-| `--axon.external_port` |    No    | None    | Integer         | The public port this axon broadcasts to the network.                                      |
-| `--axon.external_ip`   |    No    | None    | String          | The external IP this axon broadcasts to the network.                                      |
+| Argument               | Required | Default | Accepted Values | Description                                          |
+| ---------------------- | :------: | ------- | --------------- | ---------------------------------------------------- |
+| `--axon.port`          |    No    | 8091    | Integer         | The local port this axon endpoint is bound to.       |
+| `--axon.ip`            |    No    | `[::]`  | String          | The local IP this axon binds to.                     |
+| `--axon.external_port` |    No    | None    | Integer         | The public port this axon broadcasts to the network. |
+| `--axon.external_ip`   |    No    | None    | String          | The external IP this axon broadcasts to the network. |
 
 ### Logging
 
@@ -111,5 +111,5 @@ Bittensor logging configuration options.
 | ----------------------- | :------: | -------------------- | --------------- | ------------------------------------------ |
 | `--logging.debug`       |    No    | `False`              | `True`, `False` | Turn on bittensor debugging information.   |
 | `--logging.trace`       |    No    | `False`              | `True`, `False` | Turn on bittensor trace level information. |
-| `--logging.record_log`  |    No    | `False`              | `True`, `False` | Turns on logging to file.                   |
+| `--logging.record_log`  |    No    | `False`              | `True`, `False` | Turns on logging to file.                  |
 | `--logging.logging_dir` |    No    | `~/.bittensor/logs/` | String          | Logging default root directory.            |

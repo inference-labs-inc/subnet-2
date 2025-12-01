@@ -1,53 +1,55 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-import traceback
-import time
-from typing import NoReturn
 import concurrent.futures
 import os
+import sys
+import time
+import traceback
+from multiprocessing import Queue as MPQueue
+from queue import Empty
+from typing import NoReturn
 
 import bittensor as bt
+import httpx
+from bittensor.core.chain_data import AxonInfo
 
-from _validator.config import ValidatorConfig
 from _validator.api import ValidatorAPI
+from _validator.api.client import query_miner
+from _validator.competitions.competition import Competition
+from _validator.config import ValidatorConfig
+from _validator.core.capacity_manager import CapacityManager
 from _validator.core.prometheus import (
+    log_error,
+    log_queue_metrics,
+    log_score_change,
+    log_system_metrics,
+    log_weight_update,
     start_prometheus_logging,
     stop_prometheus_logging,
-    log_system_metrics,
-    log_queue_metrics,
-    log_weight_update,
-    log_score_change,
-    log_error,
 )
 from _validator.core.request import Request
 from _validator.core.request_pipeline import RequestPipeline
 from _validator.core.response_processor import ResponseProcessor
 from _validator.models.miner_response import MinerResponse
+from _validator.models.request_type import RequestType, ValidatorMessage
 from _validator.scoring.score_manager import ScoreManager
 from _validator.scoring.weights import WeightsManager
-from _validator.utils.axon import query_single_axon
-from _validator.models.request_type import RequestType, ValidatorMessage
+from _validator.utils.logging import log_responses as console_log_responses
 from _validator.utils.proof_of_weights import save_proof_of_weights
 from _validator.utils.uid import get_queryable_uids
-from utils import AutoUpdate, clean_temp_files, with_rate_limit
-from utils.gc_logging import log_responses as gc_log_responses
-from utils.gc_logging import gc_log_competition_metrics
-from _validator.utils.logging import log_responses as console_log_responses
 from constants import (
-    LOOP_DELAY_SECONDS,
-    EXCEPTION_DELAY_SECONDS,
-    MAX_CONCURRENT_REQUESTS,
-    ONE_MINUTE,
-    FIVE_MINUTES,
-    ONE_HOUR,
     DEFAULT_PROOF_SIZE,
+    EXCEPTION_DELAY_SECONDS,
+    FIVE_MINUTES,
+    LOOP_DELAY_SECONDS,
+    MAX_CONCURRENT_REQUESTS,
+    ONE_HOUR,
+    ONE_MINUTE,
 )
-from _validator.competitions.competition import Competition
-from _validator.core.capacity_manager import CapacityManager
-from multiprocessing import Queue as MPQueue
-from queue import Empty
+from utils import AutoUpdate, clean_temp_files, with_rate_limit
+from utils.gc_logging import gc_log_competition_metrics
+from utils.gc_logging import log_responses as gc_log_responses
 
 
 class ValidatorLoop:
@@ -67,11 +69,12 @@ class ValidatorLoop:
         self.config = config
         self.config.check_register()
         self.auto_update = AutoUpdate()
+        self.httpx_client = httpx.AsyncClient()
 
         self.validator_to_competition_queue = MPQueue()  # Messages TO competition
         self.competition_to_validator_queue = MPQueue()  # Messages FROM competition
         self.current_concurrency = MAX_CONCURRENT_REQUESTS
-        self.capacity_manager = CapacityManager(self.config)
+        self.capacity_manager = CapacityManager(self.config, self.httpx_client)
         try:
             competition_id = 1
             bt.logging.info("Initializing competition module...")
@@ -171,8 +174,8 @@ class ValidatorLoop:
         self.config.metagraph.sync(subtensor=self.config.subtensor)
 
     @with_rate_limit(period=ONE_HOUR)
-    async def sync_capacities(self, axons: list[bt.Axon]):
-        capacities = await self.capacity_manager.sync_capacities(axons)
+    async def sync_capacities(self, miners_info: dict[int, AxonInfo]):
+        capacities = await self.capacity_manager.sync_capacities(miners_info)
         bt.logging.debug(f"Synced capacities: {capacities}")
         return capacities
 
@@ -347,7 +350,9 @@ class ValidatorLoop:
                     ]
 
                     for uid in available_uids[:slots_available]:
-                        request = self.request_pipeline.prepare_single_request(uid)
+                        request: Request = self.request_pipeline.prepare_single_request(
+                            uid
+                        )
                         if request:
                             task = asyncio.create_task(
                                 self._process_single_request(request)
@@ -395,7 +400,10 @@ class ValidatorLoop:
                 self.update_competition_metrics()
                 self.update_queryable_uids()
                 await self.sync_capacities(
-                    [self.config.metagraph.axons[uid] for uid in self.queryable_uids]
+                    {
+                        uid: self.config.metagraph.axons[uid]
+                        for uid in self.queryable_uids
+                    }
                 )
                 self.update_processed_uids()
                 self.log_health()
@@ -423,22 +431,28 @@ class ValidatorLoop:
             )
         except KeyboardInterrupt:
             self._should_run = False
-            self._handle_keyboard_interrupt()
+            bt.logging.success("Keyboard interrupt detected. Exiting validator.")
         except Exception as e:
             bt.logging.error(f"Fatal error in validator loop: {e}")
             raise
+        finally:
+            await self._cleanup()
 
     async def _process_single_request(self, request: Request) -> Request:
         """
         Process a single request and return the response.
         """
         try:
-            response = await asyncio.get_event_loop().run_in_executor(
-                self.thread_pool,
-                lambda: query_single_axon(self.config.dendrite, request),
+            response = await query_miner(
+                self.httpx_client,
+                request,
+                self.config.wallet,
             )
-            response = await response
-            processed_response = await asyncio.get_event_loop().run_in_executor(
+            if response is None:
+                return request
+            processed_response: (
+                MinerResponse | None
+            ) = await asyncio.get_event_loop().run_in_executor(
                 self.response_thread_pool,
                 self.response_processor.process_single_response,
                 response,
@@ -516,15 +530,15 @@ class ValidatorLoop:
         else:
             bt.logging.debug("Automatic updates are disabled, skipping version check")
 
-    def _handle_keyboard_interrupt(self):
+    async def _cleanup(self):
         """Handle keyboard interrupt by cleaning up and exiting."""
         bt.logging.success("Keyboard interrupt detected. Exiting validator.")
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.api.stop())
+        await self.api.stop()
+        await self.httpx_client.aclose()
         stop_prometheus_logging()
         clean_temp_files()
         if self.competition:
             self.competition.competition_thread.stop()
             if hasattr(self.competition.circuit_manager, "close"):
-                loop.run_until_complete(self.competition.circuit_manager.close())
+                await self.competition.circuit_manager.close()
         sys.exit(0)

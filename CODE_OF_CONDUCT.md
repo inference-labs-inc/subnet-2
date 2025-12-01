@@ -1,6 +1,6 @@
 # Code of Conduct
 
-For Omron miners, validators, and operators of the subnet.
+For Subnet 2 miners, validators, and operators of the subnet.
 
 ## General Principles
 
@@ -8,11 +8,9 @@ For Omron miners, validators, and operators of the subnet.
 - All parties shall not engage in any activity that could be construed as a conflict of interest.
 - All parties shall report any potential issues or exploits to the owners and team members through the official bug bounty program.
 
-> The official bug bounty program can be found at https://immunefi.com/bug-bounty/omron/
-
 ## Subnet Operators
 
-- Shall conduct all development within the public `omron-subnet` repository.
+- Shall conduct all development within the public `subnet-2` repository.
 - Shall not disclose any sensitive information about future updates to third parties.
 - Shall make every reasonable effort to ensure that the subnet is secure and stable at all times.
 - Shall provide support to the community as needed.

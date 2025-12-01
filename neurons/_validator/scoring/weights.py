@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 @dataclass
 class WeightsManager:
     """
-    Manages weight setting for the Omron validator.
+    Manages weight setting for the validator.
 
     Attributes:
         subtensor (bt.subtensor): The Bittensor subtensor instance.

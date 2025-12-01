@@ -8,7 +8,7 @@
     "weights_version": 160,
     "type": "proof_of_weights",
     "external_files": {
-        "pk.key": "https://storage.omron.ai/1876cfa9fb3c418b2559f3f7074db20565b5ca7237efdd43b907d9d697a452c4/pk.key"
+        "pk.key": "https://sn2-storage.inferencelabs.com/1876cfa9fb3c418b2559f3f7074db20565b5ca7237efdd43b907d9d697a452c4/pk.key"
     },
     "benchmark_choice_weight": 0.2
 }

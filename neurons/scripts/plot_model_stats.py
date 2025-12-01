@@ -50,8 +50,8 @@ def parse_args():
     parser.add_argument(
         "--path",
         type=str,
-        default=os.path.expanduser("~/.bittensor/omron"),
-        help="Path to bittensor/omron directory",
+        default=os.path.expanduser("~/.bittensor/subnet-2"),
+        help="Path to bittensor/subnet-2 directory",
     )
     return parser.parse_args()
 

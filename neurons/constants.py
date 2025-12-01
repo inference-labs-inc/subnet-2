@@ -92,7 +92,7 @@ WHITELISTED_PUBLIC_KEYS = []
 # Mainnet <> Testnet UID mapping
 MAINNET_TESTNET_UIDS = [
     (1, 61),  # apex
-    (2, 118),  # omron
+    (2, 118),  # subnet 2
     (3, 223),  # templar
     (4, 40),  # targon
     (5, 88),  # kaito
@@ -142,18 +142,18 @@ MAINNET_TESTNET_UIDS = [
 ]
 # Proof publishing service URL
 PPS_URL = os.getenv(
-    "OMRON_PPS_URL",
-    "https://pps.omron.ai/",
+    "SUBNET_2_PPS_URL",
+    "https://pps.inferencelabs.com/",
 )
 # Testnet PPS URL
 TESTNET_PPS_URL = os.getenv(
-    "OMRON_PPS_URL",
+    "SUBNET_2_PPS_URL",
     "https://cllswjfpzmg67rwythmiiufvtm0gsthd.lambda-url.us-east-1.on.aws/",
 )
 # EZKL path
 LOCAL_EZKL_PATH = os.path.join(os.path.expanduser("~"), ".ezkl", "ezkl")
 # GitHub repository URL
-REPO_URL = "https://github.com/inference-labs-inc/omron-subnet"
+REPO_URL = "https://github.com/inference-labs-inc/subnet-2"
 # Various time constants in seconds
 ONE_SECOND = 1
 ONE_MINUTE = 60
@@ -162,7 +162,7 @@ ONE_HOUR = ONE_MINUTE * 60
 ONE_DAY = ONE_HOUR * 24
 ONE_YEAR = ONE_DAY * 365
 # Temporary folder for storing proof files
-TEMP_FOLDER = "/tmp/omron"
+TEMP_FOLDER = "/tmp/subnet-2"
 
 # Queue size limits
 MAX_POW_QUEUE_SIZE = 1024
