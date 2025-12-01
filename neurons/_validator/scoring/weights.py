@@ -6,11 +6,9 @@ from constants import (
     WEIGHT_RATE_LIMIT,
     WEIGHTS_VERSION,
     ONE_MINUTE,
-    WEIGHT_UPDATE_BUFFER,
 )
 from _validator.utils.logging import log_weights
 from _validator.utils.proof_of_weights import ProofOfWeightsItem
-from utils.epoch import get_current_epoch_info
 
 from typing import TYPE_CHECKING
 
@@ -66,18 +64,6 @@ class WeightsManager:
                 f"(approximately {minutes_until_update:.1f} minutes)",
             )
 
-        current_block = self.subtensor.get_current_block()
-        _, blocks_until_next_epoch, _ = get_current_epoch_info(
-            current_block, self.metagraph.netuid
-        )
-
-        if blocks_until_next_epoch > WEIGHT_UPDATE_BUFFER:
-            return (
-                False,
-                f"Weight updates only allowed in last {WEIGHT_UPDATE_BUFFER} blocks of epoch. "
-                f"Wait {blocks_until_next_epoch - WEIGHT_UPDATE_BUFFER} more blocks.",
-            )
-
         return True, ""
 
     def update_weights(self, scores: torch.Tensor) -> bool:
@@ -88,11 +74,6 @@ class WeightsManager:
             return True
 
         bt.logging.info("Updating weights")
-
-        if self.score_manager and self.score_manager.shuffled_uids:
-            self.score_manager.ema_manager.apply_ema_boost(
-                self.score_manager.shuffled_uids
-            )
 
         weights = torch.zeros(self.metagraph.n)
         nonzero_indices = scores.nonzero()
