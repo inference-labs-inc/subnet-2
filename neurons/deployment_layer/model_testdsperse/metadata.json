@@ -1,0 +1,13 @@
+{
+    "name": "DSPerse test NET model",
+    "description": "Model for testing DSPerse integration.",
+    "author": "Inference Labs",
+    "version": "0.0.1",
+    "proof_system": "EZKL",
+    "type": "dsperse_proof_generation",
+    "external_files": {
+        
+    },
+    "dsperse_file": "https://example.com/path/to/dsperse_model_file",
+    "benchmark_choice_weight": 0.2
+}

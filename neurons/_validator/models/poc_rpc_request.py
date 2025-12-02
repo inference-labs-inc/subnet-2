@@ -1,10 +1,10 @@
-from _validator.models.base_rpc_request import RealWorldRequest
+from _validator.models.base_rpc_request import QueuedRequestDataModel
 from pydantic import Field
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.circuit import CircuitType
 
 
-class ProofOfComputationRPCRequest(RealWorldRequest):
+class ProofOfComputationRPCRequest(QueuedRequestDataModel):
     """
     Request for the Proof of Computation RPC method.
     """

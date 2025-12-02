@@ -34,25 +34,6 @@ class RequestPipeline:
         self.api = api
         self.hash_guard = HashGuard()
 
-    def prepare_requests(self, filtered_uids) -> list[Request]:
-        """
-        Prepare requests for the current validation step.
-        This includes both regular benchmark requests and any external requests.
-
-        Args:
-            filtered_uids (list): List of UIDs to send requests to.
-
-        Returns:
-            list[Request]: List of prepared requests.
-        """
-        if len(filtered_uids) == 0:
-            bt.logging.error("No UIDs to query")
-            return []
-
-        if self.api.external_requests_queue:
-            return self._prepare_real_world_requests(filtered_uids)
-        return self._prepare_benchmark_requests(filtered_uids)
-
     def _check_and_create_request(
         self,
         uid: int,
@@ -91,13 +72,14 @@ class RequestPipeline:
             circuit=circuit,
             request_type=request_type,
             # 'inputs' are used for verification later on validator side:
+            #   I suppose `RWR` passed here to prevent new data generation
             inputs=GenericInput(RequestType.RWR, input_data),
             request_hash=request_hash,
             save=save,
         )
 
     def _prepare_real_world_requests(self, filtered_uids: list[int]) -> list[Request]:
-        external_request = self.api.external_requests_queue.pop()
+        external_request = self.api.stacked_requests_queue.pop()
         requests = []
 
         for uid in filtered_uids:
@@ -207,6 +189,9 @@ class RequestPipeline:
                 QueryZkProof(query_input=inputs, model_id=circuit.id, query_output=""),
                 False,
             )
+        elif circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
+            # TODO: Handle DSPERSE_PROOF_GENERATION request data preparation
+            pass
 
         return (
             ProofOfWeightsDataModel(
@@ -230,7 +215,7 @@ class RequestPipeline:
         Returns:
             Request | None: The prepared request, or None if preparation failed.
         """
-        if self.api.external_requests_queue:
+        if self.api.stacked_requests_queue:
             requests = self._prepare_real_world_requests([uid])
         else:
             requests = self._prepare_benchmark_requests([uid])

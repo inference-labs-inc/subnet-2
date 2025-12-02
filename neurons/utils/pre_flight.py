@@ -5,7 +5,7 @@ import subprocess
 import time
 import traceback
 from typing import Optional
-from constants import FIVE_MINUTES, Roles
+from constants import FIVE_MINUTES, Roles, DSPERSE_SLICES_FILE_NAME
 
 # trunk-ignore(pylint/E0611)
 import bittensor as bt
@@ -33,6 +33,8 @@ MINER_EXTERNAL_FILES = [
 VALIDATOR_EXTERNAL_FILES = [
     "circuit.zkey",
 ]
+
+SYNC_LOG_PREFIX = "  SYNC  | "
 
 
 async def download_srs(logrows):
@@ -172,9 +174,9 @@ def sync_model_files(role: Optional[Roles] = None):
     Sync external model files
     """
     MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "deployment_layer")
-    SYNC_LOG_PREFIX = "  SYNC  | "
 
     loop = asyncio.get_event_loop()
+    # Download SRS files to ~/.ezkl/srs for logrows 1 to 25
     for logrows in range(1, 26):
         if os.path.exists(
             os.path.join(os.path.expanduser("~"), ".ezkl", "srs", f"kzg{logrows}.srs")
@@ -242,21 +244,41 @@ def sync_model_files(role: Optional[Roles] = None):
                     + f"File {key} for {model_hash} already downloaded, skipping..."
                 )
                 continue
+            download_file(url, file_path)
 
-            bt.logging.info(SYNC_LOG_PREFIX + f"Downloading {url} to {file_path}...")
-            try:
-                with requests.get(
-                    url, timeout=FIVE_MINUTES * 2, stream=True
-                ) as response:
-                    response.raise_for_status()
-                    with open(file_path, "wb") as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-            except requests.RequestException as e:
-                bt.logging.error(
-                    SYNC_LOG_PREFIX + f"Failed to download {url} to {file_path}: {e}"
+        dsperse_file_url = metadata.get("dsperse_file", None)
+        if dsperse_file_url:
+            file_path = os.path.join(
+                cli_parser.config.full_path_models, model_hash, DSPERSE_SLICES_FILE_NAME
+            )
+            # dsperse files are just zip archives,
+            # but later on we extract them to a folder named after the file without extension
+            # so in case that folder already exists, we skip downloading and extracting again
+            extracted_path = os.path.splitext(file_path)[0]
+            if os.path.isdir(extracted_path) or os.path.isfile(file_path):
+                bt.logging.info(
+                    SYNC_LOG_PREFIX
+                    + f"Dsperse file {key} for {model_hash} already downloaded, skipping..."
                 )
-                continue
+            else:
+                download_file(dsperse_file_url, file_path)
+
+
+def download_file(url, file_path):
+    """
+    Download a file from a URL to a specified file path.
+    """
+    bt.logging.info(SYNC_LOG_PREFIX + f"Downloading {url} to {file_path}...")
+    try:
+        with requests.get(url, timeout=FIVE_MINUTES * 2, stream=True) as response:
+            response.raise_for_status()
+            with open(file_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+    except requests.RequestException as e:
+        bt.logging.error(
+            SYNC_LOG_PREFIX + f"Failed to download {url} to {file_path}: {e}"
+        )
 
 
 def ensure_nodejs_version():

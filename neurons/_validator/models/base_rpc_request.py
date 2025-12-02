@@ -3,7 +3,12 @@ from execution_layer.circuit import Circuit
 from _validator.utils.api import hash_inputs
 
 
-class RealWorldRequest(BaseModel):
+class QueuedRequestDataModel(BaseModel):
+    """
+    Base model for requests that are stacked in the validator's queue and waiting to be sent to miners.
+    At the moment, that's a Real World Request (RWR) or a Request with one slice of a DSperse model (DSlice).
+    """
+
     circuit: Circuit
     inputs: dict
 

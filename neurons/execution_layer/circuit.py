@@ -31,6 +31,7 @@ class CircuitType(str, Enum):
 
     PROOF_OF_WEIGHTS = "proof_of_weights"
     PROOF_OF_COMPUTATION = "proof_of_computation"
+    DSPERSE_PROOF_GENERATION = "dsperse_proof_generation"
 
 
 class ProofSystem(str, Enum):
@@ -145,7 +146,8 @@ class CircuitMetadata:
     version: str
     proof_system: str
     type: CircuitType
-    external_files: dict[str, str]
+    external_files: None | dict[str, str]
+    dsperse_file: None | str
     netuid: int | None = None
     weights_version: int | None = None
     timeout: int | None = None
@@ -396,6 +398,7 @@ class Circuit:
         if not os.path.isdir(deployment_folder):
             raise ValueError(f"Circuit path is not a directory: model_{circuit_id}")
 
+        # XXX: might not fit to dsperse...
         self.paths = CircuitPaths(circuit_id)
         self.metadata = CircuitMetadata.from_file(self.paths.metadata)
         self.id = circuit_id

@@ -107,3 +107,21 @@ class QueryForCapacities(BaseModel):
         except Exception as e:
             bt.logging.error(f"Error loading capacities from config: {e}")
             return {}
+
+
+class DSperseProofGenerationDataModel(BaseModel):
+    """
+    Data model for conveying DSPERSE proof generation messages
+    """
+
+    name: ClassVar = "dsperse-proof-generation"
+    model_id: Optional[str] = None
+    ### ???
+    # input_data: Optional[Any] = None
+    # proof: Optional[str] = None
+
+    # def deserialize(self) -> str | None:
+    #     """
+    #     unpack proof
+    #     """
+    #     return self.proof

@@ -19,6 +19,7 @@ from _validator.api.client import query_miner
 from _validator.competitions.competition import Competition
 from _validator.config import ValidatorConfig
 from _validator.core.capacity_manager import CapacityManager
+from _validator.core.dsperse_manager import DSperseManager
 from _validator.core.prometheus import (
     log_error,
     log_queue_metrics,
@@ -120,6 +121,7 @@ class ValidatorLoop:
         self.request_pipeline = RequestPipeline(
             self.config, self.score_manager, self.api
         )
+        self.dsperse_manager = DSperseManager(self.api)
 
         self.request_queue = asyncio.Queue()
         self.active_tasks: dict[int, asyncio.Task] = {}
@@ -342,6 +344,9 @@ class ValidatorLoop:
                 slots_available = self.current_concurrency - len(self.active_tasks)
 
                 if slots_available > 0:
+                    # TODO: some conditions to trigger dsperse requests generation?
+                    self.dsperse_manager.generate_dslice_requests()
+
                     available_uids = [
                         uid
                         for uid in self.queryable_uids
