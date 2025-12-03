@@ -27,6 +27,7 @@ from execution_layer.generic_input import GenericInput
 from execution_layer.verified_model_session import VerifiedModelSession
 from protocol import (
     Competition,
+    DSliceProofGenerationDataModel,
     ProofOfWeightsDataModel,
     QueryForCapacities,
     QueryZkProof,
@@ -79,6 +80,10 @@ class MinerSession:
         )
         self.server.register_route(
             path=f"/{QueryForCapacities.name}", endpoint=self.handleCapacityRequest
+        )
+        self.server.register_route(
+            path=f"/{DSliceProofGenerationDataModel.name}",
+            endpoint=self.handleDSliceRequest,
         )
         self.server.start()
 
@@ -465,6 +470,16 @@ class MinerSession:
                 content={"error": "An internal error occurred.", **content},
                 status_code=500,
             )
+
+    def handleDSliceRequest(self, data: DSliceProofGenerationDataModel) -> JSONResponse:
+        """
+        Handle DSlice proof generation requests from validators.
+        """
+        bt.logging.info(
+            f"Handling DSlice slice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
+        )
+        # Implementation for handling DSlice slice requests goes here
+        return JSONResponse(content={"error": "Not implemented"}, status_code=200)
 
     def queryZkProof(self, data: QueryZkProof) -> JSONResponse:
         """

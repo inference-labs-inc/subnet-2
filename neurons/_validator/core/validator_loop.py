@@ -344,8 +344,9 @@ class ValidatorLoop:
                 slots_available = self.current_concurrency - len(self.active_tasks)
 
                 if slots_available > 0:
-                    # TODO: some conditions to trigger dsperse requests generation?
-                    self.dsperse_manager.generate_dslice_requests()
+                    if not self.api.stacked_requests_queue:
+                        # Refill the stacked requests queue from DSperse manager if needed
+                        self.dsperse_manager.generate_dslice_requests()
 
                     available_uids = [
                         uid

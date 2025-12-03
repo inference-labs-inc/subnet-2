@@ -21,7 +21,11 @@ from constants import (
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.circuit import Circuit, CircuitType
 from execution_layer.generic_input import GenericInput
-from protocol import ProofOfWeightsDataModel, QueryZkProof
+from protocol import (
+    ProofOfWeightsDataModel,
+    QueryZkProof,
+    DSliceProofGenerationDataModel,
+)
 from utils.wandb_logger import safe_log
 
 
@@ -45,7 +49,9 @@ class RequestPipeline:
     ) -> Request | None:
         """Check hash and create request if valid."""
         try:
-            if isinstance(request_data, ProofOfWeightsDataModel):
+            if isinstance(request_data, ProofOfWeightsDataModel) or isinstance(
+                request_data, DSliceProofGenerationDataModel
+            ):
                 input_data = request_data.inputs
             else:
                 input_data = request_data.query_input
@@ -78,7 +84,7 @@ class RequestPipeline:
             save=save,
         )
 
-    def _prepare_real_world_requests(self, filtered_uids: list[int]) -> list[Request]:
+    def _prepare_queued_requests(self, filtered_uids: list[int]) -> list[Request]:
         external_request = self.api.stacked_requests_queue.pop()
         requests = []
 
@@ -190,8 +196,16 @@ class RequestPipeline:
                 False,
             )
         elif circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
-            # TODO: Handle DSPERSE_PROOF_GENERATION request data preparation
-            pass
+            return (
+                DSliceProofGenerationDataModel(
+                    circuit=circuit.id,
+                    inputs=request.inputs,
+                    outputs=request.outputs,
+                    slice_num=request.slice_num,
+                    run_uid=request.run_uid,
+                ),
+                False,
+            )
 
         return (
             ProofOfWeightsDataModel(
@@ -216,7 +230,7 @@ class RequestPipeline:
             Request | None: The prepared request, or None if preparation failed.
         """
         if self.api.stacked_requests_queue:
-            requests = self._prepare_real_world_requests([uid])
+            requests = self._prepare_queued_requests([uid])
         else:
             requests = self._prepare_benchmark_requests([uid])
 

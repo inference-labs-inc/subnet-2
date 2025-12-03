@@ -109,16 +109,17 @@ class QueryForCapacities(BaseModel):
             return {}
 
 
-class DSperseProofGenerationDataModel(BaseModel):
+class DSliceProofGenerationDataModel(BaseModel):
     """
     Data model for conveying DSPERSE proof generation messages
     """
 
     name: ClassVar = "dsperse-proof-generation"
-    model_id: Optional[str] = None
-    ### ???
-    # input_data: Optional[Any] = None
-    # proof: Optional[str] = None
+    circuit: Optional[str] = None
+    inputs: Optional[Any] = None
+    outputs: Optional[Any] = None
+    slice_num: Optional[str] = None
+    run_uid: Optional[str] = None
 
     # def deserialize(self) -> str | None:
     #     """

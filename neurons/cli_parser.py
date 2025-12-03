@@ -96,6 +96,11 @@ def init_config(role: Optional[str] = None):
         default=None,
         help="Custom location for storing models data (optional)",
     )
+    parser.add_argument(
+        "--dsperse-run-dir",
+        default=None,
+        help="Custom location for storing dsperse run data (optional)",
+    )
     if role == Roles.VALIDATOR:
         # CLI arguments specific to the validator
         _validator_config()
@@ -140,6 +145,10 @@ def init_config(role: Optional[str] = None):
         config.full_path_models = config.external_model_dir
     else:
         config.full_path_models = os.path.join(config.full_path, "models")
+
+    if not config.dsperse_run_dir:
+        config.dsperse_run_dir = os.path.join(config.full_path, "dsperse_runs")
+    os.makedirs(config.dsperse_run_dir, exist_ok=True)
 
     if config.whitelisted_public_keys:
         config.whitelisted_public_keys = config.whitelisted_public_keys.split(",")
