@@ -147,7 +147,7 @@ class CircuitMetadata:
     proof_system: str
     type: CircuitType
     external_files: None | dict[str, str]
-    dslices: None | list[dict] = []
+    dslices: None | list[dict] = None
     netuid: int | None = None
     weights_version: int | None = None
     timeout: int | None = None

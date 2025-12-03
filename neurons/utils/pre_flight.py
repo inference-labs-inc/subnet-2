@@ -237,6 +237,8 @@ def download_external_files(
     """
     Sync external files for a model based on its metadata.
     """
+    if not external_files:
+        return
     for key, url in external_files.items():
         if (role == Roles.VALIDATOR and key not in VALIDATOR_EXTERNAL_FILES) or (
             role == Roles.MINER and key not in MINER_EXTERNAL_FILES

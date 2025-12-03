@@ -6,6 +6,6 @@
     "proof_system": "EZKL",
     "type": "dsperse_proof_generation",
     "external_files": {},
-    "dslises": [],
+    "dslices": [],
     "benchmark_choice_weight": 0.2
 }
