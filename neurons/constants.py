@@ -173,8 +173,6 @@ ONE_DAY = ONE_HOUR * 24
 ONE_YEAR = ONE_DAY * 365
 # Temporary folder for storing proof files
 TEMP_FOLDER = "/tmp/subnet-2"
-# DSperse slices file name
-DSPERSE_SLICES_FILE_NAME = "slices.dsperse"
 
 # Queue size limits
 MAX_POW_QUEUE_SIZE = 1024

@@ -1,22 +1,23 @@
 import asyncio
 import json
+import glob
 import os
+import shutil
 import subprocess
 import time
 import traceback
+from collections import OrderedDict
+from functools import partial
 from typing import Optional
-from constants import FIVE_MINUTES, Roles, DSPERSE_SLICES_FILE_NAME
 
 # trunk-ignore(pylint/E0611)
 import bittensor as bt
 import ezkl
 import requests
+from dsperse.src.slice.utils.converter import Converter
 
 import cli_parser
-from constants import IGNORED_MODEL_HASHES
-
-from functools import partial
-from collections import OrderedDict
+from constants import FIVE_MINUTES, IGNORED_MODEL_HASHES, Roles
 
 LOCAL_SNARKJS_INSTALL_DIR = os.path.join(os.path.expanduser("~"), ".snarkjs")
 LOCAL_SNARKJS_PATH = os.path.join(
@@ -59,13 +60,13 @@ def run_shared_preflight_checks(role: Optional[Roles] = None):
             "Ensuring Node.js version": ensure_nodejs_version,
             "Checking SnarkJS installation": ensure_snarkjs_installed,
             "Checking EZKL installation": ensure_ezkl_installed,
-            "Syncing model files": partial(sync_model_files, role=role),
+            "Syncing model files": partial(sync_models, role=role),
         }
     )
 
     bt.logging.info(" PreFlight | Running pre-flight checks")
 
-    # Skip sync_model_files during docker build
+    # Skip sync_models during docker build
     if os.getenv("SUBNET_2_DOCKER_BUILD", False):
         bt.logging.info(" PreFlight | Skipping model file sync")
         _ = preflight_checks.pop("Syncing model files")
@@ -169,9 +170,9 @@ def ensure_snarkjs_installed():
             ) from e
 
 
-def sync_model_files(role: Optional[Roles] = None):
+def sync_models(role: Optional[Roles] = None):
     """
-    Sync external model files
+    Download SRS files and sync external files for all models in the deployment layer.
     """
     MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "deployment_layer")
 
@@ -207,6 +208,7 @@ def sync_model_files(role: Optional[Roles] = None):
             )
             continue
 
+        # XXX: maybe use `meurons.execution_layer.circuit.CircuitMetadata` here?
         metadata_file = os.path.join(MODEL_DIR, model_hash, "metadata.json")
         if not os.path.isfile(metadata_file):
             bt.logging.error(
@@ -224,44 +226,102 @@ def sync_model_files(role: Optional[Roles] = None):
             )
             continue
 
-        external_files = metadata.get("external_files", {})
-        for key, url in external_files.items():
-            if (role == Roles.VALIDATOR and key not in VALIDATOR_EXTERNAL_FILES) or (
-                role == Roles.MINER and key not in MINER_EXTERNAL_FILES
-            ):
-                bt.logging.info(
-                    SYNC_LOG_PREFIX
-                    + f"Skipping {key} for {model_hash} as it is not required for the {role}."
-                )
-                continue
-            file_path = os.path.join(
-                cli_parser.config.full_path_models, model_hash, key
-            )
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            if os.path.isfile(file_path):
-                bt.logging.info(
-                    SYNC_LOG_PREFIX
-                    + f"File {key} for {model_hash} already downloaded, skipping..."
-                )
-                continue
-            download_file(url, file_path)
+        download_external_files(model_hash, metadata.get("external_files", {}), role)
+        download_dslices(model_hash, metadata.get("dslices", []))
+        extract_dslices(model_hash)
 
-        dsperse_file_url = metadata.get("dsperse_file", None)
-        if dsperse_file_url:
-            file_path = os.path.join(
-                cli_parser.config.full_path_models, model_hash, DSPERSE_SLICES_FILE_NAME
+
+def download_external_files(
+    model_hash: str, external_files: dict, role: Optional[Roles] = None
+):
+    """
+    Sync external files for a model based on its metadata.
+    """
+    for key, url in external_files.items():
+        if (role == Roles.VALIDATOR and key not in VALIDATOR_EXTERNAL_FILES) or (
+            role == Roles.MINER and key not in MINER_EXTERNAL_FILES
+        ):
+            bt.logging.info(
+                SYNC_LOG_PREFIX
+                + f"Skipping {key} for {model_hash} as it is not required for the {role}."
             )
-            # dsperse files are just zip archives,
+            continue
+        file_path = os.path.join(cli_parser.config.full_path_models, model_hash, key)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        if os.path.isfile(file_path):
+            bt.logging.info(
+                SYNC_LOG_PREFIX
+                + f"File {key} for {model_hash} already downloaded, skipping..."
+            )
+            continue
+        download_file(url, file_path)
+
+
+def download_dslices(model_hash: str, dslices: list[dict]):
+    """
+    Download DSperse slice files for a model if there are any.
+    """
+    # TODO: not tested yet
+    if not dslices:
+        return
+    bt.logging.debug(SYNC_LOG_PREFIX + f"Checking DSlices for model {model_hash}...")
+    dslice_num = 0
+    for dslice in dslices:
+        url = dslice.get("url")
+        if not url:  # Skip if URL is missing
+            bt.logging.warning(
+                SYNC_LOG_PREFIX
+                + f"DSlice URL missing for slice {dslice_num} of {model_hash}, skipping..."
+            )
+        else:
+            # dslice files are just zip archives,
             # but later on we extract them to a folder named after the file without extension
             # so in case that folder already exists, we skip downloading and extracting again
+            file_path = os.path.join(
+                cli_parser.config.full_path_models,
+                model_hash,
+                f"slice_{dslice_num}.dslice",
+            )
             extracted_path = os.path.splitext(file_path)[0]
+            # XXX: maybe we need to have some kind of versioning here and verification of the files?
             if os.path.isdir(extracted_path) or os.path.isfile(file_path):
-                bt.logging.info(
+                bt.logging.debug(
                     SYNC_LOG_PREFIX
-                    + f"Dsperse file {key} for {model_hash} already downloaded, skipping..."
+                    + f"Dsperse file for {model_hash} already downloaded, skipping..."
                 )
             else:
-                download_file(dsperse_file_url, file_path)
+                download_file(url, file_path)
+        dslice_num += 1
+
+
+def extract_dslices(model_hash: str):
+    """
+    Extract DSperse slice files for a model if there are any.
+    """
+    model_path = os.path.join(cli_parser.config.full_path_models, model_hash)
+    dslice_files = glob.glob(os.path.join(model_path, "slice_*.dslice"))
+    if not dslice_files:
+        return
+    bt.logging.debug(SYNC_LOG_PREFIX + f"Extracting DSlices for model {model_hash}...")
+    for dslice_file in dslice_files:
+        extracted_path = os.path.splitext(dslice_file)[0]
+        if os.path.isdir(extracted_path):
+            # Extracted folder already exists, but the .dslice file is not deleted
+            # that means we probably interrupted extraction previously. Let's extract again
+            shutil.rmtree(extracted_path)
+        bt.logging.info(
+            SYNC_LOG_PREFIX
+            + f"Extracting DSlice file {dslice_file} to {extracted_path}..."
+        )
+        Converter.convert(
+            path=dslice_file,
+            output_type="dirs",
+            output_path=extracted_path,
+            cleanup=True,
+        )
+        if os.path.exists(dslice_file):
+            # `cleanup=True` doesn't work for some reason, so we manually delete the .dslice file
+            os.remove(dslice_file)
 
 
 def download_file(url, file_path):

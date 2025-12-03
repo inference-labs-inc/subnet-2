@@ -5,9 +5,7 @@
     "version": "0.0.1",
     "proof_system": "EZKL",
     "type": "dsperse_proof_generation",
-    "external_files": {
-        
-    },
-    "dsperse_file": "https://example.com/path/to/dsperse_model_file",
+    "external_files": {},
+    "dslises": [],
     "benchmark_choice_weight": 0.2
 }
