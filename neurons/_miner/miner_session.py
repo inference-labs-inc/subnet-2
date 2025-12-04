@@ -23,6 +23,7 @@ from constants import (
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
 )
 from deployment_layer.circuit_store import circuit_store
+from execution_layer.dsperse_manager import DSperseManager
 from execution_layer.generic_input import GenericInput
 from execution_layer.verified_model_session import VerifiedModelSession
 from protocol import (
@@ -49,6 +50,7 @@ class MinerSession:
         self.configure()
         self.check_register(should_exit=True)
         self.auto_update = AutoUpdate()
+        self.dsperse_manager = DSperseManager()
         self.log_batch = []
         self.shuffled_uids = None
         self.last_shuffle_epoch = -1
@@ -478,6 +480,10 @@ class MinerSession:
         bt.logging.info(
             f"Handling DSlice slice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
         )
+        # from dsperse.src.prover import Prover
+        # prover = Prover()
+        # result = prover.prove(run_path, data_path, getattr(args, 'proof_output', None))
+        # self.dsperse_manager
         # Implementation for handling DSlice slice requests goes here
         return JSONResponse(content={"error": "Not implemented"}, status_code=200)
 

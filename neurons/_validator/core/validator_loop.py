@@ -19,7 +19,6 @@ from _validator.api.client import query_miner
 from _validator.competitions.competition import Competition
 from _validator.config import ValidatorConfig
 from _validator.core.capacity_manager import CapacityManager
-from _validator.core.dsperse_manager import DSperseManager
 from _validator.core.prometheus import (
     log_error,
     log_queue_metrics,
@@ -48,6 +47,7 @@ from constants import (
     ONE_HOUR,
     ONE_MINUTE,
 )
+from execution_layer.dsperse_manager import DSperseManager
 from utils import AutoUpdate, clean_temp_files, with_rate_limit
 from utils.gc_logging import gc_log_competition_metrics
 from utils.gc_logging import log_responses as gc_log_responses
@@ -121,7 +121,7 @@ class ValidatorLoop:
         self.request_pipeline = RequestPipeline(
             self.config, self.score_manager, self.api
         )
-        self.dsperse_manager = DSperseManager(self.api)
+        self.dsperse_manager = DSperseManager()
 
         self.request_queue = asyncio.Queue()
         self.active_tasks: dict[int, asyncio.Task] = {}
@@ -346,7 +346,10 @@ class ValidatorLoop:
                 if slots_available > 0:
                     if not self.api.stacked_requests_queue:
                         # Refill the stacked requests queue from DSperse manager if needed
-                        self.dsperse_manager.generate_dslice_requests()
+                        for (
+                            dslice_request
+                        ) in self.dsperse_manager.generate_dslice_requests():
+                            self.api.stacked_requests_queue.insert(0, dslice_request)
 
                     available_uids = [
                         uid

@@ -2,6 +2,7 @@ import json
 import random
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
 from bittensor import logging
 from dsperse.src.run.runner import Runner
@@ -15,21 +16,20 @@ from execution_layer.circuit import Circuit, CircuitType
 
 
 class DSperseManager:
-    def __init__(self, api: ValidatorAPI):
-        self.api = api
+    def __init__(self):
         self.circuits: list[Circuit] = [
             circuit
             for circuit in circuit_store.circuits.values()
             if circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION
         ]
-        self.runs = {}
+        self.runs = {}  # run_uid -> run data (slices etc.), used by validator only
 
-    def generate_dslice_requests(self) -> list:
+    def generate_dslice_requests(self) -> Iterable[DSliceQueuedProofRequest]:
         """
         Generate DSlice requests for DSperse models.
         Each DSlice request corresponds to one slice of a DSperse model.
         """
-        if self.api.stacked_requests_queue or not self.circuits:
+        if not self.circuits:
             # there are already requests stacked, do not generate new DSlice requests
             return []
 
@@ -40,21 +40,19 @@ class DSperseManager:
         )
 
         slices: list[dict] = self.run_dsperse(circuit, run_uid)
+        self.runs[run_uid] = slices
         dslice_requests = []
 
         for slice in slices:
             with open(slice["input_file"], "r") as input_file:
                 with open(slice["output_file"], "r") as output_file:
-                    self.api.stacked_requests_queue.insert(
-                        0,
-                        DSliceQueuedProofRequest(
-                            circuit=circuit,
-                            inputs=json.load(input_file),
-                            outputs=json.load(output_file),
-                            slice_num=slice["slice"],
-                            run_uid=run_uid,
-                        ),
-                    )
+                    yield DSliceQueuedProofRequest(
+                        circuit=circuit,
+                        inputs=json.load(input_file),
+                        outputs=json.load(output_file),
+                        slice_num=slice["slice"],
+                        run_uid=run_uid,
+                    ),
 
         # Logic to create DSlice requests goes here
         return dslice_requests
