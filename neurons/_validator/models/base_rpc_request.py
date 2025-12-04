@@ -1,6 +1,8 @@
 from pydantic import BaseModel
-from execution_layer.circuit import Circuit
+
+from _validator.models.request_type import RequestType
 from _validator.utils.api import hash_inputs
+from execution_layer.circuit import Circuit
 
 
 class QueuedRequestDataModel(BaseModel):
@@ -11,6 +13,7 @@ class QueuedRequestDataModel(BaseModel):
 
     circuit: Circuit
     inputs: dict
+    request_type: RequestType = RequestType.RWR
 
     model_config = {"arbitrary_types_allowed": True}
 

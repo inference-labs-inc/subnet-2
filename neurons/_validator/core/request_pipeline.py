@@ -91,13 +91,15 @@ class RequestPipeline:
         for uid in filtered_uids:
             try:
                 request_data, save = self.get_request_data(
-                    RequestType.RWR, external_request.circuit, external_request
+                    external_request.request_type,
+                    external_request.circuit,
+                    external_request,
                 )
                 request = self._check_and_create_request(
                     uid=uid,
                     request_data=request_data,
                     circuit=external_request.circuit,
-                    request_type=RequestType.RWR,
+                    request_type=external_request.request_type,
                     request_hash=external_request.hash,
                     save=save,
                 )
@@ -157,7 +159,7 @@ class RequestPipeline:
             circuit.input_handler(request_type)
             if request_type == RequestType.BENCHMARK
             else circuit.input_handler(
-                RequestType.RWR,
+                request_type,
                 copy.deepcopy(request.inputs),
             )
         )

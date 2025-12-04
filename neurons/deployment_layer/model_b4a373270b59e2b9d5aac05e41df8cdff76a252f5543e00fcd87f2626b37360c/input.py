@@ -11,7 +11,7 @@ LIST_SIZE = 5
 
 
 class CircuitInputSchema(BaseModel):
-    list_items: list[float]
+    input_data: list[list[float]]
 
 
 @InputRegistry.register(
@@ -32,7 +32,7 @@ class CircuitInput(BaseInput):
         input_file = Path(__file__).parent / "input.json"
         return json.loads(input_file.read_text())
 
-    def validate(data: dict[str, object]) -> None:
+    def validate(self, data: dict[str, object]) -> None:
         return CircuitInputSchema(**data)
 
     @staticmethod
