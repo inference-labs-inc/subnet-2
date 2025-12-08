@@ -1,140 +1,29 @@
-import argparse
-import os
 import traceback
 
-import bittensor as bt
-from constants import ONCHAIN_PROOF_OF_WEIGHTS_ENABLED, PROOF_OF_WEIGHTS_INTERVAL
+# isort: off
+import cli_parser  # <- this need to stay before bittensor import
 
-from utils import wandb_logger
+import bittensor as bt
+
+# isort: on
+
 from _validator.validator_session import ValidatorSession
+from constants import Roles
 from utils import run_shared_preflight_checks
 
-
-def get_config_from_args():
-    """
-    Parses CLI arguments into bt configuration
-    """
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--netuid", type=int, default=1, help="The uid of the subnet.")
-
-    parser.add_argument(
-        "--no-auto-update",
-        default=False,
-        action="store_true",
-        help="Disable auto update.",
-    )
-    parser.add_argument(
-        "--blocks_per_epoch",
-        type=int,
-        default=100,
-        help="Number of blocks to wait before setting weights",
-    )
-    parser.add_argument(
-        "--wandb-key", type=str, default="", help="A https://wandb.ai API key"
-    )
-
-    parser.add_argument(
-        "--disable-wandb",
-        default=False,
-        help="Whether to disable WandB logging.",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--dev",
-        default=False,
-        help="Whether to run the miner in development mode for internal testing.",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--enable-pow",
-        default=ONCHAIN_PROOF_OF_WEIGHTS_ENABLED,
-        action="store_true",
-        help="Whether proof of weights is enabled",
-    )
-
-    parser.add_argument(
-        "--pow-target-interval",
-        type=int,
-        default=PROOF_OF_WEIGHTS_INTERVAL,
-        help="The target interval for committing proof of weights to the chain",
-    )
-
-    parser.add_argument(
-        "--ignore-external-requests",
-        type=lambda x: x.lower() == "true",
-        default=True,
-        help="Whether to ignore external requests.",
-    )
-
-    parser.add_argument(
-        "--external-api-host",
-        type=str,
-        default="0.0.0.0",
-        help="The host for the external API.",
-    )
-
-    parser.add_argument(
-        "--external-api-port",
-        type=int,
-        default=8000,
-        help="The port for the external API.",
-    )
-
-    parser.add_argument(
-        "--external-api-workers",
-        type=int,
-        default=1,
-        help="The number of workers for the external API.",
-    )
-
-    parser.add_argument(
-        "--do-not-verify-external-signatures",
-        default=False,
-        action="store_true",
-        help=(
-            "External PoW requests are signed by validator's (sender's) wallet. "
-            "By default we verify is the wallet legitimate. "
-            "You can disable this check with the flag."
-        ),
-    )
-
-    bt.subtensor.add_args(parser)
-    bt.logging.add_args(parser)
-    bt.wallet.add_args(parser)
-    config = bt.config(parser)
-
-    config.full_path = os.path.expanduser(
-        "{}/{}/{}/netuid{}/{}".format(
-            config.logging.logging_dir,  # type: ignore
-            config.wallet.name,  # type: ignore
-            config.wallet.hotkey,  # type: ignore
-            config.netuid,
-            "validator",
-        )
-    )
-
-    if not os.path.exists(config.full_path):
-        os.makedirs(config.full_path, exist_ok=True)
-
-    bt.logging(config=config, logging_dir=config.full_path)
-
-    if config.wandb_key:
-        wandb_logger.safe_login(api_key=config.wandb_key)
-        bt.logging.success("Logged into WandB")
-
-    return config
-
-
 if __name__ == "__main__":
-    configuration = get_config_from_args()
-    run_shared_preflight_checks()
+    cli_parser.init_config(Roles.VALIDATOR)
+    run_shared_preflight_checks(Roles.VALIDATOR)
 
     try:
+        # Initialize the circuit store and load external models
+        from deployment_layer.circuit_store import circuit_store
+
+        circuit_store.load_circuits()
+
         bt.logging.info("Creating validator session...")
-        validator_session = ValidatorSession(configuration)
-        bt.logging.info("Running main loop...")
+        validator_session = ValidatorSession()
+        bt.logging.debug("Running main loop...")
         validator_session.run()
     except Exception as e:
         bt.logging.error("Critical error while attempting to run validator: ", e)

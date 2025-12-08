@@ -1,0 +1,22 @@
+[miner]
+
+# Specify details around each circuit. For now only compute units can be specified.
+[[miner.circuits]]
+id = "4a87c995300f4e9ad9add9d5b800eb93bb3ecd3f9459b617f9924a211407a88c"
+compute_units = 400
+
+[[miner.circuits]]
+id = "31df94d233053d9648c3c57362d9aa8aaa0f77761ac520af672103dbb387a6a5"
+compute_units = 400
+
+[[miner.circuits]]
+id = "43ecaacaded5ed16c9e08bc054366e409c7925245eca547472b27f2a61469cc5"
+compute_units = 400
+
+[[miner.circuits]]
+id = "1876cfa9fb3c418b2559f3f7074db20565b5ca7237efdd43b907d9d697a452c4"
+compute_units = 400
+
+[[miner.circuits]]
+id = "1550853037e01d93c0831e2a4f80de7811b1c6780fb36b3cee89f4ba524df1be"
+compute_units = 400

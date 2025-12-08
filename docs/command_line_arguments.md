@@ -1,10 +1,27 @@
-# Command Line Arguments
+# Command Line Arguments and Environment Variables
 
-These are options configurable via command line arguments, when running miner or validator software.
+These are options configurable via command line arguments or environment variables, when running miner or validator software.
 
-## Custom Arguments
+## General Environment Variables
 
-Arguments that are present within the Omron miner and validator software. The below arguments apply to both miner and validator software.
+| Variable Name                 | Required | Default                  | Accepted Values | Description                                                |
+| ----------------------------- | :------: | ------------------------ | --------------- | ---------------------------------------------------------- |
+| `SUBNET_2_EXTERNAL_MODEL_DIR` |    No    | `~/.bittensor/subnet-2/` | String          | The directory used to store large circuit files.           |
+| `SUBNET_2_NO_AUTO_UPDATE`     |    No    | `False`                  | `True`, `False` | Whether to disable automatic updates.                      |
+| `SUBNET_2_DOCKER_BUILD`       |    No    | `False`                  | `True`, `False` | Whether we are running within a docker build / CI process. |
+
+## Validator specific environment variables
+
+These variables are specific to validator software and have no effect on miner software.
+
+| Variable Name          | Required | Default                                             | Accepted Values | Description                               |
+| ---------------------- | :------: | --------------------------------------------------- | --------------- | ----------------------------------------- |
+| `SUBNET_2_LOGGING_URL` |    No    | `https://sn2-api.inferencelabs.com/statistics/log/` | String          | The URL for metrics logging.              |
+| `SUBNET_2_PPS_URL`     |    No    | `https://pps.inferencelabs.com`                     | String          | The URL for the proof publishing service. |
+
+## General Arguments
+
+Arguments that are present within the Subnet 2 miner and validator software. The below arguments apply to both miner and validator software.
 
 | Argument           | Required | Default | Accepted Values | Description                                                                |
 | ------------------ | :------: | ------- | --------------- | -------------------------------------------------------------------------- |
@@ -13,6 +30,7 @@ Arguments that are present within the Omron miner and validator software. The be
 | `--wandb-key`      |    No    | `None`  | String          | A WandB API key for logging purposes                                       |
 | `--disable-wandb`  |    No    | `False` | `True`, `False` | Whether to disable WandB logging.                                          |
 | `--dev`            |    No    | `False` | `True`, `False` | Whether to run the software in development mode. **For internal use only** |
+| `--localnet`       |    No    | `False` | `True`, `False` | Whether to run the validator in localnet mode.                             |
 
 ### Miner specific arguments
 
@@ -32,10 +50,14 @@ The below arguments are specific to validator software and have no effect on min
 | `--enable-pow`                        |    No    | `False`   | `True`, `False` | Whether on-chain proof of weights is enabled                                                                                                                                                |
 | `--pow-target-interval`               |    No    | `1000`    | Integer         | The target block interval for committing proof of weights to the chain                                                                                                                      |
 | `--ignore-external-requests`          |    No    | `True`    | `True`, `False` | Whether the validator should ignore external requests through it's API.                                                                                                                     |
-| `--external-api-port`                 |    No    | `8000`    | Integer         | The port for the validator's external API.                                                                                                                                                  |
+| `--external-api-port`                 |    No    | `8443`    | Integer         | The port for the validator's external API.                                                                                                                                                  |
 | `--external-api-workers`              |    No    | `1`       | Integer         | The number of workers for the validator's external API.                                                                                                                                     |
 | `--external-api-host`                 |    No    | `0.0.0.0` | String          | The host for the validator's external API.                                                                                                                                                  |
 | `--do-not-verify-external-signatures` |    No    | `False`   | `True`, `False` | External PoW requests are signed by validator's (sender's) wallet. By default, these are checked to ensure legitimacy. This should only be disabled in controlled development environments. |
+| `--competition-sync-interval`         |    No    | `86400`   | Integer         | The interval for syncing the competition in seconds. Defaults to 86400 (1 day).                                                                                                             |
+| `--prometheus-monitoring`             |    No    | `False`   | `True`, `False` | Whether to enable sering of metrics for Prometheus monitoring.                                                                                                                              |
+| `--prometheus-port`                   |    No    | `9090`    | Integer         | The port for the Prometheus data source.                                                                                                                                                    |
+| `--serve-axon`                        |    No    | `False`   | `True`, `False` | Whether to serve the axon displaying your API information.                                                                                                                                  |
 
 ## Built-in Arguments
 
@@ -45,7 +67,7 @@ Arguments that are built into bittensor packages, and can be provided to change 
 
 Bittensor wallet configuration options.
 
-[View in code →](https://github.com/opentensor/bittensor/blob/master/bittensor/wallet.py#L134)
+[View in code →](https://github.com/opentensor/btwallet/blob/main/src/wallet.rs#L70)
 
 | Argument          | Required | Default                 | Accepted Values | Description                                                                                               |
 | ----------------- | :------: | ----------------------- | --------------- | --------------------------------------------------------------------------------------------------------- |
@@ -58,7 +80,7 @@ Bittensor wallet configuration options.
 
 Bittensor subtensor configuration options.
 
-[View in code →](https://github.com/opentensor/bittensor/blob/master/bittensor/subtensor.py#L170)
+[View in code →](https://github.com/opentensor/bittensor/blob/master/bittensor/core/subtensor.py#L364)
 
 | Argument                     | Required | Default            | Accepted Values                      | Description                                                                                                                |
 | ---------------------------- | :------: | ------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
@@ -70,21 +92,20 @@ Bittensor subtensor configuration options.
 
 Bittensor Axon configuration options.
 
-[View in code →](https://github.com/opentensor/bittensor/blob/master/bittensor/axon.py#L600)
+[View in code →](https://github.com/opentensor/bittensor/blob/master/bittensor/core/axon.py#L608)
 
-| Argument               | Required | Default | Accepted Values | Description                                                                               |
-| ---------------------- | :------: | ------- | --------------- | ----------------------------------------------------------------------------------------- |
-| `--axon.port`          |    No    | 8091    | Integer         | The local port this axon endpoint is bound to.                                            |
-| `--axon.ip`            |    No    | `[::]`  | String          | The local IP this axon binds to.                                                          |
-| `--axon.external_port` |    No    | None    | Integer         | The public port this axon broadcasts to the network.                                      |
-| `--axon.external_ip`   |    No    | None    | String          | The external IP this axon broadcasts to the network.                                      |
-| `--axon.max_workers`   |    No    | 10      | Integer         | The maximum number of connection handler threads working simultaneously on this endpoint. |
+| Argument               | Required | Default | Accepted Values | Description                                          |
+| ---------------------- | :------: | ------- | --------------- | ---------------------------------------------------- |
+| `--axon.port`          |    No    | 8091    | Integer         | The local port this axon endpoint is bound to.       |
+| `--axon.ip`            |    No    | `[::]`  | String          | The local IP this axon binds to.                     |
+| `--axon.external_port` |    No    | None    | Integer         | The public port this axon broadcasts to the network. |
+| `--axon.external_ip`   |    No    | None    | String          | The external IP this axon broadcasts to the network. |
 
 ### Logging
 
 Bittensor logging configuration options.
 
-[View in code →](https://github.com/opentensor/bittensor/blob/master/bittensor/btlogging/loggingmachine.py#L334)
+[View in code →](https://github.com/opentensor/bittensor/blob/master/bittensor/utils/btlogging/loggingmachine.py#L592)
 
 | Argument                | Required | Default              | Accepted Values | Description                                |
 | ----------------------- | :------: | -------------------- | --------------- | ------------------------------------------ |

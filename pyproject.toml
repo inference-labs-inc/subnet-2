@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subnet-2"
+dynamic = ["version"]
+description = ""
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+  "aiohttp>=3.10.11",
+  "async-substrate-interface>=1.0.8",
+  "attrs==24.3.0",
+  "bittensor==9.9.0",
+  "boto3>=1.36.13",
+  "botocore>=1.37.19",
+  "ezkl==22.0.1",
+  "fastapi==0.110.3",
+  "gitpython>=3.1.44",
+  "jsonrpcserver>=5.0.9",
+  "matplotlib>=3.10.1",
+  "numpy==2.0.2",
+  "onnxruntime>=1.21.0",
+  "opencv-contrib-python-headless>=4.11.0.86",
+  "opencv-python>=4.11.0.86",
+  "packaging==24.2",
+  "pillow>=11.3.0",
+  "prometheus_client==0.21.1",
+  "proof-of-portfolio>=0.0.127",
+  "protobuf>=5.29.5",
+  "psutil==6.1.1",
+  "pydantic==2.10.6",
+  "pyopenssl>=25.0.0",
+  "requests==2.32.4",
+  "rich==13.8.1",
+  "substrate-interface>=1.7.11",
+  "torch==2.7.1",
+  "tqdm>=4.67.1",
+  "urllib3>=2.3.0",
+  "uvicorn==0.34.0",
+  "wandb==0.21.0",
+  "websocket-client>=1.8.0",
+]
+
+[dependency-groups]
+dev = [
+  "black>=24.10.0",
+  "bpython>=0.25",
+  "debugpy>=1.8.13",
+  "ipykernel>=6.29.5",
+  "nbdev>=2.3.34",
+  "onnx>=1.17.0",
+  "pytest>=8.4.1",
+  "snoop>=0.6.0",
+  "tach>=0.27.2",
+]
+
+[tool.setuptools]
+package-dir = { "subnet-2" = "neurons" }
+packages = ["subnet-2"]
+
+[tool.setuptools.dynamic]
+version = { attr = "neurons.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+pythonpath = [".", "neurons"]
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

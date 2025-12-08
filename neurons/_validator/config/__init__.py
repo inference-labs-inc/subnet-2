@@ -1,34 +1,16 @@
 import sys
 import bittensor as bt
-from constants import DEFAULT_NETUID
+from constants import DEFAULT_NETUID, COMPETITION_SYNC_INTERVAL
 
 from utils import wandb_logger
-
-
-class ApiConfig:
-    """
-    Configuration class for the API.
-
-    Attributes:
-        enabled (bool): Whether the API is enabled.
-        host (str): The host for the API.
-        port (int): The port for the API.
-        workers (int): The number of workers for the API.
-    """
-
-    def __init__(self, config: bt.config):
-        self.enabled = not config.ignore_external_requests
-        self.host = config.external_api_host
-        self.port = config.external_api_port
-        self.workers = config.external_api_workers
-        self.verify_external_signatures = not config.do_not_verify_external_signatures
+from _validator.config.api import ApiConfig
 
 
 class ValidatorConfig:
     """
     Configuration class for the Validator.
 
-    This class initializes and manages the configuration settings for the Omron validator.
+    This class initializes and manages the configuration settings for the validator.
 
     Attributes:
         config (bt.config): The Bittensor configuration object.
@@ -48,18 +30,31 @@ class ValidatorConfig:
         Args:
             config (bt.config): The Bittensor configuration object.
         """
-        self.bt_config = config
+        for key, value in vars(config).items():
+            setattr(self, key, value)
+
+        self.bt_config: bt.Config = config
         self.subnet_uid = int(
             self.bt_config.netuid if self.bt_config.netuid else DEFAULT_NETUID
         )
         self.wallet = bt.wallet(config=self.bt_config)
-        self.subtensor = bt.subtensor(config=self.bt_config)
         self.dendrite = bt.dendrite(wallet=self.wallet)
-        self.metagraph = self.subtensor.metagraph(self.subnet_uid)
+        self.subtensor = bt.subtensor(config=self.bt_config)
+        try:
+            self.metagraph = self.subtensor.metagraph(self.subnet_uid)
+        except Exception as e:
+            bt.logging.error(f"Error getting metagraph: {e}")
+            self.metagraph = None
         self.user_uid = int(
             self.metagraph.hotkeys.index(self.wallet.hotkey.ss58_address)
         )
+        self.localnet = self.bt_config.localnet
         self.api = ApiConfig(self.bt_config)
+        self.competition_sync_interval = (
+            COMPETITION_SYNC_INTERVAL
+            if self.bt_config.competition_sync_interval is None
+            else self.bt_config.competition_sync_interval
+        )
 
         # Initialize wandb logger
         wandb_logger.safe_init(

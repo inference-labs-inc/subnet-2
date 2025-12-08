@@ -1,0 +1,82 @@
+#https://docs.github.com/en/actions/use-cases-and-examples/publishing-packages/publishing-docker-images#publishing-images-to-github-packages
+name: Create and publish a Docker image
+
+on:
+  push:
+    branches:
+      - testnet
+  release:
+    types: [created]
+  workflow_dispatch: null
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/subnet-2
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push Docker image for testnet branch
+        id: push-testnet
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Generate artifact attestation for testnet
+        id: attest-testnet
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
+          subject-digest: ${{ steps.push-testnet.outputs.digest }}
+          push-to-registry: true
+
+      - name: Build and push Docker image for release
+        if: github.event_name == 'release'
+        id: push-release
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Generate artifact attestation for release
+        if: github.event_name == 'release'
+        id: attest-release
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
+          subject-digest: ${{ steps.push-release.outputs.digest }}
+          push-to-registry: true

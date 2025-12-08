@@ -86,13 +86,21 @@ class Reward(nn.Module):
             verified, self.RATE_OF_RECOVERY, self.RATE_OF_DECAY
         )
 
+        # Ensure maximum_response_time is not equal to minimum_response_time to avoid division by zero
+        # Adding a small constant like 1 ensures the divisor is non-zero.
+        adjusted_max_response_time = torch.where(
+            torch.eq(maximum_response_time, minimum_response_time),
+            maximum_response_time + 1,
+            maximum_response_time,
+        )
+
         # Normalize the response time into a decimal between zero and the maximum response time decimal
         # Maximum is capped at maximum response time decimal here to limit degree of score reduction
         # in cases of very poor performance
         response_time_normalized = torch.clamp(
             torch.div(
                 torch.sub(response_time, minimum_response_time),
-                torch.sub(maximum_response_time, minimum_response_time),
+                torch.sub(adjusted_max_response_time, minimum_response_time),
             ),
             0,
             self.MAXIMUM_RESPONSE_TIME_DECIMAL,

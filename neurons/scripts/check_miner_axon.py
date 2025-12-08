@@ -14,16 +14,17 @@ scripts/check_miner_axon.py --external_ip <external_ip> --port <port> --wallet <
 
 To debug an issue with the script or see more information, include --trace in the command line arguments.
 """
+from constants import ONE_MINUTE
 
 import argparse
 import os
 import sys
-
 import bittensor as bt
 import requests
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
+# flake8: noqa
 from protocol import QueryZkProof
 
 # Parse external IP and port from command line arguments
@@ -79,7 +80,8 @@ if __name__ == "__main__":
 
     except Exception as e:
         bt.logging.exception(
-            "Failed to establish HTTP connection. This could indicate that the axon is not running or your port is not exposed. Please check your configuration.\n",
+            "Failed to establish HTTP connection. This could indicate that the axon is not running or your port is not exposed."
+            "Please check your configuration.\n",
             e,
         )
         raise e
@@ -91,7 +93,7 @@ if __name__ == "__main__":
         [axon],
         QueryZkProof(query_input=query_input),
         deserialize=False,
-        timeout=60,
+        timeout=ONE_MINUTE,
     )
     bt.logging.trace(f"Dendrite query response: {response}")
     if response[0] is not None and not response[0].dendrite.status_message.startswith(

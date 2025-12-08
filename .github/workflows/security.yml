@@ -1,0 +1,317 @@
+name: Security Analysis
+
+on:
+  push:
+    branches: [main, testnet]
+  pull_request:
+    branches: [main, testnet]
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  bandit:
+    name: Bandit Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install bandit
+        run: pip install bandit[toml]
+
+      - name: Run Bandit Security Analysis
+        run: |
+          bandit -r neurons/ tests/ scripts/ utils/ \
+            -f json -o bandit-report.json \
+            --exclude="*/venv/*,*/__pycache__/*,*.pyc" \
+            -ll || true
+
+      - name: Upload Bandit Results
+        uses: actions/upload-artifact@v5
+        with:
+          name: bandit-results
+          path: bandit-report.json
+
+      - name: Convert Bandit to SARIF
+        run: |
+          pip install bandit[sarif]
+          bandit -r neurons/ tests/ scripts/ utils/ \
+            -f sarif -o bandit-results.sarif \
+            --exclude="*/venv/*,*/__pycache__/*,*.pyc" \
+            -ll || true
+
+      - name: Upload SARIF results to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit
+
+  safety:
+    name: Safety Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install Safety
+        run: pip install safety
+
+      - name: Run Safety Check
+        run: |
+          safety check --json --output safety-report.json || true
+          safety check --output safety-report.txt || true
+
+      - name: Upload Safety Results
+        uses: actions/upload-artifact@v5
+        with:
+          name: safety-results
+          path: |
+            safety-report.json
+            safety-report.txt
+
+  semgrep:
+    name: Semgrep Static Analysis
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Run Semgrep
+        run: |
+          semgrep --config=auto \
+            --json --output=semgrep-results.json \
+            --error || true
+          semgrep --config=auto \
+            --sarif --output=semgrep-results.sarif \
+            --error || true
+
+      - name: Upload Semgrep Results
+        uses: actions/upload-artifact@v5
+        with:
+          name: semgrep-results
+          path: |
+            semgrep-results.json
+            semgrep-results.sarif
+
+      - name: Upload SARIF results to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{matrix.language}}"
+
+  trivy:
+    name: Trivy Security Scanner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Run Trivy vulnerability scanner in repo mode
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+          skip-dirs: "/lib/modules,/boot,/usr/src/kernels"
+          ignore-unfixed: true
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-results.sarif"
+          category: "trivy"
+
+      - name: Run Trivy for JSON report
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "repo"
+          scan-ref: "."
+          format: "json"
+          output: "trivy-results.json"
+
+      - name: Upload Trivy Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: trivy-results.json
+
+  pip-audit:
+    name: Pip-Audit Dependency Scanner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        run: |
+          pip-audit --format=json --output=pip-audit-results.json || true
+
+      - name: Upload pip-audit Results
+        uses: actions/upload-artifact@v5
+        with:
+          name: pip-audit-results
+          path: pip-audit-results.json
+
+  secrets-detection:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog OSS (Pull Request)
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --debug --only-verified
+
+      - name: TruffleHog OSS (Push)
+        if: github.event_name == 'push'
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.before }}
+          head: ${{ github.event.after }}
+          extra_args: --debug --only-verified
+
+      - name: TruffleHog OSS (Schedule)
+        if: github.event_name == 'schedule'
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          extra_args: --debug --only-verified
+
+  docker-security:
+    name: Docker Security Analysis
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Build Docker image
+        run: docker build -t subnet-2:latest .
+
+      - name: Run Trivy vulnerability scanner on Docker image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "subnet-2:latest"
+          format: "sarif"
+          output: "docker-trivy-results.sarif"
+
+      - name: Upload Docker Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "docker-trivy-results.sarif"
+          category: "docker-trivy"
+
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [bandit, safety, semgrep, trivy, pip-audit]
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v6
+
+      - name: Create Security Summary
+        run: |
+          echo "# Security Analysis Summary" > security-summary.md
+          echo "" >> security-summary.md
+          echo "## Job Results" >> security-summary.md
+          echo "- Bandit: ${{ needs.bandit.result }}" >> security-summary.md
+          echo "- Safety: ${{ needs.safety.result }}" >> security-summary.md
+          echo "- Semgrep: ${{ needs.semgrep.result }}" >> security-summary.md
+          echo "- Trivy: ${{ needs.trivy.result }}" >> security-summary.md
+          echo "- Pip-audit: ${{ needs.pip-audit.result }}" >> security-summary.md
+          echo "" >> security-summary.md
+          echo "## Artifacts Generated" >> security-summary.md
+          echo "- bandit-results/" >> security-summary.md
+          echo "- safety-results/" >> security-summary.md
+          echo "- semgrep-results/" >> security-summary.md
+          echo "- trivy-results/" >> security-summary.md
+          echo "- pip-audit-results/" >> security-summary.md
+
+          if [ -f bandit-results/bandit-report.json ]; then
+            echo "" >> security-summary.md
+            echo "## Bandit Findings Summary" >> security-summary.md
+            python3 -c "
+          import json
+          try:
+              with open('bandit-results/bandit-report.json') as f:
+                  data = json.load(f)
+              metrics = data.get('metrics', {}).get('_totals', {})
+              print(f\"- High Severity: {metrics.get('SEVERITY.HIGH', 0)}\")
+              print(f\"- Medium Severity: {metrics.get('SEVERITY.MEDIUM', 0)}\")
+              print(f\"- Low Severity: {metrics.get('SEVERITY.LOW', 0)}\")
+              print(f\"- Total Issues: {len(data.get('results', []))}\")
+          except:
+              print('- Could not parse bandit results')
+          " >> security-summary.md
+          fi
+
+      - name: Upload Security Summary
+        uses: actions/upload-artifact@v5
+        with:
+          name: security-summary
+          path: security-summary.md

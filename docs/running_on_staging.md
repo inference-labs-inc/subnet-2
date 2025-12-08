@@ -2,6 +2,9 @@
 
 This tutorial will guide you through setting up a local subtensor chain, creating a subnetwork, and connecting your mechanism to it.
 
+> [!TIP]
+> The devcontainer provided in this repository already takes care of everything in this tutorial for you.
+
 ### 1. Install substrate dependencies
 
 Begin by installing the required dependencies for running a substrate node.
@@ -34,14 +37,14 @@ This step fetches the subtensor codebase to your local machine.
 git clone https://github.com/opentensor/subtensor.git
 ```
 
-### 4. Switch to the User-Creation Branch
+### 4. Switch to the Devnet-Ready Branch
 
 Navigate into the repository and switch to the desired branch.
 
 ```bash
 cd subtensor
-git fetch origin subnets/user-creation
-git checkout subnets/user-creation
+git fetch origin subnets/devnet-ready
+git checkout subnets/devnet-ready
 ```
 
 ### 5. Setup Rust for Substrate Development
@@ -106,10 +109,10 @@ Run the following command to mint yourself tokens on your chain.
 
 ```bash
 # Mint tokens for the owner
-btcli wallet faucet --wallet.name owner --subtensor.chain_endpoint ws://127.0.0.1:9946
+btcli wallet faucet --wallet.name owner --subtensor.chain_endpoint ws://127.0.0.1:9944
 >> Balance: τ0.000000000 ➡ τ100.000000000
 # Mint tokens to your validator.
-btcli wallet faucet --wallet.name validator --subtensor.chain_endpoint ws://127.0.0.1:9946
+btcli wallet faucet --wallet.name validator --subtensor.chain_endpoint ws://127.0.0.1:9944
 >> Balance: τ0.000000000 ➡ τ100.000000000
 ```
 
@@ -118,7 +121,7 @@ btcli wallet faucet --wallet.name validator --subtensor.chain_endpoint ws://127.
 The commands below establish a new subnetwork on the local chain. The cost will be exactly τ100.000000000 for the first network you create.
 
 ```bash
-btcli subnet create --wallet.name owner --subtensor.chain_endpoint ws://127.0.0.1:9946
+btcli subnet create --wallet.name owner --subtensor.chain_endpoint ws://127.0.0.1:9944
 >> Your balance is: τ200.000000000
 >> Do you want to register a subnet for τ100.000000000? [y/n]:
 >> Enter password to unlock key: [YOUR_PASSWORD]
@@ -133,7 +136,7 @@ Enroll your validator and miner on the network. This gives your two keys unique 
 
 ```bash
 # Register the miner
-btcli subnet register --wallet.name miner --wallet.hotkey default --subtensor.chain_endpoint ws://127.0.0.1:9946
+btcli subnet register --wallet.name miner --wallet.hotkey default --subtensor.chain_endpoint ws://127.0.0.1:9944
 >> Enter netuid [1] (1): 1
 >> Continue Registration? [y/n]: y
 >> ⠦ 📡 Submitting POW...
@@ -141,7 +144,7 @@ btcli subnet register --wallet.name miner --wallet.hotkey default --subtensor.ch
 
 
 # Register the validator
-btcli subnet register --wallet.name validator --wallet.hotkey default --subtensor.chain_endpoint ws://127.0.0.1:9946
+btcli subnet register --wallet.name validator --wallet.hotkey default --subtensor.chain_endpoint ws://127.0.0.1:9944
 >> Enter netuid [1] (1): 1
 >> Continue Registration? [y/n]: y
 >> ⠦ 📡 Submitting POW...
@@ -153,7 +156,7 @@ btcli subnet register --wallet.name validator --wallet.hotkey default --subtenso
 This bootstraps the incentives on your new subnet by adding stake into its incentive mechanism.
 
 ```bash
-btcli stake add --wallet.name validator --wallet.hotkey default --subtensor.chain_endpoint ws://127.0.0.1:9946
+btcli stake add --wallet.name validator --wallet.hotkey default --subtensor.chain_endpoint ws://127.0.0.1:9944
 >> Stake all Tao from account: 'validator'? [y/n]: y
 >> Stake:
     τ0.000000000 ➡ τ100.000000000
@@ -164,20 +167,20 @@ btcli stake add --wallet.name validator --wallet.hotkey default --subtensor.chai
 Ensure both the miner and validator keys are successfully registered.
 
 ```bash
-btcli subnet list --subtensor.chain_endpoint ws://127.0.0.1:9946
+btcli subnet list --subtensor.chain_endpoint ws://127.0.0.1:9944
                         Subnets - finney
 NETUID  NEURONS  MAX_N   DIFFICULTY  TEMPO  CON_REQ  EMISSION  BURN(τ)
    1        2     256.00   10.00 M    1000    None     0.00%    τ1.00000
    2      128
 
-btcli wallet overview --wallet.name validator --subtensor.chain_endpoint ws://127.0.0.1:9946
+btcli wallet overview --wallet.name validator --subtensor.chain_endpoint ws://127.0.0.1:9944
 Subnet: 1
 COLDKEY  HOTKEY   UID  ACTIVE  STAKE(τ)     RANK    TRUST  CONSENSUS  INCENTIVE  DIVIDENDS  EMISSION(ρ)   VTRUST  VPERMIT  UPDATED  AXON  HOTKEY_SS58
 miner    default  0      True   100.00000  0.00000  0.00000    0.00000    0.00000    0.00000            0  0.00000                14  none  5GTFrsEQfvTsh3WjiEVFeKzFTc2xcf…
 1        1        2            τ100.00000  0.00000  0.00000    0.00000    0.00000    0.00000           ρ0  0.00000
                                                                           Wallet balance: τ0.0
 
-btcli wallet overview --wallet.name miner --subtensor.chain_endpoint ws://127.0.0.1:9946
+btcli wallet overview --wallet.name miner --subtensor.chain_endpoint ws://127.0.0.1:9944
 Subnet: 1
 COLDKEY  HOTKEY   UID  ACTIVE  STAKE(τ)     RANK    TRUST  CONSENSUS  INCENTIVE  DIVIDENDS  EMISSION(ρ)   VTRUST  VPERMIT  UPDATED  AXON  HOTKEY_SS58
 miner    default  1      True   0.00000  0.00000  0.00000    0.00000    0.00000    0.00000            0  0.00000                14  none  5GTFrsEQfvTsh3WjiEVFeKzFTc2xcf…
@@ -191,8 +194,8 @@ miner    default  1      True   0.00000  0.00000  0.00000    0.00000    0.00000 
 Use the following commands to run the miner and validator against the local chain.
 
 ```bash
-pm2 start neurons/miner.py --interpreter python3 --name miner -- --netuid 1 --subtensor.chain_endpoint ws://127.0.0.1:9946 --wallet.name miner --wallet.hotkey default
-pm2 start neurons/validator.py --interpreter python3 --name validator -- --netuid 1 --subtensor.chain_endpoint ws://127.0.0.1:9946 --wallet.name validator --wallet.hotkey default
+pm2 start neurons/miner.py --interpreter python3 --name miner -- --netuid 1 --subtensor.chain_endpoint ws://127.0.0.1:9944 --wallet.name miner --wallet.hotkey default
+pm2 start neurons/validator.py --interpreter python3 --name validator -- --netuid 1 --subtensor.chain_endpoint ws://127.0.0.1:9944 --wallet.name validator --wallet.hotkey default
 ```
 
 [View all acceptable CLI arguments →]

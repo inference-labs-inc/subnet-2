@@ -1,33 +1,50 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
 {
-	"name": "Ubuntu",
-	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	// "image": "mcr.microsoft.com/devcontainers/base:jammy",
-	"build": {
-        // Path is relative to the devcontainer.json file.
-        "dockerfile": "Dockerfile"
+  "name": "SN2 Dev",
+  // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+  // Built from https://github.com/inference-labs-inc/tensor-tools/blob/main/bittensor-devcontainer/Dockerfile
+  "image": "ghcr.io/inference-labs-inc/bittensor-devcontainer:latest",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "fish",
+        "[python]": {
+          "editor.tabSize": 4,
+          "files.trimTrailingWhitespace": true,
+          "editor.formatOnSave": true,
+          "editor.defaultFormatter": "ms-python.black-formatter"
+        },
+        "isort.args": [
+          "--settings-file",
+          "./.isort.cfg"
+        ]
+      },
+      "extensions": [
+        "ms-python.black-formatter",
+        "ms-python.python",
+        "ms-python.isort",
+        "ms-toolsai.jupyter"
+      ]
+    }
+  },
+  // Install ezkl cli, done here instead of the Dockerfile to test new versions without rebuilding the image.
+  "onCreateCommand": "curl https://raw.githubusercontent.com/zkonduit/ezkl/main/install_ezkl_cli.sh | bash -s v19.0.7",
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/home/vscode/.ezkl"
+  },
+  // Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+  // "remoteUser": "root",
+  "mounts": [
+    {
+      "source": "${localEnv:HOME}/.bittensor/subnet-2",
+      "target": "/home/vscode/.bittensor/subnet-2",
+      "type": "bind"
     },
-	"runArgs": ["--platform=linux/amd64" ],
-	"features": {
-		"ghcr.io/devcontainers/features/python:1": {
-			"installTools": true,
-			"version": "os-provided"
-		}
-	}
-
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
-
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [],
-
-	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "uname -a",
-
-	// Configure tool-specific properties.
-	// "customizations": {},
-
-	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	// "remoteUser": "root"
+    {
+      "source": "${localEnv:HOME}/.ezkl/srs",
+      "target": "/home/vscode/.ezkl/srs",
+      "type": "bind"
+    }
+  ]
 }

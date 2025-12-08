@@ -1,24 +1,45 @@
-import traceback
+import asyncio
+import json
 import os
 import subprocess
 import time
-import json
-import requests
+import traceback
+from typing import Optional
+from constants import FIVE_MINUTES, Roles
 
 # trunk-ignore(pylint/E0611)
-from bittensor import logging
+import bittensor as bt
+import ezkl
+import requests
 
+import cli_parser
 from constants import IGNORED_MODEL_HASHES
 
+from functools import partial
+from collections import OrderedDict
 
 LOCAL_SNARKJS_INSTALL_DIR = os.path.join(os.path.expanduser("~"), ".snarkjs")
 LOCAL_SNARKJS_PATH = os.path.join(
     LOCAL_SNARKJS_INSTALL_DIR, "node_modules", ".bin", "snarkjs"
 )
-TOOLCHAIN = "nightly-2024-08-01"
+LOCAL_EZKL_PATH = os.path.join(os.path.expanduser("~"), ".ezkl", "ezkl")
+TOOLCHAIN = "nightly-2024-09-30"
+JOLT_VERSION = "dd9e5c4bcf36ffeb75a576351807f8d86c33ec66"
+
+MINER_EXTERNAL_FILES = [
+    "circuit.zkey",
+    "pk.key",
+]
+VALIDATOR_EXTERNAL_FILES = [
+    "circuit.zkey",
+]
 
 
-def run_shared_preflight_checks():
+async def download_srs(logrows):
+    await ezkl.get_srs(logrows=logrows, commitment=ezkl.PyCommitments.KZG)
+
+
+def run_shared_preflight_checks(role: Optional[Roles] = None):
     """
     This function executes a series of checks to ensure the environment is properly
     set up for both validator and miner operations.
@@ -26,37 +47,77 @@ def run_shared_preflight_checks():
     - Model files are synced up
     - Node.js >= 20 is installed
     - SnarkJS is installed
-    - Rust and Cargo are installed
-    - Rust nightly toolchain is installed
-    - Jolt is installed
 
     Raises:
         Exception: If any of the pre-flight checks fail.
     """
-    preflight_checks = [
-        ("Syncing model files", sync_model_files),
-        ("Ensuring Node.js version", ensure_nodejs_version),
-        ("Checking SnarkJS installation", ensure_snarkjs_installed),
-        ("Checking Rust and Cargo installation", ensure_rust_cargo_installed),
-        ("Checking Rust nightly toolchain", ensure_rust_nightly_installed),
-        ("Checking Jolt installation", ensure_jolt_installed),
-        ("Compiling Jolt circuits", compile_jolt_circuits),
-    ]
 
-    logging.info(" PreFlight | Running pre-flight checks")
+    preflight_checks = OrderedDict(
+        {
+            "Ensuring Node.js version": ensure_nodejs_version,
+            "Checking SnarkJS installation": ensure_snarkjs_installed,
+            "Checking EZKL installation": ensure_ezkl_installed,
+            "Syncing model files": partial(sync_model_files, role=role),
+        }
+    )
 
-    for check_name, check_function in preflight_checks:
-        logging.info(f" PreFlight | {check_name}")
+    bt.logging.info(" PreFlight | Running pre-flight checks")
+
+    # Skip sync_model_files during docker build
+    if os.getenv("SUBNET_2_DOCKER_BUILD", False):
+        bt.logging.info(" PreFlight | Skipping model file sync")
+        _ = preflight_checks.pop("Syncing model files")
+
+    for check_name, check_function in preflight_checks.items():
+        bt.logging.info(f" PreFlight | {check_name}")
         try:
             check_function()
-            logging.success(f" PreFlight | {check_name} completed successfully")
+            bt.logging.success(f" PreFlight | {check_name} completed successfully")
         except Exception as e:
-            logging.error(f"Failed {check_name.lower()}.", e)
-            logging.debug(f" PreFlight | {check_name} error details: {str(e)}")
+            bt.logging.error(f"Failed {check_name.lower()}.", e)
+            bt.logging.debug(f" PreFlight | {check_name} error details: {str(e)}")
             traceback.print_exc()
             raise e
 
-    logging.info(" PreFlight | Pre-flight checks completed.")
+    bt.logging.info(" PreFlight | Pre-flight checks completed.")
+
+
+def ensure_ezkl_installed():
+    """
+    Ensure EZKL is installed by first checking if it exists, and if not,
+    running the official installation script. Also verifies the version matches.
+    """
+    python_ezkl_version = ezkl.__version__
+    try:
+        if os.path.exists(LOCAL_EZKL_PATH):
+            # Check version matches
+            result = subprocess.run(
+                [LOCAL_EZKL_PATH, "--version"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            if python_ezkl_version in result.stdout:
+                bt.logging.info(
+                    f"EZKL is already installed with correct version: {python_ezkl_version}"
+                )
+                return
+            else:
+                bt.logging.warning("EZKL version mismatch, reinstalling...")
+
+        # trunk-ignore(bandit/B605)
+        subprocess.run(
+            f"curl -s https://raw.githubusercontent.com/zkonduit/ezkl/main/install_ezkl_cli.sh | bash -s -- v{python_ezkl_version}",  # noqa
+            shell=True,
+            check=True,
+        )
+        bt.logging.info("EZKL installed successfully")
+
+    except subprocess.CalledProcessError as e:
+        bt.logging.error(f"Failed to install/verify EZKL: {e}")
+        raise RuntimeError(
+            "EZKL installation failed. Please install it manually."
+        ) from e
 
 
 def ensure_snarkjs_installed():
@@ -72,11 +133,11 @@ def ensure_snarkjs_installed():
             capture_output=True,
             text=True,
         )
-        logging.info(
+        bt.logging.info(
             "snarkjs is already installed and available in the local directory."
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
-        logging.warning(
+        bt.logging.warning(
             "snarkjs not found in local directory. Attempting to install..."
         )
         try:
@@ -96,38 +157,57 @@ def ensure_snarkjs_installed():
                 ],
                 check=True,
             )
-            logging.info(
+            bt.logging.info(
                 "snarkjs has been successfully installed in the local directory."
             )
         except subprocess.CalledProcessError as e:
-            logging.error(f"Failed to install snarkjs: {e}")
+            bt.logging.error(f"Failed to install snarkjs: {e}")
             raise RuntimeError(
                 "snarkjs installation failed. Please install it manually."
             ) from e
 
 
-def sync_model_files():
+def sync_model_files(role: Optional[Roles] = None):
     """
     Sync external model files
     """
     MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "deployment_layer")
     SYNC_LOG_PREFIX = "  SYNC  | "
 
+    loop = asyncio.get_event_loop()
+    for logrows in range(1, 26):
+        if os.path.exists(
+            os.path.join(os.path.expanduser("~"), ".ezkl", "srs", f"kzg{logrows}.srs")
+        ):
+            bt.logging.info(
+                f"{SYNC_LOG_PREFIX}SRS for logrows={logrows} already exists, skipping..."
+            )
+            continue
+
+        try:
+            loop.run_until_complete(download_srs(logrows))
+            bt.logging.info(
+                f"{SYNC_LOG_PREFIX}Successfully downloaded SRS for logrows={logrows}"
+            )
+        except Exception as e:
+            bt.logging.error(
+                f"{SYNC_LOG_PREFIX}Failed to download SRS for logrows={logrows}: {e}"
+            )
+
     for model_hash in os.listdir(MODEL_DIR):
         if not model_hash.startswith("model_"):
             continue
 
-        for ignored_hash in IGNORED_MODEL_HASHES:
-            if model_hash.endswith(ignored_hash):
-                logging.info(
-                    SYNC_LOG_PREFIX
-                    + f"Ignoring model {model_hash} as it is in the ignored list."
-                )
-                continue
+        if model_hash.split("_")[1] in IGNORED_MODEL_HASHES:
+            bt.logging.info(
+                SYNC_LOG_PREFIX
+                + f"Ignoring model {model_hash} as it is in the ignored list."
+            )
+            continue
 
         metadata_file = os.path.join(MODEL_DIR, model_hash, "metadata.json")
         if not os.path.isfile(metadata_file):
-            logging.error(
+            bt.logging.error(
                 SYNC_LOG_PREFIX
                 + f"Metadata file not found at {metadata_file} for {model_hash}. Skipping sync for this model."
             )
@@ -137,29 +217,43 @@ def sync_model_files():
             with open(metadata_file, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
         except json.JSONDecodeError:
-            logging.error(
+            bt.logging.error(
                 SYNC_LOG_PREFIX + f"Failed to parse JSON from {metadata_file}"
             )
             continue
 
         external_files = metadata.get("external_files", {})
         for key, url in external_files.items():
-            file_path = os.path.join(MODEL_DIR, model_hash, key)
+            if (role == Roles.VALIDATOR and key not in VALIDATOR_EXTERNAL_FILES) or (
+                role == Roles.MINER and key not in MINER_EXTERNAL_FILES
+            ):
+                bt.logging.info(
+                    SYNC_LOG_PREFIX
+                    + f"Skipping {key} for {model_hash} as it is not required for the {role}."
+                )
+                continue
+            file_path = os.path.join(
+                cli_parser.config.full_path_models, model_hash, key
+            )
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
             if os.path.isfile(file_path):
-                logging.info(
+                bt.logging.info(
                     SYNC_LOG_PREFIX
                     + f"File {key} for {model_hash} already downloaded, skipping..."
                 )
                 continue
 
-            logging.info(SYNC_LOG_PREFIX + f"Downloading {url} to {file_path}...")
+            bt.logging.info(SYNC_LOG_PREFIX + f"Downloading {url} to {file_path}...")
             try:
-                response = requests.get(url, timeout=600)
-                response.raise_for_status()
-                with open(file_path, "wb") as f:
-                    f.write(response.content)
+                with requests.get(
+                    url, timeout=FIVE_MINUTES * 2, stream=True
+                ) as response:
+                    response.raise_for_status()
+                    with open(file_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
             except requests.RequestException as e:
-                logging.error(
+                bt.logging.error(
                     SYNC_LOG_PREFIX + f"Failed to download {url} to {file_path}: {e}"
                 )
                 continue
@@ -176,272 +270,26 @@ def ensure_nodejs_version():
         node_version = subprocess.check_output(["node", "--version"]).decode().strip()
         npm_version = subprocess.check_output(["npm", "--version"]).decode().strip()
 
-        if node_version.startswith("v20."):
-            logging.info(
+        if node_version.startswith("v20.") or (
+            node_version.startswith("v") and float(node_version[1:].split(".")[0]) > 20
+        ):
+            bt.logging.info(
                 NODE_LOG_PREFIX
                 + f"Node.js version {node_version} and npm version {npm_version} are installed."
             )
             return
     except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    logging.error(
-        NODE_LOG_PREFIX + "Node.js is not installed or is not the correct version."
-    )
-    logging.error(
-        NODE_LOG_PREFIX
-        + "\033[91mPlease install Node.js >= 20 using the following command\n./setup.sh --no-install\033[0m"
-    )
-
-    time.sleep(10)
-    raise RuntimeError(
-        "Node.js >= 20 is required but not installed. Please install it manually and restart the process."
-    )
-
-
-def ensure_rust_cargo_installed():
-    """
-    Ensure that Rust and Cargo are installed.
-    If not installed, install them and instruct the user to restart the shell and PM2 process.
-    """
-    RUST_LOG_PREFIX = "  RUST  | "
-
-    try:
-        subprocess.run(
-            [
-                os.path.join(os.path.expanduser("~"), ".cargo", "bin", "rustc"),
-                "--version",
-            ],
-            check=True,
-            capture_output=True,
+        bt.logging.error(
+            f"{NODE_LOG_PREFIX}Node.js is not installed or is not the correct version."
         )
-        subprocess.run(
-            [
-                os.path.join(os.path.expanduser("~"), ".cargo", "bin", "cargo"),
-                "--version",
-            ],
-            check=True,
-            capture_output=True,
+        bt.logging.error(
+            NODE_LOG_PREFIX
+            + "\033[91mPlease install Node.js >= 20 using the following command\n./setup.sh --no-install\033[0m"
         )
-        logging.info(f"{RUST_LOG_PREFIX}Rust and Cargo are already installed.")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        logging.info(f"{RUST_LOG_PREFIX}Rust and/or Cargo not found. Installing...")
-        try:
-            rustup_script = requests.get("https://sh.rustup.rs").text
-            subprocess.run(
-                ["sh", "-s", "--", "-y"],
-                input=rustup_script.encode(),
-                check=True,
-                shell=False,
-            )
-            cargo_path = os.path.join(os.path.expanduser("~"), ".cargo", "bin", "cargo")
-            if not os.path.exists(cargo_path):
-                logging.info(
-                    f"{RUST_LOG_PREFIX}Cargo not found. Adding cargo component..."
-                )
-                try:
-                    subprocess.run(
-                        [
-                            os.path.join(
-                                os.path.expanduser("~"), ".cargo", "bin", "rustup"
-                            ),
-                            "component",
-                            "add",
-                            "cargo",
-                        ],
-                        check=True,
-                        capture_output=True,
-                    )
-                    logging.info(
-                        f"{RUST_LOG_PREFIX}Cargo component added successfully."
-                    )
-                except subprocess.CalledProcessError as e:
-                    logging.error(
-                        f"{RUST_LOG_PREFIX}Failed to add cargo component: {e}"
-                    )
-                    raise RuntimeError("Failed to add cargo component.") from e
-            logging.info(
-                f"{RUST_LOG_PREFIX}Rust and Cargo have been successfully installed."
-            )
-
-            logging.info(f"{RUST_LOG_PREFIX}Installation complete.")
-            logging.info(
-                f"{RUST_LOG_PREFIX}\033[93mIMPORTANT: Ensure you have pkg-config, libssl-dev and openssl installed"
-                "with sudo apt install pkg-config libssl-dev openssl.\033[0m"
-            )
-            logging.info(
-                f"{RUST_LOG_PREFIX}\033[93mPausing. To complete install, restart your machine using sudo reboot.\033[0m"
-            )
-            time.sleep(1e9)
-
-        except subprocess.CalledProcessError as e:
-            logging.error(f"{RUST_LOG_PREFIX}Failed to install Rust and Cargo: {e}")
-            raise RuntimeError(
-                "Rust and Cargo installation failed. Please install them manually."
-            ) from e
-
-
-def ensure_rust_nightly_installed():
-    """
-    Ensure that the Rust nightly toolchain is installed with the specified target.
-    If not installed, install it.
-    """
-    RUST_LOG_PREFIX = "  RUST  | "
-
-    try:
-        result = subprocess.run(
-            [f"{os.path.expanduser('~')}/.cargo/bin/rustup", "toolchain", "list"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        if TOOLCHAIN in result.stdout:
-            result = subprocess.run(
-                [
-                    f"{os.path.expanduser('~')}/.cargo/bin/rustup",
-                    "target",
-                    "list",
-                    "--installed",
-                    "--toolchain",
-                    TOOLCHAIN,
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-    except subprocess.CalledProcessError:
-        pass
-
-    logging.info(f"{RUST_LOG_PREFIX}Installing Rust {TOOLCHAIN}...")
-    try:
-        subprocess.run(
-            [
-                f"{os.path.expanduser('~')}/.cargo/bin/rustup",
-                "toolchain",
-                "install",
-                TOOLCHAIN,
-            ],
-            check=True,
-        )
-        logging.info(
-            f"{RUST_LOG_PREFIX}Rust {TOOLCHAIN} has been successfully installed."
-        )
-    except subprocess.CalledProcessError as e:
-        logging.error(f"{RUST_LOG_PREFIX}Failed to install Rust toolchain: {e}")
+        time.sleep(10)
         raise RuntimeError(
-            f"Rust {TOOLCHAIN} installation failed. Please install it manually."
-        ) from e
-
-
-def ensure_jolt_installed():
-    """
-    Ensure that Jolt is installed.
-    If not installed, install it and the toolchain.
-    """
-    JOLT_LOG_PREFIX = "  JOLT  | "
-
-    try:
-        subprocess.run(
-            [
-                os.path.join(os.path.expanduser("~"), ".cargo", "bin", "jolt"),
-                "--version",
-            ],
-            check=True,
-            capture_output=True,
+            "Node.js >= 20 is required but not installed. Please install it manually and restart the process."
         )
-        logging.info(f"{JOLT_LOG_PREFIX}Jolt is already installed.")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        logging.info(f"{JOLT_LOG_PREFIX}Jolt not found. Installing...")
-        try:
-            subprocess.run(
-                [
-                    os.path.join(os.path.expanduser("~"), ".cargo", "bin", "cargo"),
-                    f"+{TOOLCHAIN}",
-                    "install",
-                    "--git",
-                    "https://github.com/a16z/jolt",
-                    "--force",
-                    "--bins",
-                    "jolt",
-                ],
-                check=True,
-            )
-            logging.info(f"{JOLT_LOG_PREFIX}Jolt has been successfully installed.")
-        except subprocess.CalledProcessError as e:
-            logging.error(f"{JOLT_LOG_PREFIX}Failed to install Jolt: {e}")
-            raise RuntimeError(
-                "Jolt installation failed. Please install it manually."
-            ) from e
-
-    logging.info(f"{JOLT_LOG_PREFIX}Running jolt install-toolchain...")
-    try:
-        subprocess.run(
-            [
-                os.path.join(os.path.expanduser("~"), ".cargo", "bin", "jolt"),
-                "install-toolchain",
-            ],
-            check=True,
-        )
-        logging.info(f"{JOLT_LOG_PREFIX}jolt install-toolchain completed successfully.")
-    except subprocess.CalledProcessError as e:
-        logging.error(f"{JOLT_LOG_PREFIX}Failed to run jolt install-toolchain: {e}")
-        raise RuntimeError(
-            "jolt install-toolchain failed. Please run it manually."
-        ) from e
-
-
-def compile_jolt_circuits():
-    """
-    Compile Jolt circuits for each model that uses the Jolt proof system
-    """
-    JOLT_LOG_PREFIX = "  JOLT  | "
-    MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "deployment_layer")
-
-    for model_hash in os.listdir(MODEL_DIR):
-        if not model_hash.startswith("model_"):
-            continue
-
-        metadata_file = os.path.join(MODEL_DIR, model_hash, "metadata.json")
-        if not os.path.isfile(metadata_file):
-            logging.warning(
-                f"{JOLT_LOG_PREFIX}Metadata file not found for {model_hash}. Skipping."
-            )
-            continue
-
-        try:
-            with open(metadata_file, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-        except json.JSONDecodeError:
-            logging.error(f"{JOLT_LOG_PREFIX}Failed to parse JSON from {metadata_file}")
-            continue
-
-        if metadata.get("proof_system") != "JOLT":
-            logging.info(f"{JOLT_LOG_PREFIX}Skipping non-Jolt circuit: {model_hash}")
-            continue
-
-        circuit_path = os.path.join(
-            MODEL_DIR, model_hash, "target", "release", "circuit"
-        )
-        if os.path.exists(circuit_path):
-            logging.info(f"{JOLT_LOG_PREFIX}Circuit already compiled for {model_hash}")
-            continue
-
-        logging.info(f"{JOLT_LOG_PREFIX}Compiling circuit for {model_hash}")
-        try:
-            subprocess.run(
-                ["cargo", "build", "--release"],
-                cwd=os.path.join(MODEL_DIR, model_hash),
-                check=True,
-            )
-            logging.info(
-                f"{JOLT_LOG_PREFIX}Successfully compiled circuit for {model_hash}"
-            )
-        except subprocess.CalledProcessError as e:
-            logging.error(
-                f"{JOLT_LOG_PREFIX}Failed to compile circuit for {model_hash}: {e}"
-            )
-
-    logging.info(f"{JOLT_LOG_PREFIX}Jolt circuit compilation process completed.")
 
 
 def is_safe_path(base_path, path):

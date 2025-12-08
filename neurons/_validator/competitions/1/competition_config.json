@@ -1,0 +1,86 @@
+{
+    "id": 1,
+    "name": "Age Detection Competition",
+    "description": "Age detection model evaluation with 64x64x3 inputs",
+    "version": "1.0.0",
+    "start_timestamp": 1746633600,
+    "end_timestamp": 1749264870,
+    "baseline_model_path": "age.onnx",
+    "circuit_settings": {
+        "input_shape": [
+            1,
+            3,
+            64,
+            64
+        ],
+        "output_names": [
+            "prob_stage_1",
+            "prob_stage_2",
+            "prob_stage_3",
+            "stage1_delta_k",
+            "stage2_delta_k",
+            "stage3_delta_k",
+            "index_offset_stage1",
+            "index_offset_stage2",
+            "index_offset_stage3"
+        ],
+        "output_shapes": {
+            "prob_stage_1": [
+                1,
+                3
+            ],
+            "prob_stage_2": [
+                1,
+                3
+            ],
+            "prob_stage_3": [
+                1,
+                3
+            ],
+            "stage1_delta_k": [
+                1,
+                1
+            ],
+            "stage2_delta_k": [
+                1,
+                1
+            ],
+            "stage3_delta_k": [
+                1,
+                1
+            ],
+            "index_offset_stage1": [
+                1,
+                3
+            ],
+            "index_offset_stage2": [
+                1,
+                3
+            ],
+            "index_offset_stage3": [
+                1,
+                3
+            ]
+        }
+    },
+    "data_source": {
+        "url": "https://sn2-storage.inferencelabs.com/age.zip",
+        "format": "zip",
+        "type": "remote"
+    },
+    "evaluation": {
+        "metric": "mean_squared_error",
+        "num_iterations": 10,
+        "num_total_evaluations": 100,
+        "num_proof_evaluations": 10,
+        "scoring_weights": {
+            "accuracy": 0.95,
+            "proof_size": 0.0,
+            "response_time": 0.05
+        },
+        "output_shape": [
+            1,
+            21
+        ]
+    }
+}

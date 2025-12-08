@@ -1,0 +1,374 @@
+interfaces = []
+exclude = [
+    "**/*__pycache__",
+    "**/*egg-info",
+    "**/docs",
+    "**/tests",
+    "**/venv",
+]
+source_roots = [ "neurons",
+]
+
+[[modules ]]
+path = "cli_parser"
+depends_on = ["constants", "utils.wandb_logger"]
+
+[[modules ]]
+path = "deployment_layer"
+depends_on = [ "constants", "execution_layer.base_input", "_validator.models.request_type", "execution_layer.input_registry"]
+
+[[modules ]]
+path = "miner"
+depends_on = ["constants", "cli_parser", "utils", "_miner.miner_session", "deployment_layer.circuit_store"]
+
+[[modules ]]
+path = "utils"
+depends_on = [ "utils.rate_limiter", "utils.system", "utils.auto_update", "utils.wandb_logger", "utils.pre_flight"]
+
+[[modules ]]
+path = "constants"
+depends_on = []
+
+[[modules ]]
+path = "protocol"
+depends_on = [ "execution_layer.circuit"]
+
+[[modules ]]
+path = "scripts"
+depends_on = []
+
+[[modules ]]
+path = "execution_layer"
+depends_on = []
+
+[[modules ]]
+path = "dry_run"
+depends_on = ["cli_parser", "utils"]
+
+[[modules ]]
+path = "validator"
+depends_on = ["cli_parser", "constants", "utils", "deployment_layer.circuit_store", "_validator.validator_session"]
+
+[[modules ]]
+path = "_miner"
+depends_on = []
+
+[[modules ]]
+path = "_validator"
+depends_on = []
+
+[[modules ]]
+path = "execution_layer.input_registry"
+depends_on = ["execution_layer.base_input"]
+
+[[modules ]]
+path = "_miner.circuit_manager"
+depends_on = ["cli_parser"]
+
+[[modules ]]
+path = "_validator.models.poc_rpc_request"
+depends_on = ["execution_layer.circuit", "deployment_layer.circuit_store", "_validator.models.base_rpc_request"]
+
+[[modules ]]
+path = "_validator.scoring.score_manager"
+depends_on = ["execution_layer.verified_model_session", "_validator.competitions.competition", "_validator.models.request_type", "deployment_layer.circuit_store", "_validator.utils.logging", "_validator.models.miner_response", "constants", "_validator.utils.proof_of_weights", "_validator.utils.uid", "execution_layer.circuit", "utils.rate_limiter"]
+
+[[modules ]]
+path = "_validator.competitions.services.circuit_validator"
+depends_on = ["constants"]
+
+[[modules ]]
+path = "_validator.competitions.models.sota"
+depends_on = []
+
+[[modules ]]
+path = "_validator.competitions.services.circuit_evaluator"
+depends_on = ["utils.wandb_logger", "_validator.competitions.services.data_source", "_validator.competitions.services.sota_manager", "utils.system", "constants"]
+
+[[modules ]]
+path = "_validator.competitions.services.circuit_manager"
+depends_on = ["protocol", "constants"]
+
+[[modules ]]
+path = "_validator.models.base_rpc_request"
+depends_on = ["execution_layer.circuit", "_validator.utils.api"]
+
+[[modules ]]
+path = "utils.pre_flight"
+depends_on = ["constants", "cli_parser"]
+
+[[modules ]]
+path = "_validator.core.response_processor"
+depends_on = ["_validator.models.completed_proof_of_weights", "_validator.models.miner_response", "execution_layer.verified_model_session", "execution_layer.generic_input", "_validator.models.request_type", "_validator.core.request", "_validator.scoring.score_manager"]
+
+[[modules ]]
+path = "_validator.models.request_type"
+depends_on = []
+
+[[modules ]]
+path = "_validator.competitions.1.data_processor"
+depends_on = ["_validator.competitions.services.data_source"]
+
+[[modules ]]
+path = "_validator.models.completed_proof_of_weights"
+depends_on = []
+
+[[modules ]]
+path = "_validator.utils.pps"
+depends_on = []
+
+[[modules ]]
+path = "scripts.check_miner_axon"
+depends_on = ["constants", "protocol"]
+
+[[modules ]]
+path = "_validator.utils.uid"
+depends_on = ["constants"]
+
+[[modules ]]
+path = "scripts.plot_model_stats"
+depends_on = []
+
+[[modules ]]
+path = "_validator.config"
+depends_on = ["constants", "_validator.config.api", "utils.wandb_logger"]
+
+[[modules ]]
+path = "_validator.utils.axon"
+depends_on = ["_validator.core.request"]
+
+[[modules ]]
+path = "_validator.competitions.competition"
+depends_on = ["constants", "_validator.competitions.models.neuron", "_validator.competitions.services.circuit_evaluator", "_validator.competitions.utils.cleanup", "_validator.competitions.services.circuit_validator", "utils.system", "utils.wandb_logger", "_validator.competitions.services.circuit_manager", "_validator.competitions.services.sota_manager", "_validator.models.request_type"]
+
+[[modules ]]
+path = "_validator.competitions.models"
+depends_on = []
+
+[[modules ]]
+path = "_validator.utils.logging"
+depends_on = ["utils.wandb_logger", "_validator.models.miner_response"]
+
+[[modules ]]
+path = "execution_layer.proof_handlers"
+depends_on = []
+
+[[modules ]]
+path = "execution_layer.session_storage"
+depends_on = ["utils.system"]
+
+[[modules ]]
+path = "utils.auto_update"
+depends_on = ["utils.wandb_logger", "constants", "utils.system", "cli_parser"]
+
+[[modules ]]
+path = "utils.rate_limiter"
+depends_on = []
+
+[[modules ]]
+path = "_validator.utils.proof_of_weights"
+depends_on = ["_validator.utils.pps", "_validator.models.miner_response", "constants"]
+
+[[modules ]]
+path = "_validator.utils.api"
+depends_on = ["execution_layer.generic_input"]
+
+[[modules ]]
+path = "_validator.utils.hash_guard"
+depends_on = ["execution_layer.base_input"]
+
+[[modules ]]
+path = "_validator.competitions"
+depends_on = []
+
+[[modules ]]
+path = "_validator.api"
+depends_on = ["_validator.api.certificate_manager", "_validator.api.cache", "_validator.models.poc_rpc_request", "_validator.api.websocket_manager", "_validator.models.pow_rpc_request", "constants", "_validator.config", "deployment_layer.circuit_store"]
+
+[[modules ]]
+path = "_validator.competitions.services.data_source"
+depends_on = []
+
+[[modules ]]
+path = "_validator.scoring.reward"
+depends_on = []
+
+[[modules ]]
+path = "_validator.api.cache"
+depends_on = ["_validator.config"]
+
+[[modules ]]
+path = "_validator.models.pow_rpc_request"
+depends_on = ["_validator.models.base_rpc_request", "deployment_layer.circuit_store"]
+
+[[modules ]]
+path = "execution_layer.circuit"
+depends_on = ["execution_layer.input_registry", "utils.metrics_logger", "cli_parser", "utils", "constants", "execution_layer.base_input", "utils.gc_logging"]
+
+[[modules ]]
+path = "execution_layer.generic_input"
+depends_on = ["_validator.models.request_type", "execution_layer.base_input"]
+
+[[modules ]]
+path = "_validator.core.prometheus"
+depends_on = []
+
+[[modules ]]
+path = "_validator.core.validator_loop"
+depends_on = ["_validator.core.response_processor", "_validator.core.request", "_validator.utils.proof_of_weights", "constants", "_validator.scoring.score_manager", "_validator.config", "_validator.competitions.competition", "_validator.utils.axon", "utils", "_validator.models.miner_response", "_validator.models.request_type", "_validator.core.request_pipeline", "_validator.core.prometheus", "_validator.utils.logging", "utils.gc_logging", "_validator.api", "_validator.scoring.weights", "_validator.utils.uid"]
+
+[[modules ]]
+path = "_validator.config.api"
+depends_on = []
+
+[[modules ]]
+path = "_validator.pow.proof_of_weights_handler"
+depends_on = ["protocol", "_validator.models.request_type", "_validator.utils.proof_of_weights", "execution_layer.circuit", "constants"]
+
+[[modules ]]
+path = "execution_layer.base_input"
+depends_on = ["_validator.models.request_type"]
+
+[[modules ]]
+path = "_validator.competitions.utils.cleanup"
+depends_on = ["utils.system"]
+
+[[modules ]]
+path = "_validator.scoring"
+depends_on = []
+
+[[modules ]]
+path = "utils.wandb_logger"
+depends_on = []
+
+[[modules ]]
+path = "_validator.competitions.services"
+depends_on = []
+
+[[modules ]]
+path = "_validator.competitions.services.onnx_runner"
+depends_on = []
+
+[[modules ]]
+path = "_validator.models"
+depends_on = []
+
+[[modules ]]
+path = "scripts.sign_api_request"
+depends_on = []
+
+[[modules ]]
+path = "_validator.competitions.models.neuron"
+depends_on = []
+
+[[modules ]]
+path = "_validator.api.websocket_manager"
+depends_on = []
+
+[[modules ]]
+path = "_validator.core.request"
+depends_on = ["_validator.models.request_type", "execution_layer.circuit", "protocol", "execution_layer.generic_input"]
+
+[[modules ]]
+path = "_validator.pow"
+depends_on = []
+
+[[modules ]]
+path = "_validator.validator_session"
+depends_on = ["utils", "_validator.config", "cli_parser", "_validator.core.validator_loop"]
+
+[[modules ]]
+path = "_validator.competitions.utils"
+depends_on = []
+
+[[modules ]]
+path = "scripts.create_competition_circuit"
+depends_on = []
+
+[[modules ]]
+path = "deployment_layer.circuit_store"
+depends_on = ["constants", "execution_layer.circuit"]
+
+[[modules ]]
+path = "_validator.competitions.competition_manager"
+depends_on = ["cli_parser", "utils.gc_logging"]
+
+[[modules ]]
+path = "_validator.core.request_pipeline"
+depends_on = ["_validator.pow.proof_of_weights_handler", "constants", "_validator.models.request_type", "_validator.api", "_validator.config", "execution_layer.generic_input", "execution_layer.base_input", "_validator.core.request", "_validator.utils.hash_guard", "protocol", "execution_layer.circuit", "utils.wandb_logger", "_validator.scoring.score_manager", "deployment_layer.circuit_store"]
+
+[[modules ]]
+path = "execution_layer.verified_model_session"
+depends_on = ["execution_layer.generic_input", "execution_layer.base_input", "execution_layer.circuit", "execution_layer.session_storage", "execution_layer.proof_handlers.factory", "execution_layer.proof_handlers.base_handler"]
+
+[[modules ]]
+path = "utils.gc_logging"
+depends_on = []
+
+[[modules ]]
+path = "_validator.core"
+depends_on = []
+
+[[modules ]]
+path = "_validator.competitions.1"
+depends_on = []
+
+[[modules ]]
+path = "_miner.miner_session"
+depends_on = ["utils.wandb_logger", "utils", "utils.rate_limiter", "protocol", "execution_layer.verified_model_session", "execution_layer.generic_input", "cli_parser", "_validator.models.request_type", "constants", "_miner.circuit_manager", "deployment_layer.circuit_store"]
+
+[[modules ]]
+path = "_validator.competitions.services.sota_manager"
+depends_on = ["_validator.competitions.models.neuron", "_validator.competitions.models.sota"]
+
+[[modules ]]
+path = "_validator.scoring.weights"
+depends_on = ["_validator.utils.logging", "constants", "_validator.utils.proof_of_weights"]
+
+[[modules ]]
+path = "_validator.models.miner_response"
+depends_on = ["constants", "deployment_layer.circuit_store", "execution_layer.circuit", "_validator.core.request", "_validator.models.request_type"]
+
+[[modules ]]
+path = "_validator.utils"
+depends_on = []
+
+[[modules ]]
+path = "_validator.api.certificate_manager"
+depends_on = ["constants"]
+
+[[modules ]]
+path = "utils.system"
+depends_on = ["constants"]
+
+[[modules ]]
+path = "utils.metrics_logger"
+depends_on = ["utils.wandb_logger"]
+
+[[modules ]]
+path = "_validator.competitions.models.circuit"
+depends_on = []
+
+[[modules ]]
+path = "execution_layer.proof_handlers.factory"
+depends_on = ["execution_layer.proof_handlers.jolt_handler", "execution_layer.proof_handlers.circom_handler", "execution_layer.circuit", "execution_layer.proof_handlers.ezkl_handler"]
+
+[[modules ]]
+path = "execution_layer.proof_handlers.jolt_handler"
+depends_on = ["execution_layer.proof_handlers.base_handler", "execution_layer.generic_input"]
+
+[[modules ]]
+path = "execution_layer.proof_handlers.base_handler"
+depends_on = ["execution_layer.generic_input"]
+
+[[modules ]]
+path = "execution_layer.proof_handlers.ezkl_handler"
+depends_on = ["execution_layer.generic_input", "execution_layer.proof_handlers.base_handler"]
+
+[[modules ]]
+path = "execution_layer.proof_handlers.circom_handler"
+depends_on = ["utils.pre_flight", "constants", "execution_layer.generic_input", "execution_layer.proof_handlers.base_handler"]
+
+[[modules ]]
+path = "generate_test_input"
+depends_on = ["_validator.models.request_type"]

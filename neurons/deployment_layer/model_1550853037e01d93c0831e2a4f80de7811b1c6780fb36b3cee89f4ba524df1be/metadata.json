@@ -1,0 +1,13 @@
+{
+    "name": "SN2 PoW 1024 Circom",
+    "description": "Generates batched proof of weights based on miner evaluation data from SN2.",
+    "author": "Inference Labs",
+    "version": "0.0.7",
+    "proof_system": "CIRCOM",
+    "netuid": "2",
+    "type": "proof_of_weights",
+    "external_files": {
+        "circuit.zkey": "https://sn2-storage.inferencelabs.com/1550853037e01d93c0831e2a4f80de7811b1c6780fb36b3cee89f4ba524df1be/circuit.zkey"
+    },
+    "benchmark_choice_weight": 0.2
+}

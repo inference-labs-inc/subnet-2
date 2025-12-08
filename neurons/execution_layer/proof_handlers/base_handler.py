@@ -2,6 +2,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+from execution_layer.generic_input import GenericInput
+
 if TYPE_CHECKING:
     from execution_layer.verified_model_session import VerifiedModelSession
 
@@ -35,14 +37,17 @@ class ProofSystemHandler(ABC):
 
     @abstractmethod
     def verify_proof(
-        self, session: VerifiedModelSession, public_data: list[str], proof: dict | str
+        self,
+        session: VerifiedModelSession,
+        validator_inputs: GenericInput,
+        proof: dict | str,
     ) -> bool:
         """
         Verify a proof for the given session.
 
         Args:
             session (VerifiedModelSession): The current handler session.
-            public_data (list[float]): The public data to verify the proof against.
+            validator_inputs (GenericInput): The validator inputs to verify the proof against.
             proof (dict | str): The proof to verify.
         """
 

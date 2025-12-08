@@ -2,31 +2,31 @@
 
 <div align="center">
 
-# Omron Docs
+# Docs
 
 </div>
 
 ## [Setup instructions]
 
-Instructions for setting up your machine to validate or mine on the Omron subnet.
+Instructions for setting up your machine to validate or mine on the subnet.
 
 [View setup instructions →]
 
 ## [Running on Mainnet]
 
-Instructions for mining or validating on Omron mainnet.
+Instructions for mining or validating on mainnet.
 
 [View mainnet instructions →]
 
 ## [Running on Testnet]
 
-Instructions for mining or validating on Omron testnet.
+Instructions for mining or validating on testnet.
 
 [View testnet instructions →]
 
 ## [Running locally (on "staging")]
 
-Instructions for mining or validating on a local bittensor instance, called Omron staging.
+Instructions for mining or validating on a local bittensor instance, called staging.
 
 [View local instructions →]
 
@@ -42,11 +42,23 @@ Instructions for configuring a PM2 ecosystem file which allows for streamlined s
 
 [View PM2 Configuration →]
 
+## [Prometheus and Grafana Configuration]
+
+Instructions for configuring Prometheus and Grafana to monitor your validator.
+
+[View Prometheus and Grafana Configuration →]
+
 ## [Versioning]
 
-Information about Omron's versioning system and how to stay up-to-date with the latest releases.
+Information about the versioning system and how to stay up-to-date with the latest releases.
 
 [View versioning →]
+
+## [Custom Circuit Integrations]
+
+Instructions for how to integrate your own zero-knowledge circuits into the subnet.
+
+[View Custom Circuit Integrations →]
 
 [Setup instructions]: ./shared_setup_steps.md
 [Running on Mainnet]: ./running_on_mainnet.md
@@ -60,6 +72,10 @@ Information about Omron's versioning system and how to stay up-to-date with the 
 [View mainnet instructions →]: ./running_on_mainnet.md
 [View testnet instructions →]: ./running_on_testnet.md
 [View local instructions →]: ./running_on_staging.md
+[Prometheus and Grafana Configuration]: ./prometheus.md
+[View Prometheus and Grafana Configuration →]: ./prometheus.md
+[Custom Circuit Integrations]: ./custom_circuit_integrations.md
+[View Custom Circuit Integrations →]: ./custom_circuit_integrations.md
 [Versioning]: ./versioning.md
 [View versioning →]: ./versioning.md
 [← Back to home]: ../

@@ -58,6 +58,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+model_stats.png
 neurons/execution_layer/temp/*
 # Translations
 *.mo
@@ -133,7 +134,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-omron-venv/
 
 # Spyder project settings
 .spyderproject
@@ -178,3 +178,19 @@ ecosystem.config.js
 neurons/_validator/proof_of_weights/
 **.zkey
 **/target/
+*.ptau
+docs/notebooks/input.json
+docs/notebooks/calibration.json
+docs/notebooks/network.onnx
+docs/notebooks/witness.json
+docs/notebooks/proof.json
+docs/notebooks/model.compiled
+docs/notebooks/settings.json
+docs/notebooks/*.key
+**/witness.json
+**/input.json
+competition_circuit/**
+!competition_circuit
+
+# intellij files
+.idea/

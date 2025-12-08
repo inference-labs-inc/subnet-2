@@ -15,10 +15,6 @@ class CompletedProofOfWeightsItem:
     model_id: str | None = field(default=None)
     netuid: int | None = field(default=None)
 
-    def __post_init__(self):
-        self.signals = self.signals
-        self.proof = self.proof
-
     def to_remark(self) -> dict:
         return {
             "type": "proof_of_weights",

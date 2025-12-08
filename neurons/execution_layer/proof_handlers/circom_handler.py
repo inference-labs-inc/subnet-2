@@ -3,13 +3,13 @@ import os
 
 # trunk-ignore(bandit/B404)
 import subprocess
-import traceback
 
 from typing import TYPE_CHECKING
 import bittensor as bt
 from constants import FIELD_MODULUS
 from utils.pre_flight import LOCAL_SNARKJS_PATH
 from execution_layer.proof_handlers.base_handler import ProofSystemHandler
+from execution_layer.generic_input import GenericInput
 
 if TYPE_CHECKING:
     from execution_layer.verified_model_session import VerifiedModelSession
@@ -19,7 +19,7 @@ class CircomHandler(ProofSystemHandler):
     def gen_input_file(self, session):
         bt.logging.trace("Generating input file")
 
-        data = session.inputs
+        data = session.inputs.to_json()
 
         dir_name = os.path.dirname(session.session_storage.input_path)
         os.makedirs(dir_name, exist_ok=True)
@@ -85,7 +85,8 @@ class CircomHandler(ProofSystemHandler):
                         capture_output=True,
                         text=True,
                     )
-                    return json.load(open(json_path, "r", encoding="utf-8"))
+                    with open(json_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
                 return session.session_storage.witness_path
             bt.logging.error(f"Failed to generate witness. Error: {result.stderr}")
             bt.logging.error(f"Command output: {result.stdout}")
@@ -104,7 +105,7 @@ class CircomHandler(ProofSystemHandler):
     def verify_proof(
         self,
         session: "VerifiedModelSession",
-        public_data: list[str],
+        validator_inputs: GenericInput,
         proof: dict,
     ) -> bool:
         try:
@@ -113,45 +114,38 @@ class CircomHandler(ProofSystemHandler):
             ) as proof_file:
                 json.dump(proof, proof_file)
 
-            # Get public inputs order and sizes from circuit settings
             public_inputs = session.model.settings["public_inputs"]
             input_order = public_inputs["order"]
             input_sizes = public_inputs["sizes"]
 
-            # Replace inputs in public_inputs with session inputs, to ensure
-            # the proof was generated against validator-provided inputs
             with open(session.session_storage.input_path, "r", encoding="utf-8") as f:
-                session_inputs = json.load(f)
+                updated_public_data = json.load(f)
+
+            validator_json = validator_inputs.to_json()
             current_index = 0
-            updated_public_data = public_data.copy()
+
             for input_name in input_order:
-                if input_name in session_inputs:
-                    value = session_inputs[input_name]
-                    if isinstance(value, list):
-                        for i, item in enumerate(value):
-                            if i < input_sizes[input_name]:
-                                new_value = str(
-                                    int(
-                                        item if item >= 0 else FIELD_MODULUS - abs(item)
-                                    )
-                                )
-                                updated_public_data[current_index] = new_value
-                            current_index += 1
-                    else:
-                        new_value = value if value >= 0 else FIELD_MODULUS - abs(value)
-                        updated_public_data[current_index] = new_value
+                if input_name not in validator_json:
+                    current_index += input_sizes[input_name]
+                    continue
+
+                value = validator_json[input_name]
+                if isinstance(value, list):
+                    for i, item in enumerate(value[: input_sizes[input_name]]):
+                        updated_public_data[current_index] = str(
+                            int(item if item >= 0 else FIELD_MODULUS - abs(item))
+                        )
                         current_index += 1
                 else:
-                    current_index += input_sizes[input_name]
+                    updated_public_data[current_index] = (
+                        value if value >= 0 else FIELD_MODULUS - abs(value)
+                    )
+                    current_index += 1
+
             with open(
                 session.session_storage.public_path, "w", encoding="utf-8"
             ) as public_file:
                 json.dump(updated_public_data, public_file)
-
-            bt.logging.trace("Diff between original and updated public_data:")
-            for i, (old, new) in enumerate(zip(public_data, updated_public_data)):
-                if old != new:
-                    bt.logging.trace(f"Index {i}: {old} -> {new}")
 
             result = subprocess.run(
                 [
@@ -165,17 +159,11 @@ class CircomHandler(ProofSystemHandler):
                 capture_output=True,
                 text=True,
             )
-            bt.logging.trace(f"Proof verification stdout: {result.stdout}")
-            bt.logging.trace(f"Proof verification stderr: {result.stderr}")
+
             return "OK!" in result.stdout
-        except subprocess.CalledProcessError as e:
-            bt.logging.error(f"Proof verification failed: {e}")
-            bt.logging.error(f"Proof verification stdout: {e.stdout}")
-            bt.logging.error(f"Proof verification stderr: {e.stderr}")
-            return False
+
         except Exception as e:
-            bt.logging.error(f"Unexpected error during proof verification: {e}")
-            bt.logging.error(f"Error traceback: {traceback.format_exc()}")
+            bt.logging.error(f"Proof verification failed: {str(e)}")
             return False
 
     @staticmethod

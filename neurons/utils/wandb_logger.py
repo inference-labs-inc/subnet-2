@@ -6,10 +6,36 @@ import bittensor as bt
 import psutil
 import torch
 import wandb
+import os
+import threading
+from queue import Queue
+from typing import Dict, Any
 
 ENTITY_NAME = "inferencelabs"
-PROJECT_NAME = "omron"
+PROJECT_NAME = "subnet-2"
 WANDB_ENABLED = False
+_log_queue = Queue()
+_log_thread = None
+
+
+def _log_worker():
+    while True:
+        try:
+            data = _log_queue.get()
+            if data is None:
+                break
+            wandb.log(data)
+        except Exception as e:
+            bt.logging.debug(f"Failed to log to WandB in worker thread: {e}")
+        finally:
+            _log_queue.task_done()
+
+
+def _ensure_log_thread():
+    global _log_thread
+    if _log_thread is None or not _log_thread.is_alive():
+        _log_thread = threading.Thread(target=_log_worker, daemon=True)
+        _log_thread.start()
 
 
 def safe_login(api_key):
@@ -24,83 +50,65 @@ def safe_login(api_key):
         bt.logging.error("Failed to login to WandB. Your run will not be logged.")
 
 
-def safe_init(name, wallet, metagraph, config):
+def safe_init(name=None, wallet=None, metagraph=None, config=None):
     """
     Attempts to initialize WandB, and logs if unsuccessful
     """
     global WANDB_ENABLED
-    if config.disable_wandb:
+    if config and config.disable_wandb:
         bt.logging.warning("WandB logging disabled.")
         WANDB_ENABLED = False
         return
     try:
         bt.logging.debug("Attempting to initialize WandB")
-        config_dict = {
-            "netuid": config.netuid,
-            "hotkey": wallet.hotkey.ss58_address,
-            "coldkey": wallet.coldkeypub.ss58_address,
-            "uid": metagraph.hotkeys.index(wallet.hotkey.ss58_address),
-            "cpu_physical": psutil.cpu_count(logical=False),
-            "cpu_logical": psutil.cpu_count(logical=True),
-            "cpu_freq": psutil.cpu_freq().max,
-            "memory": psutil.virtual_memory().total,
-        }
+        config_dict = {}
+        try:
+            config_dict["coldkey"] = getattr(
+                getattr(wallet, "coldkeypub", None), "ss58_address", None
+            )
+        except Exception as e:
+            bt.logging.debug(f"Failed to get ss58 for coldkeypub: {e}")
+            config_dict["coldkey"] = None
 
-        # Log GPU specs if available
-        if torch.cuda.is_available():
-            bt.logging.info("CUDA is available, attempting to get GPU specs...")
-            try:
-                config_dict["gpu_count"] = torch.cuda.device_count()
-                config_dict["gpu_mem"] = [0] * config_dict["gpu_count"]
-                config_dict["processor_count"] = [0] * config_dict["gpu_count"]
+        if wallet and metagraph and config:
+            config_dict.update(
+                {
+                    "netuid": config.netuid,
+                    "hotkey": wallet.hotkey.ss58_address,
+                    "uid": metagraph.hotkeys.index(wallet.hotkey.ss58_address),
+                    "cpu_physical": psutil.cpu_count(logical=False),
+                    "cpu_logical": psutil.cpu_count(logical=True),
+                    "cpu_freq": psutil.cpu_freq().max,
+                    "memory": psutil.virtual_memory().total,
+                }
+            )
 
-                for i in range(config_dict["gpu_count"]):
-                    props = torch.cuda.get_device_properties(i)
-                    config_dict["gpu_mem"][i] += props.total_memory
-                    config_dict["processor_count"][i] += props.multi_processor_count
-            except Exception as e:
-                bt.logging.error(
-                    f"Failed to retrieve or process CUDA device properties: {e}"
+            # Log GPU specs if available
+            if torch.cuda.is_available():
+                config_dict.update(
+                    {
+                        "gpu_name": torch.cuda.get_device_name(0),
+                        "gpu_memory": torch.cuda.get_device_properties(0).total_memory,
+                    }
                 )
-                config_dict["gpu_count"] = 0
-                config_dict["gpu_mem"] = []
-                config_dict["processor_count"] = []
-
-        # Configure destination project based on target network
-        project_name = PROJECT_NAME
-        if config.dev:
-            project_name = PROJECT_NAME + "-development"
-        elif config.subtensor.network == "test":
-            project_name = PROJECT_NAME + "-testnet"
-
-        # Disable WandB if the user has requested it
-        mode = "online"
-        if config.disable_wandb:
-            mode = "disabled"
-
-        # Setting logging off for miners
-        if name == "Miner":
-            console = "off"
-        else:
-            console = "auto"
-
+        os.environ["WANDB_CONSOLE"] = "off"
         wandb.init(
-            project=project_name,
-            mode=mode,
             entity=ENTITY_NAME,
-            anonymous="allow",
-            name=name + "-" + str(wallet.hotkey.ss58_address),
+            project=PROJECT_NAME
+            + ("-testnet" if config.subtensor.network == "test" else ""),
+            name=name,
             config=config_dict,
-            settings=wandb.Settings(console=console),
+            reinit=True,
         )
         WANDB_ENABLED = True
-        bt.logging.success("Successfully configured WandB.")
+        _ensure_log_thread()
     except Exception as e:
-        bt.logging.warning("Failed to configure WandB. Your run will not be logged.")
-        bt.logging.warning(e)
+        bt.logging.error(e)
+        bt.logging.error("Failed to initialize WandB. Your run will not be logged.")
+        WANDB_ENABLED = False
 
 
-def safe_log(data):
+def safe_log(data: Dict[str, Any]):
     """
     Safely log data to WandB
     - Ignores request to log if WandB isn't configured
@@ -113,7 +121,7 @@ def safe_log(data):
 
     try:
         bt.logging.debug("Attempting to log data to WandB")
-        wandb.log(data)
+        _log_queue.put(data)
     except Exception as e:
-        bt.logging.debug("Failed to log to WandB.")
+        bt.logging.debug("Failed to queue WandB log.")
         bt.logging.debug(e)

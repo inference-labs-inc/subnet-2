@@ -1,10 +1,12 @@
 from __future__ import annotations
+
+import torch
 from rich.console import Console, JustifyMethod
 from rich.table import Table
-import utils.wandb_logger as wandb_logger
-import torch
+
+from utils import wandb_logger
 from _validator.models.miner_response import MinerResponse
-from deployment_layer.circuit_store import circuit_store
+from _validator.competitions.models.neuron import NeuronState
 
 
 def create_and_print_table(
@@ -25,7 +27,7 @@ def create_and_print_table(
         table.add_column(col_name, justify=justify, style=style, no_wrap=True)
     for row in rows:
         table.add_row(*row)
-    console = Console()
+    console = Console(color_system="truecolor")
     console.width = 120
     console.print(table)
 
@@ -39,9 +41,9 @@ def log_tensor_data(title: str, data: torch.Tensor, log_key: str):
         data (torch.Tensor): The tensor data to be logged.
         log_key (str): The key used for logging in Weights & Biases.
     """
-    rows = [[str(uid), str(round(value.item(), 4))] for uid, value in enumerate(data)]
+    rows = [[str(uid), f"{value.item():.6f}"] for uid, value in enumerate(data)]
     create_and_print_table(
-        title, [("uid", "right", "cyan"), (log_key, "right", "magenta")], rows
+        title, [("uid", "right", "cyan"), (log_key, "right", "yellow")], rows
     )
     wandb_logger.safe_log(
         {log_key: {uid: value.item() for uid, value in enumerate(data)}}
@@ -80,7 +82,7 @@ def log_verify_result(results: list[tuple[int, bool]]):
     rows = [[str(uid), str(result)] for uid, result in results]
     create_and_print_table(
         "proof verification result",
-        [("uid", "right", "cyan"), ("Verified?", "right", "magenta")],
+        [("uid", "right", "cyan"), ("Verified?", "right", "green")],
         rows,
     )
     wandb_logger.safe_log(
@@ -96,75 +98,69 @@ def log_responses(responses: list[MinerResponse]):
         responses (list[MinerResponse]): A list of MinerResponse objects to be logged.
     """
     columns = [
-        ("UID", "right", "magenta"),
-        ("Verification Result", "right", "magenta"),
-        ("Response Time", "right", "magenta"),
-        ("Proof Size", "right", "magenta"),
-        (
-            "Circuit Name",
-            "left",
-            "magenta",
-        ),
-        ("Proof System", "left", "magenta"),
+        ("UID", "right", "cyan"),
+        ("Verification Result", "right", "green"),
+        ("Response Time", "right", "yellow"),
+        ("Proof Size", "right", "blue"),
+        ("Circuit Name", "left", "magenta"),
+        ("Proof System", "left", "red"),
     ]
 
     sorted_responses = sorted(responses, key=lambda x: x.uid)
-
-    circuit = (
-        circuit_store.get_circuit(sorted_responses[0].model_id)
-        if len(sorted_responses) > 0
-        else None
-    )
-
     rows = [
         [
             str(response.uid),
             str(response.verification_result),
             str(response.response_time),
             str(response.proof_size),
-            (circuit.metadata.name if circuit is not None else str(response.model_id)),
-            (circuit.metadata.proof_system if circuit is not None else "Unknown"),
+            (response.circuit.metadata.name if response.circuit else "Unknown"),
+            (response.circuit.metadata.proof_system if response.circuit else "Unknown"),
         ]
         for response in sorted_responses
     ]
     create_and_print_table("Responses", columns, rows)
 
-    wandb_log = {"responses": {}}
-    for response in sorted_responses:
-        model_id = response.model_id
-        circuit = circuit_store.get_circuit(model_id)
-        circuit_name = model_id
-        if circuit:
-            circuit_name = circuit.metadata.name
-        if response.uid not in wandb_log["responses"]:
-            wandb_log["responses"][response.uid] = {}
-        wandb_log["responses"][response.uid][circuit_name] = {
-            "verification_result": int(response.verification_result),
-            "response_time": response.response_time,
-            "proof_size": response.proof_size,
+    wandb_log = {
+        "responses": {
+            response.uid: {
+                str(response.circuit): {
+                    "verification_result": int(response.verification_result),
+                    "response_time": response.response_time,
+                    "proof_size": response.proof_size,
+                }
+            }
+            for response in sorted_responses
+            if response.verification_result
         }
+    }
     wandb_logger.safe_log(wandb_log)
 
 
-def log_system_metrics(response_times, verified_count, model_id):
-    circuit = circuit_store.get_circuit(model_id)
-    circuit_name = model_id
-    if circuit:
-        circuit_name = circuit.metadata.name
-    if response_times:
-        max_response_time = max(response_times)
-        min_response_time = min(response_times)
-        mean_response_time = sum(response_times) / len(response_times)
-        median_response_time = sorted(response_times)[len(response_times) // 2]
-        wandb_logger.safe_log(
-            {
-                f"{circuit_name}": {
-                    "max_response_time": max_response_time,
-                    "min_response_time": min_response_time,
-                    "mean_response_time": mean_response_time,
-                    "median_response_time": median_response_time,
-                    "total_responses": len(response_times),
-                    "verified_responses": verified_count,
-                }
-            }
+def log_sota_scores(
+    performance_scores: list[tuple[str, float]],
+    miner_states: dict[str, NeuronState],
+    decay_rate: float = 3.0,
+):
+    table = Table(title="SOTA Scores")
+    table.add_column("Hotkey", style="cyan")
+    table.add_column("Score", justify="right", style="green")
+    table.add_column("Raw Accuracy", justify="right", style="yellow")
+    table.add_column("Proof Size", justify="right", style="blue")
+    table.add_column("Response Time", justify="right", style="magenta")
+
+    for rank, (hotkey, _) in enumerate(performance_scores):
+        rank_score = torch.exp(torch.tensor(-decay_rate * rank)).item()
+        miner_states[hotkey].sota_relative_score = rank_score
+
+        state = miner_states[hotkey]
+        table.add_row(
+            hotkey[:8] + "...",
+            f"{rank_score:.6f}",
+            f"{state.raw_accuracy:.4f}",
+            f"{state.proof_size:.0f}",
+            f"{state.response_time:.4f}",
         )
+
+    console = Console(color_system="truecolor")
+    console.width = 120
+    console.print(table)

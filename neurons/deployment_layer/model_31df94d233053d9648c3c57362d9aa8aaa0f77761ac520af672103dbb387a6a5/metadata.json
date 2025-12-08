@@ -1,0 +1,12 @@
+{
+    "name": "LSTM",
+    "description": "Default LSTM benchmarker model.",
+    "author": "Inference Labs",
+    "version": "0.0.7",
+    "proof_system": "EZKL",
+    "type": "proof_of_computation",
+    "external_files": {
+        "pk.key": "https://sn2-storage.inferencelabs.com/31df94d233053d9648c3c57362d9aa8aaa0f77761ac520af672103dbb387a6a5/pk.key"
+    },
+    "benchmark_choice_weight": 0.2
+}

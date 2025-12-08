@@ -4,25 +4,22 @@ For miners and validators.
 
 ## 1. Install Prerequisites
 
-To mine and validate for the Omron subnet, you'll need to install several prerequisite tools. For convenience, we offer a shell script to install all of the required tools automatically. To run the script, use the below command. Some dependencies will be installed automatically upon starting the miner or validator, as part of pre-flight checks. Otherwise, to manually install the necessary tools, please find links to all relevant installation documentation below.
+To mine and validate for the subnet, you'll need to install several prerequisite tools. For convenience, we offer a shell script to install all of the required tools automatically. To run the script, use the below command. Some dependencies will be installed automatically upon starting the miner or validator, as part of pre-flight checks. Otherwise, to manually install the necessary tools, please find links to all relevant installation documentation below.
 
 > [!IMPORTANT]
 > When starting the miner or validator, you must monitor initial startup logs. If any dependencies are missing, the script will automatically attempt to install them. It _may_ prompt you to restart your system if necessary. Once all dependencies are installed, the pre-flight checks will pass without any further action required from you.
 
 ```console
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/omron-subnet/main/setup.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/main/setup.sh)"
 ```
 
-| Tool        | Description                                                                                               |
-| ----------- | --------------------------------------------------------------------------------------------------------- |
-| [`NodeJS`]  | A JavaScript runtime that is widely used for building web applications.                                   |
-| [`pm2`]     | A process manager for Node.js applications that is used to run and manage applications in the background. |
-| [`Python`]  | A programming language that is widely used for scientific computing and data analysis.                    |
-| [`pip`]     | A package manager for Python that is used to install and manage Python packages.                          |
-| [`btcli`]   | A command-line interface for interacting with the Bittensor network.                                      |
-| [`rust`]    | A systems programming language focused on safety, speed, and concurrency.                                 |
-| [`nightly`] | The nightly version of Rust, required for jolt.                                                           |
-| [`jolt`]    | A zkVM for RISC-V, used by several models on the Omron subnet.                                            |
+| Tool       | Description                                                                                               |
+| ---------- | --------------------------------------------------------------------------------------------------------- |
+| [`NodeJS`] | A JavaScript runtime that is widely used for building web applications.                                   |
+| [`pm2`]    | A process manager for Node.js applications that is used to run and manage applications in the background. |
+| [`Python`] | A programming language that is widely used for scientific computing and data analysis.                    |
+| [`pip`]    | A package manager for Python that is used to install and manage Python packages.                          |
+| [`btcli`]  | A command-line interface for interacting with the Bittensor network.                                      |
 
 ## 2. Create a new wallet
 
@@ -70,6 +67,3 @@ To run your miner or validator, follow the instructions linked below based on th
 [`Python`]: https://www.python.org/downloads/
 [`pip`]: https://pip.pypa.io/en/stable/installation/
 [`btcli`]: https://docs.bittensor.com/getting-started/installation
-[`rust`]: https://www.rust-lang.org/tools/install
-[`jolt`]: https://github.com/a16z/jolt#installation
-[`nightly`]: https://rust-lang.github.io/rustup/concepts/channels.html#working-with-nightly-rust

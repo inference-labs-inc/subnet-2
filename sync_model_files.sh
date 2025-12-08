@@ -26,7 +26,7 @@ for MODEL_FOLDER in $(find "$MODEL_DIR" -maxdepth 1 -type d -name 'model_*'); do
         fi
         # If the file doesn't exist we'll pull from the URL specified
         echo "Downloading ${url} to ${MODEL_FOLDER}/${key}..."
-        curl -o "${MODEL_FOLDER}/${key}" "${url}"
+        aria2c ${url} -d "${MODEL_FOLDER}" -o "${key}"
         # If the file doesn't download then we'll skip this file and echo the error
         if [ $? -ne 0 ]; then
             echo "Error: Failed to download ${url} to ${MODEL_FOLDER}/${key}"

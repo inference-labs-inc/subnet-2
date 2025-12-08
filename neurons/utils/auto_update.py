@@ -1,16 +1,15 @@
-import os
 import subprocess
 import git
-import hashlib
-import sys
-from packaging import version
-
-# trunk-ignore(pylint/E0611)
-from bittensor import logging
+import time
+import requests
 from typing import Optional
-from __init__ import __version__  # type: ignore
-from .system import restart_app
+from constants import REPO_URL, ONE_MINUTE
 from .wandb_logger import safe_log
+
+from bittensor import logging
+
+from .system import restart_app
+import cli_parser
 
 TARGET_BRANCH = "main"
 
@@ -21,113 +20,109 @@ class AutoUpdate:
     """
 
     def __init__(self):
+        self.last_check_time = 0
         try:
-            self.repo = git.Repo(search_parent_directories=True)
-            self.update_requirements = False
+            if not cli_parser.config.no_auto_update:
+                self.repo = git.Repo(search_parent_directories=True)
         except Exception as e:
             logging.exception("Failed to initialize the repository", e)
 
-    def get_remote_status(self) -> Optional[str]:
+    def get_local_latest_tag(self) -> Optional[git.Tag]:
         """
-        Fetch the remote version string from the neurons/__init__.py file in the current repository
+        Get the latest tag from the local git repository
         """
         try:
-            # Perform a git fetch to ensure we have the latest remote information
-            self.repo.remotes.origin.fetch(kill_after_timeout=5)
-
-            # Check if the requirements.txt file has changed
-            local_requirements_path = os.path.join(
-                os.path.dirname(__file__), "..", "..", "requirements.txt"
-            )
-            with open(local_requirements_path, "r", encoding="utf-8") as file:
-                local_requirements_hash = hashlib.sha256(
-                    file.read().encode("utf-8")
-                ).hexdigest()
-            requirements_blob = (
-                self.repo.remote().refs[TARGET_BRANCH].commit.tree / "requirements.txt"
-            )
-            remote_requirements_content = requirements_blob.data_stream.read().decode(
-                "utf-8"
-            )
-            remote_requirements_hash = hashlib.sha256(
-                remote_requirements_content.encode("utf-8")
-            ).hexdigest()
-            self.update_requirements = (
-                local_requirements_hash != remote_requirements_hash
-            )
-
-            # Get version number from remote
-            blob = (
-                self.repo.remote().refs[TARGET_BRANCH].commit.tree
-                / "neurons"
-                / "__init__.py"
-            )
-            lines = blob.data_stream.read().decode("utf-8").split("\n")
-
-            for line in lines:
-                if line.startswith("__version__"):
-                    version_info = line.split("=")[1].strip(" \"'").replace('"', "")
-                    return version_info
+            tags = sorted(self.repo.tags, key=lambda t: t.commit.committed_datetime)
+            current_tag: Optional[git.Tag] = tags[-1] if tags else None
+            if current_tag:
+                logging.info(f"Current tag: {current_tag.name}")
+            return current_tag
         except Exception as e:
-            logging.exception("Failed to get remote file content for version check", e)
+            logging.exception("Failed to get the current tag", e)
             return None
 
-    def check_version_updated(self):
+    def get_latest_release_tag(self):
         """
-        Compares local and remote versions and returns True if the remote version is higher
+        Get the latest release tag from the GitHub repository
         """
-        remote_version = self.get_remote_status()
-        if not remote_version:
-            logging.error("Failed to get remote version, skipping version check")
-            return False
+        try:
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            api_url = f"{REPO_URL.replace('github.com', 'api.github.com/repos')}/releases/latest"
+            response = requests.get(api_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            latest_release = response.json()
+            return latest_release["tag_name"]
+        except requests.RequestException as e:
+            logging.exception("Failed to fetch the latest release from GitHub.", e)
+            return None
 
-        local_version = __version__
+    def attempt_packages_update(self):
+        """
+        Attempt to update the packages by installing the requirements from the requirements.txt file
+        """
+        logging.info("Attempting to update packages...")
 
-        local_version_obj = version.parse(local_version)
-        remote_version_obj = version.parse(remote_version)
-        safe_log(
-            {
-                "local_version": str(local_version_obj),
-                "remote_version": str(remote_version_obj),
-            }
-        )
-
-        logging.info(
-            f"Version check - remote_version: {remote_version}, local_version: {local_version}"
-        )
-
-        if remote_version_obj > local_version_obj:
-            logging.info(
-                f"Remote version ({remote_version}) is higher "
-                f"than local version ({local_version}), automatically updating..."
+        try:
+            subprocess.check_call(
+                [
+                    "uv",
+                    "sync",
+                ],
+                timeout=ONE_MINUTE,
             )
-            return True
-        return False
+            logging.success("Successfully updated packages.")
+        except Exception as e:
+            logging.exception("Failed to update requirements", e)
 
-    def attempt_update(self):
+    def update_to_latest_release(self) -> bool:
         """
-        Attempt to update the repository by pulling the latest changes from the remote repository
+        Update the repository to the latest release
         """
         try:
 
-            origin = self.repo.remotes.origin
-
             if self.repo.is_dirty(untracked_files=False):
-                logging.error(
+                logging.warning(
                     "Current changeset is dirty. Please commit changes, discard changes or update manually."
                 )
                 return False
-            try:
-                logging.trace("Attempting to pull latest changes...")
-                origin.pull(kill_after_timeout=10)
-                logging.success("Successfully pulled the latest changes")
-                return True
-            except git.GitCommandError as e:
-                logging.exception(
-                    "Automatic update failed due to conflicts. Attempting to handle merge conflicts...",
-                    e,
+
+            latest_release_tag_name = self.get_latest_release_tag()
+            if not latest_release_tag_name:
+                logging.error("Failed to fetch the latest release tag.")
+                return False
+
+            current_tag = self.get_local_latest_tag()
+
+            safe_log(
+                {
+                    "local_version": current_tag.name,
+                    "remote_version": latest_release_tag_name,
+                }
+            )
+
+            if current_tag.name == latest_release_tag_name:
+                if self.repo.head.commit.hexsha == current_tag.commit.hexsha:
+                    logging.info("Your version is up to date.")
+                    return False
+                logging.info(
+                    "Latest release is checked out, however your commit is different."
                 )
-                return self.handle_merge_conflicts()
+            else:
+                logging.trace(
+                    f"Attempting to check out the latest release: {latest_release_tag_name}..."
+                )
+                self.repo.remote().fetch(quiet=True, tags=True, force=True)
+                if latest_release_tag_name not in [tag.name for tag in self.repo.tags]:
+                    logging.error(
+                        f"Latest release tag {latest_release_tag_name} not found in the repository."
+                    )
+                    return False
+
+            self.repo.git.checkout(latest_release_tag_name)
+            logging.success(
+                f"Successfully checked out the latest release: {latest_release_tag_name}"
+            )
+            return True
 
         except Exception as e:
             logging.exception(
@@ -137,72 +132,20 @@ class AutoUpdate:
 
         return False
 
-    def handle_merge_conflicts(self):
-        """
-        Attempt to automatically resolve any merge conflicts that may have arisen
-        """
-        try:
-            self.repo.git.reset("--merge")
-            origin = self.repo.remotes.origin
-            current_branch = self.repo.active_branch
-            origin.pull(current_branch.name)
-
-            for item in self.repo.index.diff(None):
-                file_path = item.a_path
-                logging.info(f"Resolving conflict in file: {file_path}")
-                self.repo.git.checkout("--theirs", file_path)
-            self.repo.index.commit("Resolved merge conflicts automatically")
-            logging.info(
-                "Merge conflicts resolved, repository updated to remote state."
-            )
-            logging.info("✅ Successfully updated")
-            return True
-        except git.GitCommandError as e:
-            logging.exception(
-                "Failed to resolve merge conflicts, automatic update cannot proceed. Please manually pull and update.",
-                e,
-            )
-            return False
-
-    def attempt_package_update(self):
-        """
-        Attempt to update the packages by installing the requirements from the requirements.txt file
-        """
-        logging.info("Attempting to update packages...")
-
-        try:
-            repo = git.Repo(search_parent_directories=True)
-            repo_path: str = (
-                str(repo.working_tree_dir) if repo.working_tree_dir is not None else ""
-            )
-
-            requirements_path = os.path.join(repo_path, "requirements.txt")
-
-            python_executable = sys.executable
-            # trunk-ignore(bandit/B603)
-            subprocess.check_call(
-                [python_executable, "-m", "pip", "install", "-r", requirements_path],
-                timeout=60,
-            )
-            logging.success("Successfully updated packages.")
-        except Exception as e:
-            logging.exception("Failed to update requirements", e)
-
     def try_update(self):
         """
         Automatic update entrypoint method
         """
-        if self.repo.head.is_detached or self.repo.active_branch.name != "main":
-            logging.debug("Not on the main branch, skipping auto-update")
+
+        if time.time() - self.last_check_time < 300:
             return
 
-        if not self.check_version_updated():
+        self.last_check_time = time.time()
+
+        if not self.update_to_latest_release():
             return
 
-        if not self.attempt_update():
-            return
+        self.attempt_packages_update()
 
-        if self.update_requirements:
-            self.attempt_package_update()
-
+        logging.info("Restarting the application...")
         restart_app()

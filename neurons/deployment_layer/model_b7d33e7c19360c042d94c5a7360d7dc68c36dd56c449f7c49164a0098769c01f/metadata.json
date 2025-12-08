@@ -1,9 +1,0 @@
-{
-    "name": "SN27 PoW 256",
-    "description": "The validator's reward model for SN27, designed to batch a single round of weight updates (256 changes per proof).",
-    "author": "Inference Labs",
-    "version": "0.0.4",
-    "proof_system": "JOLT",
-    "netuid": 27,
-    "external_files": {}
-}
