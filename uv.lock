@@ -598,7 +598,7 @@ wheels = [
 [[package]]
 name = "dsperse"
 version = "1.0.1"
-source = { git = "https://github.com/inference-labs-inc/dsperse.git?rev=dsperse-integration#150a835580d9d32066dfb34cce38c49331691b60" }
+source = { git = "https://github.com/inference-labs-inc/dsperse.git?rev=dsperse-integration#8a8204d366c87f9d39cdc2abc4bd5560bdfa75da" }
 dependencies = [
     { name = "colorama" },
     { name = "ezkl" },

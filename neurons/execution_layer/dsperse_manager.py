@@ -1,11 +1,13 @@
 import json
 import random
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
 from bittensor import logging
 from dsperse.src.run.runner import Runner
+from dsperse.src.prover import Prover
 
 import cli_parser
 from _validator.api import ValidatorAPI
@@ -41,7 +43,6 @@ class DSperseManager:
 
         slices: list[dict] = self.run_dsperse(circuit, run_uid)
         self.runs[run_uid] = slices
-        dslice_requests = []
 
         for slice in slices:
             with open(slice["input_file"], "r") as input_file:
@@ -52,10 +53,7 @@ class DSperseManager:
                         outputs=json.load(output_file),
                         slice_num=slice["slice"],
                         run_uid=run_uid,
-                    ),
-
-        # Logic to create DSlice requests goes here
-        return dslice_requests
+                    )
 
     def run_dsperse(self, circuit: Circuit, run_uid: str) -> list[dict]:
         # Create temporary folder for run metadata
@@ -93,3 +91,58 @@ class DSperseManager:
             }
             for slice_num, r in slice_results.items()
         ]
+
+    def prove_slice(
+        self, circuit_id: str, slice_num: str, inputs: dict, outputs: dict
+    ) -> dict | None:
+        """
+        Generate proof for a given slice.
+        """
+        circuit = next((c for c in self.circuits if c.id == circuit_id), None)
+        if circuit is None:
+            raise ValueError(f"Circuit with ID {circuit_id} not found.")
+        model_dir = Path(circuit.paths.external_base_path) / f"slice_{slice_num}"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            input_file = tmp_path / "input.json"
+            output_file = tmp_path / "output.json"
+
+            with open(input_file, "w") as f:
+                json.dump(inputs, f)
+
+            with open(output_file, "w") as f:
+                json.dump(outputs, f)
+
+            prover = Prover()
+            result = prover.prove(
+                run_path=tmp_path,
+                model_dir=model_dir,
+                output_path=tmp_path,
+            )
+            logging.info(f"Got proof generation result. Result: {result}")
+
+            execution_results = result.get("execution_chain", {}).get(
+                "execution_results", []
+            )
+            execution_result = execution_results[0] if execution_results else None
+            if not execution_result:
+                logging.error(f"No execution results found in proof generation result.")
+                return None
+
+            slice_id = execution_result.get("slice_id", None)
+            proof_execution = execution_result.get("proof_execution", {})
+            success = proof_execution.get("success", False)
+            proof_generation_time = proof_execution.get("proof_generation_time", None)
+            proof_data = None
+            if proof_execution.get("proof_file", None):
+                with open(proof_execution["proof_file"], "r") as proof_file:
+                    proof_data = json.load(proof_file)
+
+            return {
+                "slice_id": slice_id,
+                "success": success,
+                "proof_generation_time": proof_generation_time,
+                "proof_data": proof_data,
+            }

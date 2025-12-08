@@ -480,12 +480,16 @@ class MinerSession:
         bt.logging.info(
             f"Handling DSlice slice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
         )
-        # from dsperse.src.prover import Prover
-        # prover = Prover()
-        # result = prover.prove(run_path, data_path, getattr(args, 'proof_output', None))
-        # self.dsperse_manager
+
+        result = self.dsperse_manager.prove_slice(
+            circuit_id=data.circuit,
+            slice_num=data.slice_num,
+            inputs=data.inputs,
+            outputs=data.outputs,
+        )
+
         # Implementation for handling DSlice slice requests goes here
-        return JSONResponse(content={"error": "Not implemented"}, status_code=200)
+        return JSONResponse(content=result, status_code=200)
 
     def queryZkProof(self, data: QueryZkProof) -> JSONResponse:
         """
