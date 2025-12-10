@@ -1,6 +1,7 @@
 import json
 import random
 import tempfile
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -195,6 +196,37 @@ class DSperseManager:
         success = verification_execution.get("success", False)
         slice_data.success = success
         return success
+
+    def check_run_completion(
+        self, run_uid: str, remove_completed: bool = False
+    ) -> bool:
+        """
+        Check if all slices in a run have been successfully verified.
+        """
+        if run_uid not in self.runs:
+            raise ValueError(f"Run UID {run_uid} not found.")
+
+        slices: list[DSliceData] = self.runs[run_uid]
+        all_verified = all(
+            slice_data.success
+            for slice_data in slices
+            if slice_data.success is not None
+        )
+        if all_verified and remove_completed:
+            self.cleanup_run(run_uid)
+        return all_verified
+
+    def cleanup_run(self, run_uid: str):
+        """
+        Cleanup run data and delete run folder for a given run UID.
+        """
+        if run_uid not in self.runs:
+            raise ValueError(f"Cannot cleanup run data. Run UID {run_uid} not found.")
+        logging.info(f"Cleaning up run data for run UID {run_uid}...")
+        run_path = self.runs[run_uid][0].input_file.parent.parent
+        if run_path.exists() and run_path.is_dir():
+            shutil.rmtree(run_path)
+        del self.runs[run_uid]
 
     def _parse_dsperse_result(self, result: dict, execution_type: str) -> dict:
         execution_results = result.get("execution_chain", {}).get(

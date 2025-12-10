@@ -88,6 +88,9 @@ class ResponseProcessor:
                     slice_num=response.dsperse_slice_num,
                     proof=response.proof_content,
                 )
+                self.dsperse_manager.check_run_completion(
+                    run_uid=response.dsperse_run_uid, remove_completed=True
+                )
             else:
                 if not response.public_json:
                     raise ValueError(
