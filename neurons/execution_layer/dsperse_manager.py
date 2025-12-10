@@ -207,11 +207,7 @@ class DSperseManager:
             raise ValueError(f"Run UID {run_uid} not found.")
 
         slices: list[DSliceData] = self.runs[run_uid]
-        all_verified = all(
-            slice_data.success
-            for slice_data in slices
-            if slice_data.success is not None
-        )
+        all_verified = all(slice_data.success for slice_data in slices)
         if all_verified and remove_completed:
             self.cleanup_run(run_uid)
         return all_verified
