@@ -52,6 +52,9 @@ from utils import AutoUpdate, clean_temp_files, with_rate_limit
 from utils.gc_logging import gc_log_competition_metrics
 from utils.gc_logging import log_responses as gc_log_responses
 
+# Set to True for synchronous request processing (easier debugging)
+DEBUG_SYNC_MODE = os.environ.get("DEBUG_SYNC_MODE", "").lower() in ("1", "true", "yes")
+
 
 class ValidatorLoop:
     """
@@ -76,6 +79,7 @@ class ValidatorLoop:
         self.competition_to_validator_queue = MPQueue()  # Messages FROM competition
         self.current_concurrency = MAX_CONCURRENT_REQUESTS
         self.capacity_manager = CapacityManager(self.config, self.httpx_client)
+        self.dsperse_manager = DSperseManager()
         try:
             competition_id = 1
             bt.logging.info("Initializing competition module...")
@@ -106,6 +110,7 @@ class ValidatorLoop:
         self.response_processor = ResponseProcessor(
             self.config.metagraph,
             self.score_manager,
+            self.dsperse_manager,
             self.config.user_uid,
             self.config.wallet.hotkey,
         )
@@ -121,7 +126,6 @@ class ValidatorLoop:
         self.request_pipeline = RequestPipeline(
             self.config, self.score_manager, self.api
         )
-        self.dsperse_manager = DSperseManager()
 
         self.request_queue = asyncio.Queue()
         self.active_tasks: dict[int, asyncio.Task] = {}
@@ -363,13 +367,24 @@ class ValidatorLoop:
                             uid
                         )
                         if request:
-                            task = asyncio.create_task(
-                                self._process_single_request(request)
-                            )
-                            self.active_tasks[uid] = task
-                            task.add_done_callback(
-                                lambda t, uid=uid: self._handle_completed_task(t, uid)
-                            )
+                            if DEBUG_SYNC_MODE:
+                                # Synchronous mode for easier debugging -- NOT FOR PRODUCTION
+                                bt.logging.debug(
+                                    f"[SYNC MODE] Processing request for UID {uid}"
+                                )
+                                await self._process_single_request(request)
+                                self.processed_uids.add(uid)
+                            else:
+                                # Asynchronous mode for normal operation
+                                task = asyncio.create_task(
+                                    self._process_single_request(request)
+                                )
+                                self.active_tasks[uid] = task
+                                task.add_done_callback(
+                                    lambda t, uid=uid: self._handle_completed_task(
+                                        t, uid
+                                    )
+                                )
 
                 await asyncio.sleep(0)
             except Exception as e:
@@ -459,13 +474,22 @@ class ValidatorLoop:
             )
             if response is None:
                 return request
-            processed_response: (
-                MinerResponse | None
-            ) = await asyncio.get_event_loop().run_in_executor(
-                self.response_thread_pool,
-                self.response_processor.process_single_response,
-                response,
-            )
+
+            if DEBUG_SYNC_MODE:
+                # Direct sync call for easier debugging
+                processed_response = self.response_processor.process_single_response(
+                    response
+                )
+            else:
+                # Run in thread pool to avoid blocking event loop
+                processed_response: (
+                    MinerResponse | None
+                ) = await asyncio.get_event_loop().run_in_executor(
+                    self.response_thread_pool,
+                    self.response_processor.process_single_response,
+                    response,
+                )
+
             if processed_response:
                 await self._handle_response(processed_response)
         except Exception as e:

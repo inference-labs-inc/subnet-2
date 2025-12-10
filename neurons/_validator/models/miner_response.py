@@ -43,6 +43,8 @@ class MinerResponse:
     proof_content: dict | str | None = None
     public_json: list[str] | None = None
     request_type: RequestType | None = None
+    dsperse_slice_num: int | None = None
+    dsperse_run_uid: str | None = None
     raw: dict | None = None
     error: str | None = None
     save: bool = False
@@ -125,6 +127,8 @@ class MinerResponse:
                 public_json=public_json,
                 raw=deserialized_response,
                 save=response.save,
+                dsperse_slice_num=response.dsperse_slice_num,
+                dsperse_run_uid=response.dsperse_run_uid,
             )
         except json.JSONDecodeError as e:
             traceback.print_exc()

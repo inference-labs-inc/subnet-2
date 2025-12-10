@@ -67,7 +67,7 @@ class RequestPipeline:
 
         axon: AxonInfo = self.config.metagraph.axons[uid]
 
-        return Request(
+        request = Request(
             uid=uid,
             ip=axon.ip,
             port=axon.port,
@@ -83,6 +83,13 @@ class RequestPipeline:
             request_hash=request_hash,
             save=save,
         )
+
+        if isinstance(request_data, DSliceProofGenerationDataModel):
+            # Add dsperse specific fields
+            request.dsperse_slice_num = request_data.slice_num
+            request.dsperse_run_uid = request_data.run_uid
+
+        return request
 
     def _prepare_queued_requests(self, filtered_uids: list[int]) -> list[Request]:
         external_request = self.api.stacked_requests_queue.pop()

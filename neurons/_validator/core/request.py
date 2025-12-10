@@ -22,6 +22,8 @@ class Request:
     circuit: Circuit | None = None
     data: dict[str, Any] | None = None
     inputs: GenericInput | None = None
+    dsperse_slice_num: int | None = None
+    dsperse_run_uid: str | None = None
     request_hash: str | None = None
     response_time: float | None = None
     deserialized: dict[str, object] | None = None

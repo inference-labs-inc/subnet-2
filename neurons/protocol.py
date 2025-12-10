@@ -1,11 +1,12 @@
 from __future__ import annotations
+
+import os
 from typing import Any, ClassVar, Optional
 
 import bittensor as bt
-from pydantic import BaseModel
-
 import toml
 from execution_layer.circuit import ProofSystem
+from pydantic import BaseModel
 
 
 class QueryZkProof(BaseModel):
@@ -94,7 +95,10 @@ class QueryForCapacities(BaseModel):
         return self.capacities
 
     @staticmethod
-    def from_config(config_path: str = "miner.config.toml") -> dict[str, int]:
+    def from_config(config_path: str | None = None) -> dict[str, int]:
+        if config_path is None:
+            # Use env var if available, otherwise fall back to default config path
+            config_path = os.environ.get("MINER_CIRCUITS_CONFIG", "miner.config.toml")
         try:
             with open(config_path, "r") as f:
                 config = toml.load(f)

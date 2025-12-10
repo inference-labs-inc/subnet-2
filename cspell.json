@@ -12,6 +12,8 @@
     "CIRCOM",
     "circuitized",
     "coldkey",
+    "dslice",
+    "dsperse",
     "dtype",
     "ezkl",
     "fastapi",
