@@ -14,6 +14,7 @@ import bittensor as bt
 import httpx
 from bittensor.core.chain_data import AxonInfo
 
+import cli_parser
 from _validator.api import ValidatorAPI
 from _validator.api.client import query_miner
 from _validator.competitions.competition import Competition
@@ -260,7 +261,7 @@ class ValidatorLoop:
             try:
                 metrics_to_log = self.competition.get_summary_for_logging()
 
-                if metrics_to_log:
+                if metrics_to_log and not cli_parser.config.disable_metric_logging:
                     metrics_to_log["validator_key"] = (
                         self.config.wallet.hotkey.ss58_address
                     )
@@ -293,30 +294,31 @@ class ValidatorLoop:
         if self.recent_responses:
             console_log_responses(self.recent_responses)
 
-            try:
-                block = (
-                    self.config.metagraph.block.item()
-                    if self.config.metagraph.block is not None
-                    else 0
-                )
-                _ = await asyncio.get_event_loop().run_in_executor(
-                    self.thread_pool,
-                    lambda: gc_log_responses(
-                        self.config.metagraph,
-                        self.config.wallet.hotkey,
-                        self.config.user_uid,
-                        self.recent_responses,
-                        (
-                            time.time() - self.last_response_time
-                            if hasattr(self, "last_response_time")
-                            else 0
+            if not cli_parser.config.disable_metric_logging:
+                try:
+                    block = (
+                        self.config.metagraph.block.item()
+                        if self.config.metagraph.block is not None
+                        else 0
+                    )
+                    _ = await asyncio.get_event_loop().run_in_executor(
+                        self.thread_pool,
+                        lambda: gc_log_responses(
+                            self.config.metagraph,
+                            self.config.wallet.hotkey,
+                            self.config.user_uid,
+                            self.recent_responses,
+                            (
+                                time.time() - self.last_response_time
+                                if hasattr(self, "last_response_time")
+                                else 0
+                            ),
+                            block,
+                            self.score_manager.scores,
                         ),
-                        block,
-                        self.score_manager.scores,
-                    ),
-                )
-            except Exception as e:
-                bt.logging.error(f"Error in GC logging: {e}")
+                    )
+                except Exception as e:
+                    bt.logging.error(f"Error in GC logging: {e}")
 
             self.last_response_time = time.time()
             self.recent_responses = []
