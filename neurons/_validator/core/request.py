@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from _validator.models.base_rpc_request import QueuedRequestDataModel
 from _validator.models.request_type import RequestType
 from execution_layer.circuit import Circuit
 from execution_layer.generic_input import GenericInput
@@ -24,7 +25,8 @@ class Request:
     inputs: GenericInput | None = None
     dsperse_slice_num: int | None = None
     dsperse_run_uid: str | None = None
+    # next one is used only for rescheduling DSlice and RWR requests in case of failure
+    queued_request: QueuedRequestDataModel | None = None
     request_hash: str | None = None
     response_time: float | None = None
-    deserialized: dict[str, object] | None = None
     save: bool = False

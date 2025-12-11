@@ -1,11 +1,11 @@
 import hashlib
 import json
 import time
-import traceback
 
 import bittensor as bt
 import httpx
 
+from _validator.models.miner_response import MinerResponse
 from _validator.core.request import Request
 from utils.signatures import Headers
 
@@ -14,44 +14,31 @@ async def query_miner(
     httpx_client: httpx.AsyncClient,
     request: Request,
     wallet: bt.wallet,
-) -> Request | None:
-    try:
-        # Use httpx.URL for safer URL construction
-        url = httpx.URL(
-            scheme="http",
-            host=request.ip,
-            port=request.port,
-            path=f"/{request.url_path.lstrip('/')}",
-        )
-        content = json.dumps(request.data)
+) -> MinerResponse:
+    # Use httpx.URL for safer URL construction
+    url = httpx.URL(
+        scheme="http",
+        host=request.ip,
+        port=request.port,
+        path=f"/{request.url_path.lstrip('/')}",
+    )
+    content = json.dumps(request.data)
 
-        headers = get_headers(request, content, wallet)
+    headers = get_headers(request, content, wallet)
 
-        start_time = time.perf_counter()
-        response = await httpx_client.post(
-            url=url,
-            content=content,
-            timeout=request.circuit.timeout if request.circuit else None,
-            headers=headers,
-        )
-        response.raise_for_status()
-        end_time = time.perf_counter()
+    start_time = time.perf_counter()
+    response = await httpx_client.post(
+        url=url,
+        content=content,
+        timeout=request.circuit.timeout if request.circuit else None,
+        headers=headers,
+    )
+    response.raise_for_status()
+    end_time = time.perf_counter()
 
-        result = response.json()
-        request.response_time = end_time - start_time
-        request.deserialized = result
-        return request
+    request.response_time = end_time - start_time
 
-    except httpx.InvalidURL:
-        bt.logging.warning(
-            f"Ignoring UID as there is not a valid URL: {request.uid}. {request.ip}:{request.port}"
-        )
-        return None
-
-    except httpx.HTTPError as e:
-        bt.logging.warning(f"Failed to query miner for UID: {request.uid}. Error: {e}")
-        traceback.print_exc()
-        return None
+    return MinerResponse.from_raw_response(request, response.json())
 
 
 def get_headers(request: Request, content: str, wallet: bt.wallet) -> dict:

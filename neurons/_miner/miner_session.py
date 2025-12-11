@@ -478,7 +478,7 @@ class MinerSession:
         Handle DSlice proof generation requests from validators.
         """
         bt.logging.info(
-            f"Handling DSlice slice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
+            f"Handling DSlice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
         )
 
         result = self.dsperse_manager.prove_slice(

@@ -27,7 +27,6 @@ class DSliceData:
     input_file: Path
     output_file: Path
     proof_file: Path | None = None
-    proof_generation_time: float | None = None
     success: bool | None = None
 
 
@@ -52,7 +51,7 @@ class DSperseManager:
         Each DSlice request corresponds to one slice of a DSperse model.
         """
         if not self.circuits:
-            # there are already requests stacked, do not generate new DSlice requests
+            # No DSperse circuits available, skip request generation
             return []
 
         circuit = random.choice(self.circuits)
@@ -80,7 +79,7 @@ class DSperseManager:
         run_metadata_path = Path(cli_parser.config.dsperse_run_dir) / f"run_{run_uid}"
         run_metadata_path.mkdir(parents=True, exist_ok=True)
         save_metadata_path = run_metadata_path / "metadata.json"
-        logging.info(f"Running DSperse model. Run metadata path: {run_metadata_path}")
+        logging.debug(f"Running DSperse model. Run metadata path: {run_metadata_path}")
 
         # Generate benchmarking input JSON
         input_json_path = run_metadata_path / "input.json"
@@ -92,7 +91,7 @@ class DSperseManager:
         results = runner.run(
             input_json_path=input_json_path, slice_path=circuit.paths.external_base_path
         )
-        logging.info(
+        logging.debug(
             f"DSperse run completed. Results data saved at {save_metadata_path}"
         )
         slice_results = results["slice_results"]
@@ -140,7 +139,7 @@ class DSperseManager:
                 model_dir=model_dir,
                 output_path=tmp_path,
             )
-            logging.info(f"Got proof generation result. Result: {result}")
+            logging.debug(f"Got proof generation result. Result: {result}")
 
             slice_id, proof_execution = self._parse_dsperse_result(result, "proof")
 
@@ -190,7 +189,7 @@ class DSperseManager:
             model_path=Path(circuit.paths.external_base_path) / f"slice_{slice_num}",
         )
 
-        logging.info(f"Got proof verification result. Result: {result}")
+        logging.debug(f"Got proof verification result. Result: {result}")
 
         _, verification_execution = self._parse_dsperse_result(result, "verification")
         success = verification_execution.get("success", False)

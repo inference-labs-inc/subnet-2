@@ -10,6 +10,7 @@ from bittensor.core.chain_data import AxonInfo
 from _validator.api import ValidatorAPI
 from _validator.config import ValidatorConfig
 from _validator.core.request import Request
+from _validator.models.base_rpc_request import QueuedRequestDataModel
 from _validator.models.request_type import RequestType
 from _validator.pow.proof_of_weights_handler import ProofOfWeightsHandler
 from _validator.scoring.score_manager import ScoreManager
@@ -41,7 +42,9 @@ class RequestPipeline:
     def _check_and_create_request(
         self,
         uid: int,
-        request_data: ProofOfWeightsDataModel | QueryZkProof,
+        request_data: (
+            ProofOfWeightsDataModel | QueryZkProof | DSliceProofGenerationDataModel
+        ),
         circuit: Circuit,
         request_type: RequestType,
         request_hash: str | None = None,
@@ -89,58 +92,53 @@ class RequestPipeline:
             request.dsperse_slice_num = request_data.slice_num
             request.dsperse_run_uid = request_data.run_uid
 
+        if isinstance(request_data, QueuedRequestDataModel):
+            # DSlice and RWR requests may need to be rescheduled, so keep the original queued request
+            request.queued_request = request_data
+
         return request
 
-    def _prepare_queued_requests(self, filtered_uids: list[int]) -> list[Request]:
+    def _prepare_queued_request(self, uid: int) -> Request:
         external_request = self.api.stacked_requests_queue.pop()
-        requests = []
+        request = None
 
-        for uid in filtered_uids:
-            try:
-                request_data, save = self.get_request_data(
-                    external_request.request_type,
-                    external_request.circuit,
-                    external_request,
-                )
-                request = self._check_and_create_request(
-                    uid=uid,
-                    request_data=request_data,
-                    circuit=external_request.circuit,
-                    request_type=external_request.request_type,
-                    request_hash=external_request.hash,
-                    save=save,
-                )
-                if request:
-                    requests.append(request)
-            except Exception as e:
-                bt.logging.error(f"Error preparing request for UID {uid}: {e}")
-                traceback.print_exc()
-                self.api.set_request_result(
-                    external_request.hash,
-                    {"success": False, "error": "Error preparing request"},
-                )
-                continue
-        return requests
-
-    def _prepare_benchmark_requests(self, filtered_uids: list[int]) -> list[Request]:
-        circuit = self.select_circuit_for_benchmark()
-        if circuit is None:
-            bt.logging.error("No circuit selected")
-            return []
-
-        requests = []
-        for uid in filtered_uids:
-            request_data, save = self.get_request_data(RequestType.BENCHMARK, circuit)
+        try:
+            request_data, save = self.get_request_data(
+                external_request.request_type,
+                external_request.circuit,
+                external_request,
+            )
             request = self._check_and_create_request(
                 uid=uid,
                 request_data=request_data,
-                circuit=circuit,
-                request_type=RequestType.BENCHMARK,
+                circuit=external_request.circuit,
+                request_type=external_request.request_type,
+                request_hash=external_request.hash,
                 save=save,
             )
-            if request:
-                requests.append(request)
-        return requests
+        except Exception as e:
+            bt.logging.error(f"Error preparing request for UID {uid}: {e}")
+            traceback.print_exc()
+            self.api.set_request_result(
+                external_request.hash,
+                {"success": False, "error": "Error preparing request"},
+            )
+        return request
+
+    def _prepare_benchmark_request(self, uid: int) -> Request:
+        circuit = self.select_circuit_for_benchmark()
+        if circuit is None:
+            bt.logging.error("No circuit selected")
+            return None
+
+        request_data, save = self.get_request_data(RequestType.BENCHMARK, circuit)
+        return self._check_and_create_request(
+            uid=uid,
+            request_data=request_data,
+            circuit=circuit,
+            request_type=RequestType.BENCHMARK,
+            save=save,
+        )
 
     def select_circuit_for_benchmark(self) -> Circuit:
         """
@@ -227,20 +225,3 @@ class RequestPipeline:
             ),
             False,
         )
-
-    def prepare_single_request(self, uid: int) -> Request | None:
-        """
-        Prepare a single request for a specific UID.
-
-        Args:
-            uid (int): The UID to prepare a request for.
-
-        Returns:
-            Request | None: The prepared request, or None if preparation failed.
-        """
-        if self.api.stacked_requests_queue:
-            requests = self._prepare_queued_requests([uid])
-        else:
-            requests = self._prepare_benchmark_requests([uid])
-
-        return requests[0] if requests else None

@@ -40,9 +40,6 @@ def to_tensor(value, dtype):
     return torch.tensor(value, dtype=dtype)
 
 
-dummy_miner_response = MinerResponse.empty()
-
-
 @dataclass
 class ProofOfWeightsItem:
     maximum_score: torch.Tensor

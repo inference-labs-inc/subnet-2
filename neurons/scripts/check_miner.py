@@ -125,8 +125,6 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    response = MinerResponse.from_raw_response(response)
-
     bt.logging.trace(f"Miner query response: {response}")
     if response and not response.error:
         bt.logging.trace(f"Status Message: {response.error}")

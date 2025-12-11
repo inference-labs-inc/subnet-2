@@ -13,6 +13,7 @@
     "circuitized",
     "coldkey",
     "dslice",
+    "dslices",
     "dsperse",
     "dtype",
     "ezkl",
@@ -43,6 +44,7 @@
     "uvicorn",
     "venv",
     "wandb",
+    "winddown",
     "zkproof"
   ],
   "ignoreWords": [],
