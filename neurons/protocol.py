@@ -124,9 +124,3 @@ class DSliceProofGenerationDataModel(BaseModel):
     outputs: Optional[Any] = None
     slice_num: Optional[str] = None
     run_uid: Optional[str] = None
-
-    # def deserialize(self) -> str | None:
-    #     """
-    #     unpack proof
-    #     """
-    #     return self.proof

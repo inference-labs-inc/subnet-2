@@ -15,7 +15,6 @@ from dsperse.src.verifier import Verifier
 from execution_layer.circuit import Circuit, CircuitType
 
 import cli_parser
-from _validator.api import ValidatorAPI
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.request_type import RequestType
 
@@ -52,7 +51,7 @@ class DSperseManager:
         """
         if not self.circuits:
             # No DSperse circuits available, skip request generation
-            return []
+            return
 
         circuit = random.choice(self.circuits)
         run_uid = datetime.now().strftime("%Y%m%d%H%M%S%f")
