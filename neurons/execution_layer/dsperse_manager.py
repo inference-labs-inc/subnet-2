@@ -11,14 +11,17 @@ from typing import Iterable
 import ezkl
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
+from dsperse.src.compile.compiler import Compiler
 from dsperse.src.prover import Prover
 from dsperse.src.run.runner import Runner
 from dsperse.src.verifier import Verifier
+from dsperse.src.slice.utils.converter import Converter
 from execution_layer.circuit import Circuit, CircuitType
 
 import cli_parser
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.request_type import RequestType
+from utils.pre_flight import SYNC_LOG_PREFIX
 
 
 @dataclass
@@ -278,21 +281,9 @@ class DSperseManager:
         """
         Retrieve settings for a specific slice from its metadata.
         """
-        metadata_path = (
-            Path(circuit.paths.external_base_path)
-            / f"slice_{slice_num}"
-            / "metadata.json"
+        metadata = self.get_slice_metadata(
+            Path(circuit.paths.external_base_path) / f"slice_{slice_num}"
         )
-        if not metadata_path.exists():
-            raise ValueError(
-                f"Metadata file not found for slice {slice_num} of circuit {circuit.id}."
-            )
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-        if not isinstance(metadata, dict):
-            raise ValueError(
-                f"Invalid metadata format for slice {slice_num} of circuit {circuit.id}."
-            )
 
         settings_path = (
             metadata.get("slices", [{}])[0]
@@ -331,3 +322,81 @@ class DSperseManager:
         execution = execution_result.get(f"{execution_type}_execution", {})
 
         return slice_id, execution
+
+    @classmethod
+    def get_slice_metadata(cls, slice_path: Path | str) -> dict:
+        """
+        Retrieve metadata for a specific DSperse slice.
+        """
+        slice_path = Path(slice_path)
+        metadata_path = slice_path / "metadata.json"
+        if not metadata_path.exists():
+            raise ValueError(f"Metadata file not found at {metadata_path}.")
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+        if not isinstance(metadata, dict):
+            raise ValueError(f"Invalid metadata format at {metadata_path}.")
+        return metadata
+
+    @classmethod
+    def extract_dslices(cls, model_path: Path | str) -> None:
+        """
+        Extract DSperse slice files in a folder if there are any.
+        """
+        model_path = Path(model_path)
+        # dslice_files = glob.glob(os.path.join(model_path, "slice_*.dslice"))
+        dslice_files = list(model_path.glob("slice_*.dslice"))
+        if not dslice_files:
+            return
+        logging.debug(SYNC_LOG_PREFIX + f"Extracting DSlices for model {model_path}...")
+        for dslice_file in dslice_files:
+            # extracted_path = os.path.splitext(dslice_file)[0]
+            extracted_path = dslice_file.with_suffix("")  # remove .dslice suffix
+            if extracted_path.exists():
+                # Extracted folder already exists, but the .dslice file is not deleted
+                # that means we probably interrupted extraction previously. Let's extract again
+                shutil.rmtree(extracted_path)
+            logging.info(
+                SYNC_LOG_PREFIX
+                + f"Extracting DSlice file {dslice_file} to {extracted_path}..."
+            )
+            Converter.convert(
+                path=dslice_file,
+                output_type="dirs",
+                output_path=extracted_path,
+                cleanup=True,
+            )
+            # `cleanup=True` doesn't work for some reason, so we manually delete the .dslice file
+            dslice_file.unlink(missing_ok=True)
+
+    @classmethod
+    def compile_dslices(cls, model_path: Path | str) -> None:
+        """
+        Compile DSperse slices in a folder if there are any.
+        """
+        logging.debug(
+            f"Checking compilation status for DSperse slices in {model_path.name}..."
+        )
+        model_path = Path(model_path)
+        compiler = Compiler()
+        for slice_dir in model_path.glob("slice_*"):
+            if not slice_dir.is_dir():
+                continue
+
+            metadata = cls.get_slice_metadata(slice_dir)
+            is_compiled = (
+                metadata.get("slices", [{}])[0]
+                .get("compilation", {})
+                .get("ezkl", {})
+                .get("compiled", False)
+            )
+            if is_compiled:
+                logging.debug(
+                    f"DSlice {slice_dir.name} is already compiled. Skipping compilation."
+                )
+                continue
+
+            logging.info(
+                f"Compiling DSlice {slice_dir.name} in model {model_path.name}..."
+            )
+            compiler.compile(model_path=slice_dir)
