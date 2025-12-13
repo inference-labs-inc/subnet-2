@@ -617,6 +617,7 @@ class ValidatorLoop:
         await self.httpx_client.aclose()
         stop_prometheus_logging()
         clean_temp_files()
+        self.dsperse_manager.total_cleanup()
         if self.competition:
             self.competition.competition_thread.stop()
             if hasattr(self.competition.circuit_manager, "close"):

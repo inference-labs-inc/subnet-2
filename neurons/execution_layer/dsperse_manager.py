@@ -265,6 +265,15 @@ class DSperseManager:
             shutil.rmtree(run_path)
         del self.runs[run_uid]
 
+    def total_cleanup(self):
+        """
+        Cleanup all run data and delete all run folders.
+        Used during validator shutdown to free up disk space.
+        """
+        logging.info("Performing total cleanup of all DSperse run data...")
+        for run_uid in list(self.runs.keys()):
+            self.cleanup_run(run_uid)
+
     def _get_slice_settings(self, circuit: Circuit, slice_num: str) -> dict:
         """
         Retrieve settings for a specific slice from its metadata.
