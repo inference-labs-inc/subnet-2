@@ -4,9 +4,11 @@ import tempfile
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Iterable
 
+import ezkl
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
 from dsperse.src.prover import Prover
@@ -27,6 +29,34 @@ class DSliceData:
     output_file: Path
     proof_file: Path | None = None
     success: bool | None = None
+
+
+class EZKLInputType(Enum):
+    F16 = ezkl.PyInputType.F16
+    F32 = ezkl.PyInputType.F32
+    F64 = ezkl.PyInputType.F64
+    Int = ezkl.PyInputType.Int
+    Bool = ezkl.PyInputType.Bool
+    TDim = ezkl.PyInputType.TDim
+
+
+def ensure_proof_inputs(proof: dict, inputs: list[list], model_settings: dict) -> dict:
+    """
+    Ensures that the proof JSON contains the correct input instances.
+    That should prevent miners from cheating by reusing proofs with different inputs.
+    """
+    scale_map = model_settings.get("model_input_scales", [])
+    type_map = model_settings.get("input_types", [])
+    instances = [
+        ezkl.float_to_felt(x, scale_map[i], EZKLInputType[type_map[i]].value)
+        for i, arr in enumerate(inputs)
+        for x in arr
+    ]
+    proof["instances"] = [instances[:] + proof["instances"][0][len(instances) :]]
+
+    proof["transcript_type"] = "EVM"
+
+    return proof
 
 
 class DSperseManager:
@@ -166,22 +196,37 @@ class DSperseManager:
         """
         Verify proof for a given slice.
         """
+        # do we have run data for this run UID?
         if run_uid not in self.runs:
             raise ValueError(f"Run UID {run_uid} not found.")
 
+        # get slice run data from stored run data
         slice_data: DSliceData = next(
             (s for s in self.runs[run_uid] if s.slice_num == slice_num), None
         )
         if slice_data is None:
             raise ValueError(f"Slice data for slice number {slice_num} not found.")
 
+        # get model settings
         circuit = self._get_circuit_by_id(slice_data.circuit_id)
+        with open(circuit.paths.settings, "r") as f:
+            model_settings = json.load(f)
+
+        # prepare inputs
+        with open(slice_data.input_file, "r") as f:
+            input_obj = circuit.input_handler(
+                request_type=RequestType.DSLICE, data=json.load(f)
+            )
+
+        # ensure proof has correct inputs
+        proof = ensure_proof_inputs(proof, input_obj.to_array(), model_settings)
 
         proof_file_path = slice_data.input_file.parent / "proof.json"
         with open(proof_file_path, "w") as proof_file:
             json.dump(proof, proof_file)
         slice_data.proof_file = proof_file_path
 
+        # time to verify!
         verifier = Verifier()
         result = verifier.verify(
             run_path=slice_data.input_file.parent,
