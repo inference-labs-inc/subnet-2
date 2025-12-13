@@ -10,7 +10,6 @@ from bittensor.core.chain_data import AxonInfo
 from _validator.api import ValidatorAPI
 from _validator.config import ValidatorConfig
 from _validator.core.request import Request
-from _validator.models.base_rpc_request import QueuedRequestDataModel
 from _validator.models.request_type import RequestType
 from _validator.pow.proof_of_weights_handler import ProofOfWeightsHandler
 from _validator.scoring.score_manager import ScoreManager

@@ -278,7 +278,6 @@ def download_dslices(target_dir: Path, dslices: list[dict]):
     bt.logging.debug(
         SYNC_LOG_PREFIX + f"Checking DSlices for model {target_dir.name}..."
     )
-    dslice_num = 0
     for dslice_num, url in enumerate(dslices):
         if not url:  # Skip if URL is missing
             bt.logging.warning(
