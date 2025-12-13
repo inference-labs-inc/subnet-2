@@ -207,11 +207,7 @@ class DSperseManager:
         if slice_data is None:
             raise ValueError(f"Slice data for slice number {slice_num} not found.")
 
-        # get model settings
         circuit = self._get_circuit_by_id(slice_data.circuit_id)
-        with open(circuit.paths.settings, "r") as f:
-            model_settings = json.load(f)
-
         # prepare inputs
         with open(slice_data.input_file, "r") as f:
             input_obj = circuit.input_handler(
@@ -219,7 +215,9 @@ class DSperseManager:
             )
 
         # ensure proof has correct inputs
-        proof = ensure_proof_inputs(proof, input_obj.to_array(), model_settings)
+        proof = ensure_proof_inputs(
+            proof, input_obj.to_array(), self._get_slice_settings(circuit, slice_num)
+        )
 
         proof_file_path = slice_data.input_file.parent / "proof.json"
         with open(proof_file_path, "w") as proof_file:
@@ -266,6 +264,50 @@ class DSperseManager:
         if run_path.exists() and run_path.is_dir():
             shutil.rmtree(run_path)
         del self.runs[run_uid]
+
+    def _get_slice_settings(self, circuit: Circuit, slice_num: str) -> dict:
+        """
+        Retrieve settings for a specific slice from its metadata.
+        """
+        metadata_path = (
+            Path(circuit.paths.external_base_path)
+            / f"slice_{slice_num}"
+            / "metadata.json"
+        )
+        if not metadata_path.exists():
+            raise ValueError(
+                f"Metadata file not found for slice {slice_num} of circuit {circuit.id}."
+            )
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+        if not isinstance(metadata, dict):
+            raise ValueError(
+                f"Invalid metadata format for slice {slice_num} of circuit {circuit.id}."
+            )
+
+        settings_path = (
+            metadata.get("slices", [{}])[0]
+            .get("compilation", {})
+            .get("ezkl", {})
+            .get("files", {})
+            .get("settings", None)
+        )
+        if not settings_path:
+            raise ValueError(
+                f"Settings file path not found in metadata for slice {slice_num} of circuit {circuit.id}."
+            )
+        settings_path = (
+            Path(circuit.paths.external_base_path)
+            / f"slice_{slice_num}"
+            / settings_path
+        )
+        if not settings_path.exists() or not settings_path.is_file():
+            raise ValueError(
+                f"Settings file not found at {settings_path} for slice {slice_num} of circuit {circuit.id}."
+            )
+        with open(settings_path, "r") as f:
+            settings = json.load(f)
+        return settings
 
     def _parse_dsperse_result(self, result: dict, execution_type: str) -> dict:
         execution_results = result.get("execution_chain", {}).get(

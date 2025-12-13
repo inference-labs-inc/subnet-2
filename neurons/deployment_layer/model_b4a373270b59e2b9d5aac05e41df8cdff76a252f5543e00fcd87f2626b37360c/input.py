@@ -42,3 +42,7 @@ class CircuitInput(BaseInput):
         No processing needs to take place, as all inputs are randomized.
         """
         return data
+
+    def to_array(self) -> list:
+        """Converts the data to array format"""
+        return self.data["input_data"]

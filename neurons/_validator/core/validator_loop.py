@@ -549,7 +549,12 @@ class ValidatorLoop:
         """
         try:
             request_hash = response.external_request_hash
-            if not response.verification_result:
+            if response.verification_result:
+                bt.logging.info(
+                    f"Successfully verified proof from UID {response.uid} "
+                    f"for circuit {response.circuit}. Request type: {response.request_type.name}"
+                )
+            else:
                 response.response_time = (
                     response.circuit.evaluation_data.maximum_response_time
                 )
