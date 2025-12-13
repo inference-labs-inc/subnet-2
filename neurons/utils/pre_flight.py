@@ -268,32 +268,31 @@ def download_dslices(model_hash: str, dslices: list[dict]):
         return
     bt.logging.debug(SYNC_LOG_PREFIX + f"Checking DSlices for model {model_hash}...")
     dslice_num = 0
-    for dslice in dslices:
-        url = dslice.get("url")
+    for dslice_num, url in enumerate(dslices):
         if not url:  # Skip if URL is missing
             bt.logging.warning(
                 SYNC_LOG_PREFIX
                 + f"DSlice URL missing for slice {dslice_num} of {model_hash}, skipping..."
             )
-        else:
-            # dslice files are just zip archives,
-            # but later on we extract them to a folder named after the file without extension
-            # so in case that folder already exists, we skip downloading and extracting again
-            file_path = os.path.join(
-                cli_parser.config.full_path_models,
-                model_hash,
-                f"slice_{dslice_num}.dslice",
+            continue
+
+        # dslice files are just zip archives,
+        # but later on we extract them to a folder named after the file without extension
+        # so in case that folder already exists, we skip downloading and extracting again
+        file_path = os.path.join(
+            cli_parser.config.full_path_models,
+            model_hash,
+            f"slice_{dslice_num}.dslice",
+        )
+        extracted_path = os.path.splitext(file_path)[0]
+        # XXX: maybe we need to have some kind of versioning here and verification of the files?
+        if os.path.isdir(extracted_path) or os.path.isfile(file_path):
+            bt.logging.debug(
+                SYNC_LOG_PREFIX
+                + f"Dsperse file for {model_hash} already downloaded, skipping..."
             )
-            extracted_path = os.path.splitext(file_path)[0]
-            # XXX: maybe we need to have some kind of versioning here and verification of the files?
-            if os.path.isdir(extracted_path) or os.path.isfile(file_path):
-                bt.logging.debug(
-                    SYNC_LOG_PREFIX
-                    + f"Dsperse file for {model_hash} already downloaded, skipping..."
-                )
-            else:
-                download_file(url, file_path)
-        dslice_num += 1
+        else:
+            download_file(url, file_path)
 
 
 def extract_dslices(model_hash: str):

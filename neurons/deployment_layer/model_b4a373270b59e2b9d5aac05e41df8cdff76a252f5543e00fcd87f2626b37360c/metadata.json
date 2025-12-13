@@ -1,11 +1,17 @@
 {
-    "name": "DSPerse test NET model",
-    "description": "Model for testing DSPerse integration.",
-    "author": "Inference Labs",
-    "version": "0.0.1",
-    "proof_system": "EZKL",
-    "type": "dsperse_proof_generation",
-    "external_files": {},
-    "dslices": [],
-    "benchmark_choice_weight": 0.2
+  "name": "DSPerse test NET model",
+  "description": "Model for testing DSPerse integration.",
+  "author": "Inference Labs",
+  "version": "0.0.1",
+  "proof_system": "EZKL",
+  "type": "dsperse_proof_generation",
+  "external_files": {},
+  "dslices": [
+    "https://sn2-storage.inferencelabs.com/7a3a83ce7366ef53354231cbf3b92824c658c4800b0c242572ac8c3e33e4d6e2.dslice",
+    "https://sn2-storage.inferencelabs.com/4de41b429bda66a524579207e15c44e0907c88258299218863969c1404c9cacd.dslice",
+    "https://sn2-storage.inferencelabs.com/50b9f4e7e0aa926cf4109060052db5b0174e0b6f046bcc427bedd21171040eeb.dslice",
+    "https://sn2-storage.inferencelabs.com/67196b8cf4aee00a3efef58f7dba1f2e09e20484f03c94cf5d68eb1755682545.dslice",
+    "https://sn2-storage.inferencelabs.com/b10e4b497eaf4a301119dd336a75804c4e38f7355cd7b6683a8538e5692c62e0.dslice"
+  ],
+  "benchmark_choice_weight": 0.2
 }
