@@ -17,7 +17,9 @@ class MinerResponse:
 
     uid: int
     verification_result: bool
-    input_hash: str
+    # hash of the original request from external API user
+    # we use it to report back results to `ValidatorAPI`` class. It sends the results to the user.
+    external_request_hash: str
     response_time: float
     proof_size: int
     circuit: Circuit
@@ -93,7 +95,7 @@ class MinerResponse:
             circuit=request.circuit,
             proof_content=proof_content,
             request_type=request.request_type,
-            input_hash=request.request_hash,
+            external_request_hash=request.external_request_hash,
             public_json=public_json,
             inputs=request.inputs,
             raw=deserialized_response,
@@ -122,7 +124,7 @@ class MinerResponse:
             "proof_size": self.proof_size,
             "response_duration": self.response_time,
             "is_verified": self.verification_result,
-            "input_hash": self.input_hash,
+            "external_request_hash": self.external_request_hash,
             "request_type": self.request_type.value,
             "error": self.error,
             "save": self.save,

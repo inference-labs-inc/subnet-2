@@ -47,7 +47,7 @@ class RequestPipeline:
         ),
         circuit: Circuit,
         request_type: RequestType,
-        request_hash: str | None = None,
+        external_request_hash: str | None = None,
         save: bool = False,
     ) -> Request | None:
         """Check hash and create request if valid."""
@@ -58,13 +58,15 @@ class RequestPipeline:
                 input_data = request_data.inputs
             else:
                 input_data = request_data.query_input
-            self.hash_guard.check_hash(input_data)
-        except Exception as e:
+            # Check hash to prevent duplicate requests
+            guard_hash = self.hash_guard.check_hash(input_data)
+        except ValueError as e:
             bt.logging.error(f"Hash already exists: {e}")
             safe_log({"hash_guard_error": 1})
             if request_type == RequestType.RWR:
                 self.api.set_request_result(
-                    request_hash, {"success": False, "error": "Hash already exists"}
+                    external_request_hash,
+                    {"success": False, "error": "Hash already exists"},
                 )
             return None
 
@@ -83,7 +85,8 @@ class RequestPipeline:
             # 'inputs' are used for verification later on validator side:
             #   I suppose `RWR` passed here to prevent new data generation
             inputs=GenericInput(RequestType.RWR, input_data),
-            request_hash=request_hash,
+            external_request_hash=external_request_hash,
+            guard_hash=guard_hash,
             save=save,
         )
 
@@ -91,10 +94,6 @@ class RequestPipeline:
             # Add dsperse specific fields
             request.dsperse_slice_num = request_data.slice_num
             request.dsperse_run_uid = request_data.run_uid
-
-        if isinstance(request_data, QueuedRequestDataModel):
-            # DSlice and RWR requests may need to be rescheduled, so keep the original queued request
-            request.queued_request = request_data
 
         return request
 
@@ -113,16 +112,19 @@ class RequestPipeline:
                 request_data=request_data,
                 circuit=external_request.circuit,
                 request_type=external_request.request_type,
-                request_hash=external_request.hash,
+                external_request_hash=external_request.hash,
                 save=save,
             )
+            if request:
+                request.queued_request = external_request
         except Exception as e:
             bt.logging.error(f"Error preparing request for UID {uid}: {e}")
             traceback.print_exc()
-            self.api.set_request_result(
-                external_request.hash,
-                {"success": False, "error": "Error preparing request"},
-            )
+            if external_request.request_type == RequestType.RWR:
+                self.api.set_request_result(
+                    external_request.hash,
+                    {"success": False, "error": "Error preparing request"},
+                )
         return request
 
     def _prepare_benchmark_request(self, uid: int) -> Request:

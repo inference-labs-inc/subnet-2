@@ -18,7 +18,15 @@ class HashGuard:
         self.hash_set = set()
         self.hash_queue = deque(maxlen=self.MAX_HASHES)
 
-    def check_hash(self, input: BaseInput) -> None:
+    def remove_hash(self, hash_value: str) -> None:
+        """
+        Remove a hash from the guard.
+        """
+        if hash_value in self.hash_set:
+            self.hash_set.remove(hash_value)
+            self.hash_queue.remove(hash_value)
+
+    def check_hash(self, input: BaseInput) -> str:
 
         if isinstance(input, BaseInput):
             input = input.to_json()
@@ -35,7 +43,6 @@ class HashGuard:
         hash_value = hashlib.sha256(json_str.encode()).hexdigest()
 
         if hash_value in self.hash_set:
-            bt.logging.error(f"Hash already exists: {hash_value}. Inputs: {input}")
             raise ValueError("Hash already exists")
 
         if len(self.hash_queue) == self.MAX_HASHES:
@@ -44,3 +51,5 @@ class HashGuard:
 
         self.hash_set.add(hash_value)
         self.hash_queue.append(hash_value)
+
+        return hash_value

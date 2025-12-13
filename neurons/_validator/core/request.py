@@ -27,6 +27,11 @@ class Request:
     dsperse_run_uid: str | None = None
     # next one is used only for rescheduling DSlice and RWR requests in case of failure
     queued_request: QueuedRequestDataModel | None = None
-    request_hash: str | None = None
+    # `external_request_hash` is the hash of the original request from external API user
+    # we use it to report back results to `ValidatorAPI`` class. It sends the results to the user.
+    external_request_hash: str | None = None
+    # `guard_hash` is the hash used by HashGuard to prevent duplicate requests
+    # It's calculated from the inputs of the request.
+    guard_hash: str | None = None
     response_time: float | None = None
     save: bool = False

@@ -534,6 +534,9 @@ class ValidatorLoop:
         bt.logging.info(
             f"Rescheduling {request.request_type.name} request for UID {request.uid}"
         )
+
+        # Remove hash from HashGuard to allow retry
+        self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
         # Re-add to the stacked requests queue for retry with a different miner
         self.api.stacked_requests_queue.append(request.queued_request)
 
@@ -545,7 +548,7 @@ class ValidatorLoop:
             response (MinerResponse): The processed response to handle.
         """
         try:
-            request_hash = response.input_hash
+            request_hash = response.external_request_hash
             if not response.verification_result:
                 response.response_time = (
                     response.circuit.evaluation_data.maximum_response_time
@@ -577,7 +580,7 @@ class ValidatorLoop:
                     proof=[response.proof_content],
                     metadata={
                         "circuit": str(response.circuit),
-                        "request_hash": response.input_hash,
+                        "request_hash": request_hash,
                         "miner_uid": response.uid,
                     },
                     hotkey=self.config.wallet.hotkey,
