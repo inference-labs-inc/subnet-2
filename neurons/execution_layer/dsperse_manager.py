@@ -309,14 +309,15 @@ class DSperseManager:
             settings = json.load(f)
         return settings
 
-    def _parse_dsperse_result(self, result: dict, execution_type: str) -> dict:
+    def _parse_dsperse_result(
+        self, result: dict, execution_type: str
+    ) -> tuple[str | None, dict]:
         execution_results = result.get("execution_chain", {}).get(
             "execution_results", []
         )
-        execution_result = execution_results[0] if execution_results else None
+        execution_result = execution_results[0] if execution_results else {}
         if not execution_result:
             logging.error(f"No execution results found in proof generation result.")
-            return None
 
         slice_id = execution_result.get("slice_id", None)
         execution = execution_result.get(f"{execution_type}_execution", {})
@@ -374,10 +375,10 @@ class DSperseManager:
         """
         Compile DSperse slices in a folder if there are any.
         """
+        model_path = Path(model_path)
         logging.debug(
             f"Checking compilation status for DSperse slices in {model_path.name}..."
         )
-        model_path = Path(model_path)
         compiler = Compiler()
         for slice_dir in model_path.glob("slice_*"):
             if not slice_dir.is_dir():

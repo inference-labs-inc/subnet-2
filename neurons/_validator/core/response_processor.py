@@ -83,6 +83,7 @@ class ResponseProcessor:
                 slice_num=response.dsperse_slice_num,
                 proof=response.proof_content,
             )
+            # Check if the entire DSperse run is complete and clean up if so:
             self.dsperse_manager.check_run_completion(
                 run_uid=response.dsperse_run_uid, remove_completed=True
             )
@@ -90,6 +91,7 @@ class ResponseProcessor:
             if not response.public_json:
                 raise ValueError(f"Public signals not found in for UID: {response.uid}")
             inference_session = VerifiedModelSession(
+                # hardcoded request type as RWR because we don't want to regenerate inputs
                 GenericInput(RequestType.RWR, response.public_json),
                 response.circuit,
             )

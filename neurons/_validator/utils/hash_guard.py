@@ -22,7 +22,7 @@ class HashGuard:
         """
         Remove a hash from the guard.
         """
-        if hash_value in self.hash_set:
+        if hash_value and hash_value in self.hash_set:
             self.hash_set.remove(hash_value)
             self.hash_queue.remove(hash_value)
 

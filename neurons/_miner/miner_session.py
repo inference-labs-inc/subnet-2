@@ -357,19 +357,26 @@ class MinerSession:
         """
         Handle DSlice proof generation requests from validators.
         """
-        bt.logging.info(
-            f"Handling DSlice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
-        )
+        try:
+            bt.logging.info(
+                f"Handling DSlice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
+            )
 
-        result = self.dsperse_manager.prove_slice(
-            circuit_id=data.circuit,
-            slice_num=data.slice_num,
-            inputs=data.inputs,
-            outputs=data.outputs,
-        )
+            result = self.dsperse_manager.prove_slice(
+                circuit_id=data.circuit,
+                slice_num=data.slice_num,
+                inputs=data.inputs,
+                outputs=data.outputs,
+            )
 
-        # Implementation for handling DSlice slice requests goes here
-        return JSONResponse(content=result, status_code=200)
+            # Implementation for handling DSlice slice requests goes here
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            bt.logging.error(f"Error handling DSlice request: {str(e)}")
+            traceback.print_exc()
+            return JSONResponse(
+                content={"error": "An internal error occurred."}, status_code=500
+            )
 
     def queryZkProof(self, data: QueryZkProof) -> JSONResponse:
         """

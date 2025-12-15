@@ -25,7 +25,7 @@ class RequestType(Enum):
             return "Benchmark"
         elif self == RequestType.RWR:
             return "Real World Request"
-        elif self == RequestType.DSPERSE:
+        elif self == RequestType.DSLICE:
             return "DSperse Request (one slice)"
         else:
             raise ValueError(f"Unknown request type: {self}")

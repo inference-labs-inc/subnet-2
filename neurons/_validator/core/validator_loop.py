@@ -531,8 +531,14 @@ class ValidatorLoop:
             )
             return
 
+        if not request.queued_request:
+            bt.logging.debug(
+                f"No queued request found for rescheduling for UID {request.uid}"
+            )
+            return
+
         bt.logging.info(
-            f"Rescheduling {request.request_type.name} request for UID {request.uid}"
+            f"Rescheduling {request.request_type.name} request for UID {request.uid}..."
         )
 
         # Remove hash from HashGuard to allow retry
