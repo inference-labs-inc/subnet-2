@@ -89,7 +89,7 @@ class ResponseProcessor:
             )
         else:
             if not response.public_json:
-                raise ValueError(f"Public signals not found in for UID: {response.uid}")
+                raise ValueError(f"Public signals not found for UID: {response.uid}")
             inference_session = VerifiedModelSession(
                 # hardcoded request type as RWR because we don't want to regenerate inputs
                 GenericInput(RequestType.RWR, response.public_json),

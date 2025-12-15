@@ -369,7 +369,6 @@ class MinerSession:
                 outputs=data.outputs,
             )
 
-            # Implementation for handling DSlice slice requests goes here
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
             bt.logging.error(f"Error handling DSlice request: {str(e)}")
