@@ -6,18 +6,10 @@ from _validator.models.miner_response import MinerResponse
 from _validator.utils.logging import log_scores
 from _validator.utils.proof_of_weights import ProofOfWeightsItem
 from _validator.utils.uid import get_queryable_uids
-from constants import (
-    SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
-    NUM_MINER_GROUPS,
-    RESET_PENALTY_ENABLED,
-)
+from constants import SINGLE_PROOF_OF_WEIGHTS_MODEL_ID
 from execution_layer.circuit import CircuitEvaluationItem
-from utils.epoch import get_current_epoch_info
 from _validator.competitions.competition import Competition
-from _validator.scoring.ema_manager import EMAManager
 from _validator.scoring.pow_manager import ProofOfWeightsManager
-from _validator.scoring.reset_manager import ResetManager
-from utils.shuffle import get_shuffled_uids
 
 
 class ScoreManager:
@@ -42,14 +34,8 @@ class ScoreManager:
         self.score_path = score_path
         self.scores = self.init_scores()
         self.competition = competition
-        self.shuffled_uids = None
-        self.last_shuffle_epoch = -1
-        self.seed_block_num = None
-        self.block_hash = None
 
         self.pow_manager = ProofOfWeightsManager(self.metagraph, self.scores)
-        self.reset_manager = ResetManager(self.metagraph)
-        self.ema_manager = EMAManager(self.scores, self.metagraph)
 
     def init_scores(self) -> torch.Tensor:
         """Initialize or load existing scores."""
@@ -97,7 +83,6 @@ class ScoreManager:
                 ]
             )
             self.scores = torch.cat((self.scores, new_scores))
-            self.reset_manager.reset_tracker = [True for _ in range(len(uids))]
 
     def _try_store_scores(self):
         """Attempt to store scores to disk."""
@@ -144,47 +129,6 @@ class ScoreManager:
             queryable_uids = set(get_queryable_uids(self.metagraph))
 
         circuit = response.circuit
-
-        current_block = self.metagraph.subtensor.get_current_block()
-        current_epoch, _, _ = get_current_epoch_info(
-            current_block, self.metagraph.netuid
-        )
-
-        (
-            self.shuffled_uids,
-            self.last_shuffle_epoch,
-            new_seed_block_num,
-            new_block_hash,
-        ) = get_shuffled_uids(
-            current_epoch,
-            self.last_shuffle_epoch,
-            self.metagraph,
-            self.metagraph.subtensor,
-            self.shuffled_uids,
-        )
-        if new_seed_block_num is not None:
-            self.seed_block_num = new_seed_block_num
-        if new_block_hash is not None:
-            self.block_hash = new_block_hash
-
-        uid_index = self.shuffled_uids.index(response.uid)
-        miner_group = uid_index % NUM_MINER_GROUPS
-
-        miner_missed_reset = self.reset_manager.miner_missed_reset(
-            response.uid,
-            miner_group,
-            current_epoch,
-            self.last_shuffle_epoch,
-        )
-        self.reset_manager.set_reset_status(response.uid, miner_missed_reset)
-        self.reset_manager.log_reset_tracker(
-            self.shuffled_uids, self.seed_block_num, self.block_hash
-        )
-        if miner_missed_reset and RESET_PENALTY_ENABLED:
-            bt.logging.warning(
-                f"Miner {response.uid} missed required reset submission, marking as unverified"
-            )
-            response.verification_result = False
 
         evaluation_data = CircuitEvaluationItem(
             circuit=circuit,
