@@ -313,7 +313,7 @@ decorator==5.2.1 \
     # via
     #   ipython
     #   retry
-dsperse @ git+https://github.com/inference-labs-inc/dsperse.git@8a8204d366c87f9d39cdc2abc4bd5560bdfa75da
+dsperse @ git+https://github.com/inference-labs-inc/dsperse.git@f18597b761e31cd10f4342ddb11897154814f4de
     # via subnet-2
 ecdsa==0.19.1 \
     --hash=sha256:30638e27cf77b7e15c4c4cc1973720149e1033827cfd00661ca5c8cc0cdb24c3 \

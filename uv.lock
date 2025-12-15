@@ -598,7 +598,7 @@ wheels = [
 [[package]]
 name = "dsperse"
 version = "1.0.1"
-source = { git = "https://github.com/inference-labs-inc/dsperse.git?rev=dsperse-integration#8a8204d366c87f9d39cdc2abc4bd5560bdfa75da" }
+source = { git = "https://github.com/inference-labs-inc/dsperse.git?rev=main#f18597b761e31cd10f4342ddb11897154814f4de" }
 dependencies = [
     { name = "colorama" },
     { name = "ezkl" },
@@ -2226,7 +2226,7 @@ requires-dist = [
     { name = "bittensor", specifier = "==9.9.0" },
     { name = "boto3", specifier = ">=1.36.13" },
     { name = "botocore", specifier = ">=1.37.19" },
-    { name = "dsperse", git = "https://github.com/inference-labs-inc/dsperse.git?rev=dsperse-integration" },
+    { name = "dsperse", git = "https://github.com/inference-labs-inc/dsperse.git?rev=main" },
     { name = "ezkl", specifier = "==22.2.1" },
     { name = "fastapi", specifier = "==0.110.3" },
     { name = "gitpython", specifier = ">=3.1.44" },

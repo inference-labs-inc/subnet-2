@@ -75,7 +75,7 @@ pythonpath = [".", "neurons"]
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
-dsperse = { git = "https://github.com/inference-labs-inc/dsperse.git", rev = "dsperse-integration" }
+dsperse = { git = "https://github.com/inference-labs-inc/dsperse.git", rev = "main" }
 
 [[tool.uv.index]]
 name = "pytorch"
