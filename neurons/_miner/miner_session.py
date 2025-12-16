@@ -16,10 +16,7 @@ from _miner.server import MinerServer
 from _validator.models.request_type import RequestType
 from constants import (
     CIRCUIT_TIMEOUT_SECONDS,
-    MINER_RESET_WINDOW_BLOCKS,
-    NUM_MINER_GROUPS,
     ONE_HOUR,
-    ONE_MINUTE,
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
 )
 from deployment_layer.circuit_store import circuit_store
@@ -34,9 +31,7 @@ from protocol import (
     QueryZkProof,
 )
 from utils import AutoUpdate, clean_temp_files, wandb_logger
-from utils.epoch import get_current_epoch_info, get_epoch_start_block
 from utils.rate_limiter import with_rate_limit
-from utils.shuffle import get_shuffled_uids
 from .circuit_manager import CircuitManager
 
 COMPETITION_DIR = os.path.join(
