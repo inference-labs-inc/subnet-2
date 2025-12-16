@@ -33,9 +33,16 @@ class CapacityManager:
             )
             for uid, miner_info in miners_info.items()
         ]
-        return await asyncio.gather(
+        results = await asyncio.gather(
             *(
                 query_miner(self.httpx_client, request, self.config.wallet)
                 for request in requests
-            )
+            ),
+            return_exceptions=True,
         )
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                bt.logging.debug(
+                    f"Failed to sync capacity for UID {requests[i].uid}: {result}"
+                )
+        return [r for r in results if not isinstance(r, Exception)]
