@@ -230,6 +230,7 @@ def sync_models(role: Optional[Roles] = None):
         external_files_model_path = (
             Path(cli_parser.config.full_path_models) / model_path.name
         )
+        external_files_model_path.mkdir(parents=True, exist_ok=True)
         download_external_files(
             external_files_model_path, metadata.get("external_files", {}), role
         )
@@ -247,7 +248,6 @@ def download_external_files(
     """
     if not external_files:
         return
-    target_dir.mkdir(parents=True, exist_ok=True)
 
     for key, url in external_files.items():
         if (role == Roles.VALIDATOR and key not in VALIDATOR_EXTERNAL_FILES) or (
