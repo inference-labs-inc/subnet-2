@@ -83,6 +83,12 @@ class WeightsManager:
         if nonzero_indices.sum() > 0:
             weights[nonzero_indices] = scores[nonzero_indices]
 
+        owner_hotkey = self.subtensor.get_subnet_owner_hotkey(self.metagraph.netuid)
+        if owner_hotkey and owner_hotkey in self.metagraph.hotkeys:
+            owner_uid = self.metagraph.hotkeys.index(owner_hotkey)
+            weights = weights * 0.2
+            weights[owner_uid] = 0.8
+
         try:
             success, message = self.set_weights(
                 netuid=self.metagraph.netuid,
