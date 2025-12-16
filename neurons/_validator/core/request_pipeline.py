@@ -141,11 +141,18 @@ class RequestPipeline:
             save=save,
         )
 
-    def select_circuit_for_benchmark(self) -> Circuit:
+    def select_circuit_for_benchmark(self) -> Circuit | None:
         """
         Select a circuit for benchmarking using weighted random selection.
         """
-        circuits = list(circuit_store.circuits.values())
+        circuits = [
+            c
+            for c in circuit_store.circuits.values()
+            if c.metadata.type != CircuitType.DSPERSE_PROOF_GENERATION
+        ]
+
+        if not circuits:
+            return None
 
         return random.choices(
             circuits,
