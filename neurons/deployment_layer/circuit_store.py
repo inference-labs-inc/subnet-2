@@ -57,6 +57,11 @@ class CircuitStore:
                     bt.logging.info(f"Ignoring circuit {circuit_id}")
                     continue
 
+                metadata_path = os.path.join(folder_path, "metadata.json")
+                if not os.path.isfile(metadata_path):
+                    bt.logging.debug(f"Skipping {folder_name} - no metadata.json")
+                    continue
+
                 try:
                     bt.logging.debug(f"Attempting to load circuit {circuit_id}")
                     circuit = Circuit(circuit_id)

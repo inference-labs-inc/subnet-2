@@ -209,12 +209,10 @@ def sync_models(role: Optional[Roles] = None):
             )
             continue
 
-        # XXX: maybe use `neurons.execution_layer.circuit.CircuitMetadata` here?
         metadata_file = model_path / "metadata.json"
         if not metadata_file.is_file():
-            bt.logging.error(
-                SYNC_LOG_PREFIX
-                + f"Metadata file not found at {metadata_file} for {model_path}. Skipping sync for this model."
+            bt.logging.warning(
+                SYNC_LOG_PREFIX + f"Skipping {model_path.name} - no metadata.json"
             )
             continue
 
