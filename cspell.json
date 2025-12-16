@@ -12,6 +12,9 @@
     "CIRCOM",
     "circuitized",
     "coldkey",
+    "dslice",
+    "dslices",
+    "dsperse",
     "dtype",
     "ezkl",
     "fastapi",
@@ -41,6 +44,7 @@
     "uvicorn",
     "venv",
     "wandb",
+    "winddown",
     "zkproof"
   ],
   "ignoreWords": [],

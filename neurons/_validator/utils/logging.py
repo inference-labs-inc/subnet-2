@@ -104,6 +104,7 @@ def log_responses(responses: list[MinerResponse]):
         ("Proof Size", "right", "blue"),
         ("Circuit Name", "left", "magenta"),
         ("Proof System", "left", "red"),
+        ("Request Type", "left", "white"),
     ]
 
     sorted_responses = sorted(responses, key=lambda x: x.uid)
@@ -115,6 +116,7 @@ def log_responses(responses: list[MinerResponse]):
             str(response.proof_size),
             (response.circuit.metadata.name if response.circuit else "Unknown"),
             (response.circuit.metadata.proof_system if response.circuit else "Unknown"),
+            (response.request_type.name if response.request_type else "Unknown"),
         ]
         for response in sorted_responses
     ]

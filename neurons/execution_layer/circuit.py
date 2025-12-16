@@ -1,27 +1,30 @@
 from __future__ import annotations
+
+import json
+import os
+import re
+import time
 from dataclasses import dataclass, field
 from enum import Enum
+
 import torch
-import os
-import json
-import cli_parser
-from execution_layer.input_registry import InputRegistry
+
+# trunk-ignore(pylint/E0611)
+from bittensor import Wallet, logging, subtensor
 from execution_layer.base_input import BaseInput
-from utils.metrics_logger import log_circuit_metrics
-from utils.gc_logging import gc_log_eval_metrics
+from execution_layer.input_registry import InputRegistry
+
+import cli_parser
 from constants import (
-    MAX_EVALUATION_ITEMS,
-    DEFAULT_PROOF_SIZE,
-    MAXIMUM_SCORE_MEDIAN_SAMPLE,
     CIRCUIT_TIMEOUT_SECONDS,
+    DEFAULT_PROOF_SIZE,
+    MAX_EVALUATION_ITEMS,
+    MAXIMUM_SCORE_MEDIAN_SAMPLE,
     ONE_MINUTE,
 )
 from utils import with_rate_limit
-import time
-import re
-
-# trunk-ignore(pylint/E0611)
-from bittensor import logging, subtensor, Wallet
+from utils.gc_logging import gc_log_eval_metrics
+from utils.metrics_logger import log_circuit_metrics
 
 
 class CircuitType(str, Enum):
@@ -31,6 +34,7 @@ class CircuitType(str, Enum):
 
     PROOF_OF_WEIGHTS = "proof_of_weights"
     PROOF_OF_COMPUTATION = "proof_of_computation"
+    DSPERSE_PROOF_GENERATION = "dsperse_proof_generation"
 
 
 class ProofSystem(str, Enum):
@@ -145,7 +149,8 @@ class CircuitMetadata:
     version: str
     proof_system: str
     type: CircuitType
-    external_files: dict[str, str]
+    external_files: None | dict[str, str]
+    dslices: None | list[dict] = None
     netuid: int | None = None
     weights_version: int | None = None
     timeout: int | None = None
@@ -263,7 +268,8 @@ class CircuitEvaluationData:
         except Exception as e:
             logging.error(f"Failed to save evaluation data: {e}")
 
-        self._log_metrics()
+        if not cli_parser.config.disable_metric_logging:
+            self._log_metrics()
 
     @with_rate_limit(period=ONE_MINUTE)
     def _log_metrics(self) -> None:
@@ -396,6 +402,7 @@ class Circuit:
         if not os.path.isdir(deployment_folder):
             raise ValueError(f"Circuit path is not a directory: model_{circuit_id}")
 
+        # XXX: might not fit to dsperse...
         self.paths = CircuitPaths(circuit_id)
         self.metadata = CircuitMetadata.from_file(self.paths.metadata)
         self.id = circuit_id

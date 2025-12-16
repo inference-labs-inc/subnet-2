@@ -23,6 +23,7 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 import bittensor as bt
 from _validator.models.poc_rpc_request import ProofOfComputationRPCRequest
 from _validator.models.pow_rpc_request import ProofOfWeightsRPCRequest
+from _validator.models.base_rpc_request import QueuedRequestDataModel
 import hashlib
 from constants import (
     MAX_SIGNATURE_LIFESPAN,
@@ -70,9 +71,10 @@ def _should_rate_limit(ip: str):
 class ValidatorAPI:
     def __init__(self, config: ValidatorConfig):
         self.config = config
-        self.external_requests_queue: list[
-            ProofOfWeightsRPCRequest | ProofOfComputationRPCRequest
-        ] = []
+        # a Queue of requests to be sent to miners
+        # consists of "real world requests" ProofOfWeightsRPCRequest and ProofOfComputationRPCRequest
+        # and a Request with one slice of a DSperse model (DSlice)
+        self.stacked_requests_queue: list[QueuedRequestDataModel] = []
         self.ws_manager = WebSocketManager()
         self.recent_requests: dict[str, int] = {}
         self.validator_keys_cache = ValidatorKeysCache(config)
@@ -282,7 +284,7 @@ class ValidatorAPI:
                 return InvalidParams(str(e))
 
             self.pending_requests[external_request.hash] = asyncio.Event()
-            self.external_requests_queue.insert(0, external_request)
+            self.stacked_requests_queue.insert(0, external_request)
             bt.logging.success(
                 f"External request with hash {external_request.hash} added to queue"
             )
@@ -341,7 +343,7 @@ class ValidatorAPI:
                 return InvalidParams(str(e))
 
             self.pending_requests[external_request.hash] = asyncio.Event()
-            self.external_requests_queue.insert(0, external_request)
+            self.stacked_requests_queue.insert(0, external_request)
             bt.logging.success(
                 f"External request with hash {external_request.hash} added to queue"
             )

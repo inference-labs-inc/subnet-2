@@ -74,6 +74,12 @@ def init_config(role: Optional[str] = None):
         action="store_true",
     )
     parser.add_argument(
+        "--disable-metric-logging",
+        default=False,
+        help="Whether to disable metric logging.",
+        action="store_true",
+    )
+    parser.add_argument(
         "--dev",
         default=False,
         help="Whether to run in development mode for internal testing.",
@@ -95,6 +101,11 @@ def init_config(role: Optional[str] = None):
         "--external-model-dir",
         default=None,
         help="Custom location for storing models data (optional)",
+    )
+    parser.add_argument(
+        "--dsperse-run-dir",
+        default=None,
+        help="Custom location for storing dsperse run data (optional)",
     )
     if role == Roles.VALIDATOR:
         # CLI arguments specific to the validator
@@ -127,6 +138,7 @@ def init_config(role: Optional[str] = None):
             config.eth_wallet if config.eth_wallet is not None else "0x002"
         )
         config.disable_wandb = True
+        config.disable_metric_logging = True
         config.verbose = config.verbose if config.verbose is None else True
 
     config.full_path = os.path.expanduser("~/.bittensor/subnet-2")  # type: ignore
@@ -140,6 +152,10 @@ def init_config(role: Optional[str] = None):
         config.full_path_models = config.external_model_dir
     else:
         config.full_path_models = os.path.join(config.full_path, "models")
+
+    if not config.dsperse_run_dir:
+        config.dsperse_run_dir = os.path.join(config.full_path, "dsperse_runs")
+    os.makedirs(config.dsperse_run_dir, exist_ok=True)
 
     if config.whitelisted_public_keys:
         config.whitelisted_public_keys = config.whitelisted_public_keys.split(",")

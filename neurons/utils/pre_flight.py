@@ -4,8 +4,10 @@ import os
 import subprocess
 import time
 import traceback
+from collections import OrderedDict
+from functools import partial
+from pathlib import Path
 from typing import Optional
-from constants import FIVE_MINUTES, Roles
 
 # trunk-ignore(pylint/E0611)
 import bittensor as bt
@@ -13,10 +15,7 @@ import ezkl
 import requests
 
 import cli_parser
-from constants import IGNORED_MODEL_HASHES
-
-from functools import partial
-from collections import OrderedDict
+from constants import FIVE_MINUTES, IGNORED_MODEL_HASHES, Roles
 
 LOCAL_SNARKJS_INSTALL_DIR = os.path.join(os.path.expanduser("~"), ".snarkjs")
 LOCAL_SNARKJS_PATH = os.path.join(
@@ -33,6 +32,8 @@ MINER_EXTERNAL_FILES = [
 VALIDATOR_EXTERNAL_FILES = [
     "circuit.zkey",
 ]
+
+SYNC_LOG_PREFIX = "  SYNC  | "
 
 
 async def download_srs(logrows):
@@ -57,13 +58,13 @@ def run_shared_preflight_checks(role: Optional[Roles] = None):
             "Ensuring Node.js version": ensure_nodejs_version,
             "Checking SnarkJS installation": ensure_snarkjs_installed,
             "Checking EZKL installation": ensure_ezkl_installed,
-            "Syncing model files": partial(sync_model_files, role=role),
+            "Syncing model files": partial(sync_models, role=role),
         }
     )
 
     bt.logging.info(" PreFlight | Running pre-flight checks")
 
-    # Skip sync_model_files during docker build
+    # Skip sync_models during docker build
     if os.getenv("SUBNET_2_DOCKER_BUILD", False):
         bt.logging.info(" PreFlight | Skipping model file sync")
         _ = preflight_checks.pop("Syncing model files")
@@ -167,14 +168,17 @@ def ensure_snarkjs_installed():
             ) from e
 
 
-def sync_model_files(role: Optional[Roles] = None):
+def sync_models(role: Optional[Roles] = None):
     """
-    Sync external model files
+    Download SRS files and sync external files for all models in the deployment layer.
     """
+    from execution_layer.dsperse_manager import DSperseManager
+    from execution_layer.circuit import CircuitType
+
     MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "deployment_layer")
-    SYNC_LOG_PREFIX = "  SYNC  | "
 
     loop = asyncio.get_event_loop()
+    # Download SRS files to ~/.ezkl/srs for logrows 1 to 25
     for logrows in range(1, 26):
         if os.path.exists(
             os.path.join(os.path.expanduser("~"), ".ezkl", "srs", f"kzg{logrows}.srs")
@@ -194,22 +198,23 @@ def sync_model_files(role: Optional[Roles] = None):
                 f"{SYNC_LOG_PREFIX}Failed to download SRS for logrows={logrows}: {e}"
             )
 
-    for model_hash in os.listdir(MODEL_DIR):
-        if not model_hash.startswith("model_"):
+    for model_path in Path(MODEL_DIR).iterdir():
+        if not model_path.name.startswith("model_"):
             continue
 
-        if model_hash.split("_")[1] in IGNORED_MODEL_HASHES:
+        if model_path.name.split("_")[1] in IGNORED_MODEL_HASHES:
             bt.logging.info(
                 SYNC_LOG_PREFIX
-                + f"Ignoring model {model_hash} as it is in the ignored list."
+                + f"Ignoring model {model_path} as it is in the ignored list."
             )
             continue
 
-        metadata_file = os.path.join(MODEL_DIR, model_hash, "metadata.json")
-        if not os.path.isfile(metadata_file):
+        # XXX: maybe use `neurons.execution_layer.circuit.CircuitMetadata` here?
+        metadata_file = model_path / "metadata.json"
+        if not metadata_file.is_file():
             bt.logging.error(
                 SYNC_LOG_PREFIX
-                + f"Metadata file not found at {metadata_file} for {model_hash}. Skipping sync for this model."
+                + f"Metadata file not found at {metadata_file} for {model_path}. Skipping sync for this model."
             )
             continue
 
@@ -222,41 +227,95 @@ def sync_model_files(role: Optional[Roles] = None):
             )
             continue
 
-        external_files = metadata.get("external_files", {})
-        for key, url in external_files.items():
-            if (role == Roles.VALIDATOR and key not in VALIDATOR_EXTERNAL_FILES) or (
-                role == Roles.MINER and key not in MINER_EXTERNAL_FILES
-            ):
-                bt.logging.info(
-                    SYNC_LOG_PREFIX
-                    + f"Skipping {key} for {model_hash} as it is not required for the {role}."
-                )
-                continue
-            file_path = os.path.join(
-                cli_parser.config.full_path_models, model_hash, key
-            )
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            if os.path.isfile(file_path):
-                bt.logging.info(
-                    SYNC_LOG_PREFIX
-                    + f"File {key} for {model_hash} already downloaded, skipping..."
-                )
-                continue
+        external_files_model_path = (
+            Path(cli_parser.config.full_path_models) / model_path.name
+        )
+        download_external_files(
+            external_files_model_path, metadata.get("external_files", {}), role
+        )
+        if metadata.get("type") == CircuitType.DSPERSE_PROOF_GENERATION:
+            download_dslices(external_files_model_path, metadata.get("dslices", []))
+            DSperseManager.extract_dslices(external_files_model_path)
+            DSperseManager.compile_dslices(external_files_model_path)
 
-            bt.logging.info(SYNC_LOG_PREFIX + f"Downloading {url} to {file_path}...")
-            try:
-                with requests.get(
-                    url, timeout=FIVE_MINUTES * 2, stream=True
-                ) as response:
-                    response.raise_for_status()
-                    with open(file_path, "wb") as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-            except requests.RequestException as e:
-                bt.logging.error(
-                    SYNC_LOG_PREFIX + f"Failed to download {url} to {file_path}: {e}"
-                )
-                continue
+
+def download_external_files(
+    target_dir: Path, external_files: dict, role: Optional[Roles] = None
+):
+    """
+    Sync external files for a model based on its metadata.
+    """
+    if not external_files:
+        return
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    for key, url in external_files.items():
+        if (role == Roles.VALIDATOR and key not in VALIDATOR_EXTERNAL_FILES) or (
+            role == Roles.MINER and key not in MINER_EXTERNAL_FILES
+        ):
+            bt.logging.info(
+                SYNC_LOG_PREFIX
+                + f"Skipping {key} for {target_dir.name} as it is not required for the {role}."
+            )
+            continue
+        file_path = target_dir / key
+
+        if file_path.is_file():
+            bt.logging.info(
+                SYNC_LOG_PREFIX
+                + f"File {key} for {target_dir.name} already downloaded, skipping..."
+            )
+            continue
+        download_file(url, file_path)
+
+
+def download_dslices(target_dir: Path, dslices: list[dict]):
+    """
+    Download DSperse slice files for a model if there are any.
+    """
+    if not dslices:
+        return
+    bt.logging.debug(
+        SYNC_LOG_PREFIX + f"Checking DSlices for model {target_dir.name}..."
+    )
+    for dslice_num, url in enumerate(dslices):
+        if not url:  # Skip if URL is missing
+            bt.logging.warning(
+                SYNC_LOG_PREFIX
+                + f"DSlice URL missing for slice {dslice_num} of {target_dir.name}, skipping..."
+            )
+            continue
+
+        # dslice files are just zip archives,
+        # but later on we extract them to a folder named after the file without extension
+        # so in case that folder already exists, we skip downloading and extracting again
+        file_path = target_dir / f"slice_{dslice_num}.dslice"
+        extracted_path = file_path.with_suffix("")  # remove .dslice suffix
+        # XXX: maybe we need to have some kind of versioning here and verification of the files?
+        if extracted_path.is_dir() or file_path.is_file():
+            bt.logging.debug(
+                SYNC_LOG_PREFIX
+                + f"Dsperse file for {target_dir.name} already downloaded, skipping..."
+            )
+        else:
+            download_file(url, file_path)
+
+
+def download_file(url: str, file_path: Path | str):
+    """
+    Download a file from a URL to a specified file path.
+    """
+    bt.logging.info(SYNC_LOG_PREFIX + f"Downloading {url} to {file_path}...")
+    try:
+        with requests.get(url, timeout=FIVE_MINUTES * 2, stream=True) as response:
+            response.raise_for_status()
+            with open(file_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+    except requests.RequestException as e:
+        bt.logging.error(
+            SYNC_LOG_PREFIX + f"Failed to download {url} to {file_path}: {e}"
+        )
 
 
 def ensure_nodejs_version():

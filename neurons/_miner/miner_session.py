@@ -23,10 +23,12 @@ from constants import (
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
 )
 from deployment_layer.circuit_store import circuit_store
+from execution_layer.dsperse_manager import DSperseManager
 from execution_layer.generic_input import GenericInput
 from execution_layer.verified_model_session import VerifiedModelSession
 from protocol import (
     Competition,
+    DSliceProofGenerationDataModel,
     ProofOfWeightsDataModel,
     QueryForCapacities,
     QueryZkProof,
@@ -48,6 +50,7 @@ class MinerSession:
         self.configure()
         self.check_register(should_exit=True)
         self.auto_update = AutoUpdate()
+        self.dsperse_manager = DSperseManager()
         self.log_batch = []
         self.shuffled_uids = None
         self.last_shuffle_epoch = -1
@@ -79,6 +82,10 @@ class MinerSession:
         )
         self.server.register_route(
             path=f"/{QueryForCapacities.name}", endpoint=self.handleCapacityRequest
+        )
+        self.server.register_route(
+            path=f"/{DSliceProofGenerationDataModel.name}",
+            endpoint=self.handleDSliceRequest,
         )
         self.server.start()
 
@@ -344,6 +351,30 @@ class MinerSession:
             return JSONResponse(
                 content={"error": "An internal error occurred.", **content},
                 status_code=500,
+            )
+
+    def handleDSliceRequest(self, data: DSliceProofGenerationDataModel) -> JSONResponse:
+        """
+        Handle DSlice proof generation requests from validators.
+        """
+        try:
+            bt.logging.info(
+                f"Handling DSlice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
+            )
+
+            result = self.dsperse_manager.prove_slice(
+                circuit_id=data.circuit,
+                slice_num=data.slice_num,
+                inputs=data.inputs,
+                outputs=data.outputs,
+            )
+
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            bt.logging.error(f"Error handling DSlice request: {str(e)}")
+            traceback.print_exc()
+            return JSONResponse(
+                content={"error": "An internal error occurred."}, status_code=500
             )
 
     def queryZkProof(self, data: QueryZkProof) -> JSONResponse:
