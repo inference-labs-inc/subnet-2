@@ -3,6 +3,7 @@ import threading
 
 import bittensor as bt
 import uvicorn
+from bittensor.utils import networking
 from bittensor_wallet import Wallet
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -26,7 +27,9 @@ class MinerServer:
         self.metagraph = metagraph
         self.ip: str = self.config.axon.ip
         self.port: int = self.config.axon.port
-        self.external_ip: str = self.config.axon.external_ip
+        self.external_ip: str = (
+            self.config.axon.external_ip or networking.get_external_ip()
+        )
         self.external_port: int = (
             self.config.axon.external_port
             if self.config.axon.external_port is not None
