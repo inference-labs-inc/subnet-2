@@ -34,34 +34,6 @@ class DSliceData:
     success: bool | None = None
 
 
-class EZKLInputType(Enum):
-    F16 = ezkl.PyInputType.F16
-    F32 = ezkl.PyInputType.F32
-    F64 = ezkl.PyInputType.F64
-    Int = ezkl.PyInputType.Int
-    Bool = ezkl.PyInputType.Bool
-    TDim = ezkl.PyInputType.TDim
-
-
-def ensure_proof_inputs(proof: dict, inputs: list[list], model_settings: dict) -> dict:
-    """
-    Ensures that the proof JSON contains the correct input instances.
-    That should prevent miners from cheating by reusing proofs with different inputs.
-    """
-    scale_map = model_settings.get("model_input_scales", [])
-    type_map = model_settings.get("input_types", [])
-    instances = [
-        ezkl.float_to_felt(x, scale_map[i], EZKLInputType[type_map[i]].value)
-        for i, arr in enumerate(inputs)
-        for x in arr
-    ]
-    proof["instances"] = [instances[:] + proof["instances"][0][len(instances) :]]
-
-    proof["transcript_type"] = "EVM"
-
-    return proof
-
-
 class DSperseManager:
     def __init__(self):
         self.circuits: list[Circuit] = [
@@ -211,16 +183,6 @@ class DSperseManager:
             raise ValueError(f"Slice data for slice number {slice_num} not found.")
 
         circuit = self._get_circuit_by_id(slice_data.circuit_id)
-        # prepare inputs
-        with open(slice_data.input_file, "r") as f:
-            input_obj = circuit.input_handler(
-                request_type=RequestType.DSLICE, data=json.load(f)
-            )
-
-        # ensure proof has correct inputs
-        proof = ensure_proof_inputs(
-            proof, input_obj.to_array(), self._get_slice_settings(circuit, slice_num)
-        )
 
         proof_file_path = slice_data.input_file.parent / "proof.json"
         with open(proof_file_path, "w") as proof_file:
