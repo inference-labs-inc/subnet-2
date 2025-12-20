@@ -120,6 +120,7 @@ class DSliceProofGenerationDataModel(BaseModel):
 
     name: ClassVar = "dsperse-proof-generation"
     circuit: Optional[str] = None
+    proof_system: ProofSystem = ProofSystem.JSTPROOF
     inputs: Optional[Any] = None
     outputs: Optional[Any] = None
     slice_num: Optional[str] = None

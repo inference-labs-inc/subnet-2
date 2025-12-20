@@ -82,6 +82,7 @@ class ResponseProcessor:
                 run_uid=response.dsperse_run_uid,
                 slice_num=response.dsperse_slice_num,
                 proof=response.proof_content,
+                proof_system=response.inputs.data.get("proof_system"),  # TODO: test it
             )
             # Check if the entire DSperse run is complete and clean up if so:
             self.dsperse_manager.check_run_completion(

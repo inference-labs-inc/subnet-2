@@ -47,6 +47,7 @@ class ProofSystem(str, Enum):
     CIRCOM = "CIRCOM"
     JOLT = "JOLT"
     EZKL = "EZKL"
+    JSTPROOF = "JSTPROOF"
 
     def __str__(self):
         return self.value

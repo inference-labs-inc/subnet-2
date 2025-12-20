@@ -218,6 +218,7 @@ class RequestPipeline:
                     outputs=request.outputs,
                     slice_num=request.slice_num,
                     run_uid=request.run_uid,
+                    proof_system=request.proof_system,
                 ),
                 False,
             )

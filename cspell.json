@@ -21,6 +21,7 @@
     "Gbps",
     "hexsha",
     "incentivizes",
+    "JSTPROOF",
     "Keypair",
     "libudev",
     "localnet",
@@ -45,6 +46,7 @@
     "venv",
     "wandb",
     "winddown",
+    "ZKML",
     "zkproof"
   ],
   "ignoreWords": [],

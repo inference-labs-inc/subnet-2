@@ -362,6 +362,7 @@ class MinerSession:
                 slice_num=data.slice_num,
                 inputs=data.inputs,
                 outputs=data.outputs,
+                proof_system=data.proof_system,
             )
 
             return JSONResponse(content=result, status_code=200)
