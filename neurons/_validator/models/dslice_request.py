@@ -11,7 +11,10 @@ class DSliceQueuedProofRequest(QueuedRequestDataModel):
     """
 
     request_type: RequestType = RequestType.DSLICE
-    proof_system: ProofSystem = ProofSystem.JSTPROOF
+    proof_system: ProofSystem = ProofSystem.JSTPROVE
     slice_num: str = Field(..., description="Num of the DSperse slice")
     run_uid: str = Field(..., description="UID of the DSperse run")
     outputs: dict = Field(..., description="Outputs of the DSperse slice")
+    witness: bytes | None = Field(
+        None, description="Witness data for JSTPROVE proof generation"
+    )

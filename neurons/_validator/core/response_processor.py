@@ -8,6 +8,7 @@ from execution_layer.generic_input import GenericInput
 from execution_layer.verified_model_session import VerifiedModelSession
 
 from _validator.core.exceptions import EmptyProofException, IncorrectProofException
+from _validator.core.request import Request
 from _validator.models.miner_response import MinerResponse
 from _validator.models.request_type import RequestType
 
@@ -17,7 +18,7 @@ class ResponseProcessor:
         self.dsperse_manager = dsperse_manager
 
     def verify_single_response(
-        self, miner_response: MinerResponse
+        self, request: Request, miner_response: MinerResponse
     ) -> MinerResponse | None:
         """
         Verify a single response from a miner
@@ -45,9 +46,7 @@ class ResponseProcessor:
         )
 
         start_time = time.time()
-        verification_result = self._verify_response_proof(
-            miner_response, miner_response.inputs
-        )
+        verification_result = self._verify_response_proof(request, miner_response)
         miner_response.verification_time = time.time() - start_time
         miner_response.verification_result = verification_result
 
@@ -67,9 +66,7 @@ class ResponseProcessor:
         )
         return miner_response
 
-    def _verify_response_proof(
-        self, response: MinerResponse, validator_inputs: GenericInput
-    ) -> bool:
+    def _verify_response_proof(self, request: Request, response: MinerResponse) -> bool:
         """
         Verify the proof contained in the miner's response.
         """
@@ -78,16 +75,17 @@ class ResponseProcessor:
             return False
 
         if response.request_type == RequestType.DSLICE:
-            res = self.dsperse_manager.verify_slice_proof(
+            res: bool = self.dsperse_manager.verify_slice_proof(
                 run_uid=response.dsperse_run_uid,
                 slice_num=response.dsperse_slice_num,
                 proof=response.proof_content,
-                proof_system=response.inputs.data.get("proof_system"),  # TODO: test it
+                proof_system=request.data.get("proof_system"),  # TODO: test it
             )
-            # Check if the entire DSperse run is complete and clean up if so:
-            self.dsperse_manager.check_run_completion(
-                run_uid=response.dsperse_run_uid, remove_completed=True
-            )
+            if res:
+                # Check if the entire DSperse run is complete and clean up if so:
+                self.dsperse_manager.check_run_completion(
+                    run_uid=response.dsperse_run_uid, remove_completed=True
+                )
         else:
             if not response.public_json:
                 raise ValueError(f"Public signals not found for UID: {response.uid}")
@@ -97,7 +95,7 @@ class ResponseProcessor:
                 response.circuit,
             )
             res: bool = inference_session.verify_proof(
-                validator_inputs, response.proof_content
+                response.inputs, response.proof_content
             )
             inference_session.end()
         return res

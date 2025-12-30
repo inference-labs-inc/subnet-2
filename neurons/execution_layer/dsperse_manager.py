@@ -28,6 +28,7 @@ class DSliceData:
     circuit_id: str
     input_file: Path
     output_file: Path
+    witness_file: Path | None = None
     proof_file: Path | None = None
     success: bool | None = None
 
@@ -57,13 +58,16 @@ class DSperseManager:
             return
 
         circuit = random.choice(self.circuits)
-        proof_system = random.choice((ProofSystem.JSTPROOF, ProofSystem.EZKL))
+        # TODO: determine what proof systems the circuit supports
+        proof_system = random.choice((ProofSystem.JSTPROVE, ProofSystem.EZKL))
         run_uid = datetime.now().strftime("%Y%m%d%H%M%S%f")
         logging.info(
             f"Generating DSlice requests for circuit {circuit.metadata.name}... Run UID: {run_uid}"
         )
 
-        slices: list[DSliceData] = self.run_dsperse(circuit, run_uid)
+        slices: list[DSliceData] = self.run_dsperse(
+            circuit, run_uid, proof_system=proof_system
+        )
         self.runs[run_uid] = slices
 
         for slice_data in slices:
@@ -73,12 +77,19 @@ class DSperseManager:
                         circuit=circuit,
                         inputs=json.load(input_file),
                         outputs=json.load(output_file),
+                        witness=(
+                            slice_data.witness_file.read_bytes()
+                            if slice_data.witness_file
+                            else None
+                        ),
                         slice_num=slice_data.slice_num,
                         run_uid=run_uid,
                         proof_system=proof_system,
                     )
 
-    def run_dsperse(self, circuit: Circuit, run_uid: str) -> list[DSliceData]:
+    def run_dsperse(
+        self, circuit: Circuit, run_uid: str, proof_system: ProofSystem | None = None
+    ) -> list[DSliceData]:
         # Create temporary folder for run metadata
         run_metadata_path = Path(cli_parser.config.dsperse_run_dir) / f"run_{run_uid}"
         run_metadata_path.mkdir(parents=True, exist_ok=True)
@@ -93,7 +104,9 @@ class DSperseManager:
         # init runner and run the sliced model
         runner = Runner(save_metadata_path=save_metadata_path)
         results = runner.run(
-            input_json_path=input_json_path, slice_path=circuit.paths.external_base_path
+            input_json_path=input_json_path,
+            slice_path=circuit.paths.external_base_path,
+            backend=proof_system.value.lower() if proof_system else None,
         )
         logging.debug(
             f"DSperse run completed. Results data saved at {save_metadata_path}"
@@ -111,6 +124,7 @@ class DSperseManager:
                 slice_num=slice_num.split("_")[-1],
                 input_file=Path(r["input_file"]),
                 output_file=Path(r["output_file"]),
+                witness_file=Path(r["witness_file"]) if r.get("witness_file") else None,
                 circuit_id=circuit.id,
             )
             for slice_num, r in slice_results.items()
@@ -122,6 +136,7 @@ class DSperseManager:
         slice_num: str,
         inputs: dict,
         outputs: dict,
+        witness: bytes | None,
         proof_system: ProofSystem,
     ) -> dict | None:
         """
@@ -135,6 +150,7 @@ class DSperseManager:
 
             input_file = tmp_path / "input.json"
             output_file = tmp_path / "output.json"
+            witness_file = None
 
             with open(input_file, "w") as f:
                 json.dump(inputs, f)
@@ -142,12 +158,17 @@ class DSperseManager:
             with open(output_file, "w") as f:
                 json.dump(outputs, f)
 
+            if witness is not None:
+                witness_file = tmp_path / "output_witness.bin"
+                with open(witness_file, "wb") as f:
+                    f.write(witness)
+
             prover = Prover()
-            # TODO: use proof system here
             result = prover.prove(
                 run_path=tmp_path,
                 model_dir=model_dir,
                 output_path=tmp_path,
+                backend=proof_system.value.lower(),
             )
             logging.debug(f"Got proof generation result. Result: {result}")
 
@@ -157,8 +178,12 @@ class DSperseManager:
             proof_generation_time = proof_execution.get("proof_generation_time", None)
             proof_data = None
             if proof_execution.get("proof_file", None):
-                with open(proof_execution["proof_file"], "r") as proof_file:
-                    proof_data = json.load(proof_file)
+                if proof_system == ProofSystem.JSTPROVE:
+                    with open(proof_execution["proof_file"], "rb") as proof_file:
+                        proof_data = proof_file.read().hex()
+                else:
+                    with open(proof_execution["proof_file"], "r") as proof_file:
+                        proof_data = json.load(proof_file)
 
             return {
                 "circuit_id": circuit_id,
@@ -169,7 +194,7 @@ class DSperseManager:
             }
 
     def verify_slice_proof(
-        self, run_uid: str, slice_num: str, proof: dict, proof_system: ProofSystem
+        self, run_uid: str, slice_num: str, proof: dict | str, proof_system: ProofSystem
     ) -> bool:
         """
         Verify proof for a given slice.
@@ -188,16 +213,24 @@ class DSperseManager:
         circuit = self._get_circuit_by_id(slice_data.circuit_id)
 
         proof_file_path = slice_data.input_file.parent / "proof.json"
-        with open(proof_file_path, "w") as proof_file:
-            json.dump(proof, proof_file)
+        if proof_system == ProofSystem.JSTPROVE:
+            # for JSTPROVE, proof is a hex string of bytes
+            proof_bytes = bytes.fromhex(proof) if isinstance(proof, str) else proof
+            with open(proof_file_path, "wb") as proof_file:
+                proof_file.write(proof_bytes)
+        else:
+            # for other proof systems (now only EZKL), proof is a JSON object
+            with open(proof_file_path, "w") as proof_file:
+                json.dump(proof, proof_file)
+
         slice_data.proof_file = proof_file_path
 
         # time to verify!
         verifier = Verifier()
-        # TODO: specify proof system
         result = verifier.verify(
             run_path=slice_data.input_file.parent,
             model_path=Path(circuit.paths.external_base_path) / f"slice_{slice_num}",
+            backend=proof_system.value.lower() if proof_system else None,
         )
 
         logging.debug(f"Got proof verification result. Result: {result}")

@@ -487,7 +487,9 @@ class ValidatorLoop:
 
             if DEBUG_SYNC_MODE:
                 # Direct sync call for easier debugging
-                response = self.response_processor.verify_single_response(response)
+                response = self.response_processor.verify_single_response(
+                    request, response
+                )
             else:
                 # Run in thread pool to avoid blocking event loop
                 response: (
@@ -495,6 +497,7 @@ class ValidatorLoop:
                 ) = await asyncio.get_event_loop().run_in_executor(
                     self.response_thread_pool,
                     self.response_processor.verify_single_response,
+                    request,
                     response,
                 )
 

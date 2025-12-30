@@ -45,7 +45,12 @@ class MinerResponse:
 
         proof = deserialized_response.get("proof", "{}")
         if isinstance(proof, str):
-            if all(c in "0123456789ABCDEFabcdef" for c in proof):
+            # for JSTPROVE, proof is a hex string of bytes
+            if (
+                request.data
+                and request.data.get("proof_system") == ProofSystem.JSTPROVE
+                or all(c in "0123456789ABCDEFabcdef" for c in proof)
+            ):
                 proof_content = proof
             else:
                 proof_content = json.loads(proof)

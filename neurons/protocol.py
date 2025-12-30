@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Optional
 import bittensor as bt
 import toml
 from execution_layer.circuit import ProofSystem
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class QueryZkProof(BaseModel):
@@ -120,8 +120,17 @@ class DSliceProofGenerationDataModel(BaseModel):
 
     name: ClassVar = "dsperse-proof-generation"
     circuit: Optional[str] = None
-    proof_system: ProofSystem = ProofSystem.JSTPROOF
+    proof_system: ProofSystem = ProofSystem.JSTPROVE
     inputs: Optional[Any] = None
     outputs: Optional[Any] = None
+    witness: Optional[str] = None  # Hex-encoded bytes
     slice_num: Optional[str] = None
     run_uid: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_witness_required_for_jstprove(
+        self,
+    ) -> "DSliceProofGenerationDataModel":
+        if self.proof_system == ProofSystem.JSTPROVE and self.witness is None:
+            raise ValueError("witness field is required when proof_system is JSTPROVE")
+        return self
