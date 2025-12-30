@@ -148,9 +148,11 @@ class CircuitMetadata:
     description: str
     author: str
     version: str
-    proof_system: str
     type: CircuitType
     external_files: None | dict[str, str]
+    # legacy field, we gonna migrate to proof_systems instead
+    proof_system: str
+    proof_systems: list[str] | None = None
     dslices: None | list[dict] = None
     netuid: int | None = None
     weights_version: int | None = None

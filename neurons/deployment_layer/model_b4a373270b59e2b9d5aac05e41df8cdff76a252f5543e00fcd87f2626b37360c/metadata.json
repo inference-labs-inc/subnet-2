@@ -4,6 +4,7 @@
   "author": "Inference Labs",
   "version": "0.0.1",
   "proof_system": "EZKL",
+  "proof_systems": ["EZKL", "JSTPROVE"],
   "type": "dsperse_proof_generation",
   "external_files": {},
   "dslices": [

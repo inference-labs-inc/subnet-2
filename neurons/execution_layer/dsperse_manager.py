@@ -48,6 +48,16 @@ class DSperseManager:
             raise ValueError(f"Circuit with ID {circuit_id} not found.")
         return circuit
 
+    def _get_proof_systems_for_circuit(self, circuit: Circuit) -> list[ProofSystem]:
+        proof_systems = []
+        if circuit.metadata.proof_systems:
+            for ps in circuit.metadata.proof_systems:
+                proof_systems.append(ProofSystem(ps))
+        else:
+            # legacy support for single proof_system field
+            proof_systems.append(ProofSystem(circuit.metadata.proof_system))
+        return proof_systems
+
     def generate_dslice_requests(self) -> Iterable[DSliceQueuedProofRequest]:
         """
         Generate DSlice requests for DSperse models.
@@ -58,8 +68,7 @@ class DSperseManager:
             return
 
         circuit = random.choice(self.circuits)
-        # TODO: determine what proof systems the circuit supports
-        proof_system = random.choice((ProofSystem.JSTPROVE, ProofSystem.EZKL))
+        proof_system = random.choice(self._get_proof_systems_for_circuit(circuit))
         run_uid = datetime.now().strftime("%Y%m%d%H%M%S%f")
         logging.info(
             f"Generating DSlice requests for circuit {circuit.metadata.name}... Run UID: {run_uid}"
