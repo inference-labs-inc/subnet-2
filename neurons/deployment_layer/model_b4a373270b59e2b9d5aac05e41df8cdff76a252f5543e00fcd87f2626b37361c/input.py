@@ -18,7 +18,7 @@ class CircuitInputSchema(BaseModel):
 
 
 @InputRegistry.register(
-    "b4a373270b59e2b9d5aac05e41df8cdff76a252f5543e00fcd87f2626b37360c"
+    "b4a373270b59e2b9d5aac05e41df8cdff76a252f5543e00fcd87f2626b37361c"
 )
 class CircuitInput(BaseInput):
 

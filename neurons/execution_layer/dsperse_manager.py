@@ -389,7 +389,7 @@ class DSperseManager:
             model_path=model_path,
             input_file=Path(__file__).parent.parent
             / "deployment_layer"
-            / "model_b4a373270b59e2b9d5aac05e41df8cdff76a252f5543e00fcd87f2626b37360c"
+            / "model_b4a373270b59e2b9d5aac05e41df8cdff76a252f5543e00fcd87f2626b37361c"
             / "input.json",
         )
         # for slice_dir in model_path.glob("slice_*"):
