@@ -121,7 +121,9 @@ class DSperseManager:
         # init runner and run the sliced model
         runner = Runner(save_metadata_path=save_metadata_path)
         results = runner.run(
-            input_json_path=input_json_path, slice_path=circuit.paths.external_base_path
+            input_json_path=input_json_path,
+            slice_path=circuit.paths.external_base_path,
+            backend="ezkl",
         )
         logging.debug(
             f"DSperse run completed. Results data saved at {save_metadata_path}"
@@ -170,6 +172,7 @@ class DSperseManager:
                 run_path=tmp_path,
                 model_dir=model_dir,
                 output_path=tmp_path,
+                backend="ezkl",
             )
             logging.debug(f"Got proof generation result. Result: {result}")
 
@@ -232,6 +235,7 @@ class DSperseManager:
         result = verifier.verify(
             run_path=slice_data.input_file.parent,
             model_path=Path(circuit.paths.external_base_path) / f"slice_{slice_num}",
+            backend="ezkl",
         )
 
         logging.debug(f"Got proof verification result. Result: {result}")
@@ -374,6 +378,7 @@ class DSperseManager:
     def compile_dslices(cls, model_path: Path | str) -> None:
         """
         Compile DSperse slices in a folder if there are any.
+        XXX: Maybe we actually don't need that method anymore
         """
         model_path = Path(model_path)
         logging.debug(
