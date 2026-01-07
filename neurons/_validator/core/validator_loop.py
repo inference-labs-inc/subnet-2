@@ -11,10 +11,11 @@ from queue import Empty
 from typing import NoReturn
 
 import bittensor as bt
+import cli_parser
 import httpx
 from bittensor.core.chain_data import AxonInfo
+from execution_layer.dsperse_manager import DSperseManager
 
-import cli_parser
 from _validator.api import ValidatorAPI
 from _validator.api.client import query_miner
 from _validator.competitions.competition import Competition
@@ -49,7 +50,6 @@ from constants import (
     ONE_HOUR,
     ONE_MINUTE,
 )
-from execution_layer.dsperse_manager import DSperseManager
 from utils import AutoUpdate, clean_temp_files, with_rate_limit
 from utils.gc_logging import gc_log_competition_metrics
 from utils.gc_logging import log_responses as gc_log_responses

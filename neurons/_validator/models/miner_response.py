@@ -1,12 +1,12 @@
+import json
 from dataclasses import dataclass
 
 import bittensor as bt
-import json
+from execution_layer.circuit import Circuit, ProofSystem
 
-from constants import DEFAULT_PROOF_SIZE
 from _validator.core.request import Request
-from execution_layer.circuit import ProofSystem, Circuit
 from _validator.models.request_type import RequestType
+from constants import DEFAULT_PROOF_SIZE
 
 
 @dataclass

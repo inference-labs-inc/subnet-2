@@ -382,30 +382,37 @@ class DSperseManager:
     def compile_dslices(cls, model_path: Path | str) -> None:
         """
         Compile DSperse slices in a folder if there are any.
+        XXX: Maybe we actually don't need that method anymore
         """
         model_path = Path(model_path)
         logging.debug(
             f"Checking compilation status for DSperse slices in {model_path.name}..."
         )
         compiler = Compiler()
-        for slice_dir in model_path.glob("slice_*"):
-            if not slice_dir.is_dir():
-                continue
+        compiler.compile(
+            model_path=model_path,
+            input_file=Path(__file__).parent.parent
+            / "deployment_layer"
+            / "model_b4a373270b59e2b9d5aac05e41df8cdff76a252f5543e00fcd87f2626b37361c"
+            / "input.json",
+        )
+        # for slice_dir in model_path.glob("slice_*"):
+        #     if not slice_dir.is_dir():
+        #         continue
 
-            metadata = cls.get_slice_metadata(slice_dir)
-            is_compiled = (
-                metadata.get("slices", [{}])[0]
-                .get("compilation", {})
-                .get("ezkl", {})
-                .get("compiled", False)
-            )
-            if is_compiled:
-                logging.debug(
-                    f"DSlice {slice_dir.name} is already compiled. Skipping compilation."
-                )
-                continue
+        #     metadata = cls.get_slice_metadata(slice_dir)
+        #     is_compiled = (
+        #         metadata.get("slices", [{}])[0]
+        #         .get("compilation", {})
+        #         .get("ezkl", {})
+        #         .get("compiled", False)
+        #     )
+        #     if is_compiled:
+        #         logging.debug(
+        #             f"DSlice {slice_dir.name} is already compiled. Skipping compilation."
+        #         )
+        #         continue
 
-            logging.info(
-                f"Compiling DSlice {slice_dir.name} in model {model_path.name}..."
-            )
-            compiler.compile(model_path=slice_dir)
+        #     logging.info(
+        #         f"Compiling DSlice {slice_dir.name} in model {model_path.name}..."
+        #     )

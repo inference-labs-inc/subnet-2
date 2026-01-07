@@ -5,30 +5,30 @@ import time
 import traceback
 
 import bittensor as bt
-import websocket
-from bittensor.core.extrinsics.serving import serve_extrinsic
-from fastapi.responses import JSONResponse
-from rich.console import Console
-from rich.table import Table
-
 import cli_parser
+import websocket
 from _miner.server import MinerServer
-from _validator.models.request_type import RequestType
-from constants import (
-    CIRCUIT_TIMEOUT_SECONDS,
-    ONE_HOUR,
-    SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
-)
+from bittensor.core.extrinsics.serving import serve_extrinsic
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.dsperse_manager import DSperseManager
 from execution_layer.generic_input import GenericInput
 from execution_layer.verified_model_session import VerifiedModelSession
+from fastapi.responses import JSONResponse
 from protocol import (
     Competition,
     DSliceProofGenerationDataModel,
     ProofOfWeightsDataModel,
     QueryForCapacities,
     QueryZkProof,
+)
+from rich.console import Console
+from rich.table import Table
+
+from _validator.models.request_type import RequestType
+from constants import (
+    CIRCUIT_TIMEOUT_SECONDS,
+    ONE_HOUR,
+    SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
 )
 from utils import AutoUpdate, clean_temp_files, wandb_logger
 from utils.rate_limiter import with_rate_limit

@@ -16,6 +16,7 @@
     "dslices",
     "dsperse",
     "dtype",
+    "extrinsics",
     "ezkl",
     "fastapi",
     "Gbps",

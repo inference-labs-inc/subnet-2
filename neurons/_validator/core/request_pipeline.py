@@ -6,6 +6,14 @@ import traceback
 
 import bittensor as bt
 from bittensor.core.chain_data import AxonInfo
+from deployment_layer.circuit_store import circuit_store
+from execution_layer.circuit import Circuit, CircuitType
+from execution_layer.generic_input import GenericInput
+from protocol import (
+    DSliceProofGenerationDataModel,
+    ProofOfWeightsDataModel,
+    QueryZkProof,
+)
 
 from _validator.api import ValidatorAPI
 from _validator.config import ValidatorConfig
@@ -17,14 +25,6 @@ from _validator.utils.hash_guard import HashGuard
 from constants import (
     BATCHED_PROOF_OF_WEIGHTS_MODEL_ID,
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
-)
-from deployment_layer.circuit_store import circuit_store
-from execution_layer.circuit import Circuit, CircuitType
-from execution_layer.generic_input import GenericInput
-from protocol import (
-    ProofOfWeightsDataModel,
-    QueryZkProof,
-    DSliceProofGenerationDataModel,
 )
 from utils.wandb_logger import safe_log
 
