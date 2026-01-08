@@ -28,6 +28,7 @@ class DSliceData:
     circuit_id: str
     input_file: Path
     output_file: Path
+    prove_system: ProofSystem | None = None
     witness_file: Path | None = None
     proof_file: Path | None = None
     success: bool | None = None
@@ -48,16 +49,6 @@ class DSperseManager:
             raise ValueError(f"Circuit with ID {circuit_id} not found.")
         return circuit
 
-    def _get_proof_systems_for_circuit(self, circuit: Circuit) -> list[ProofSystem]:
-        proof_systems = []
-        if circuit.metadata.proof_systems:
-            for ps in circuit.metadata.proof_systems:
-                proof_systems.append(ProofSystem(ps))
-        else:
-            # legacy support for single proof_system field
-            proof_systems.append(ProofSystem(circuit.metadata.proof_system))
-        return proof_systems
-
     def generate_dslice_requests(self) -> Iterable[DSliceQueuedProofRequest]:
         """
         Generate DSlice requests for DSperse models.
@@ -68,15 +59,12 @@ class DSperseManager:
             return
 
         circuit = random.choice(self.circuits)
-        proof_system = random.choice(self._get_proof_systems_for_circuit(circuit))
         run_uid = datetime.now().strftime("%Y%m%d%H%M%S%f")
         logging.info(
             f"Generating DSlice requests for circuit {circuit.metadata.name}... Run UID: {run_uid}"
         )
 
-        slices: list[DSliceData] = self.run_dsperse(
-            circuit, run_uid, proof_system=proof_system
-        )
+        slices: list[DSliceData] = self.run_dsperse(circuit, run_uid)
         self.runs[run_uid] = slices
 
         for slice_data in slices:
@@ -93,11 +81,13 @@ class DSperseManager:
                         ),
                         slice_num=slice_data.slice_num,
                         run_uid=run_uid,
-                        proof_system=proof_system,
+                        proof_system=slice_data.prove_system,
                     )
 
     def run_dsperse(
-        self, circuit: Circuit, run_uid: str, proof_system: ProofSystem | None = None
+        self,
+        circuit: Circuit,
+        run_uid: str,
     ) -> list[DSliceData]:
         # Create temporary folder for run metadata
         run_metadata_path = Path(cli_parser.config.dsperse_run_dir) / f"run_{run_uid}"
@@ -113,9 +103,7 @@ class DSperseManager:
         # init runner and run the sliced model
         runner = Runner(save_metadata_path=save_metadata_path)
         results = runner.run(
-            input_json_path=input_json_path,
-            slice_path=circuit.paths.external_base_path,
-            backend=proof_system.value.lower() if proof_system else None,
+            input_json_path=input_json_path, slice_path=circuit.paths.external_base_path
         )
         logging.debug(
             f"DSperse run completed. Results data saved at {save_metadata_path}"
@@ -135,8 +123,10 @@ class DSperseManager:
                 output_file=Path(r["output_file"]),
                 witness_file=Path(r["witness_file"]) if r.get("witness_file") else None,
                 circuit_id=circuit.id,
+                prove_system=self._get_proof_system_for_run(r),
             )
             for slice_num, r in slice_results.items()
+            if not r["method"].startswith("onnx")
         ]
 
     def prove_slice(
@@ -218,6 +208,10 @@ class DSperseManager:
         )
         if slice_data is None:
             raise ValueError(f"Slice data for slice number {slice_num} not found.")
+        if slice_data.prove_system != proof_system:
+            raise ValueError(
+                f"Proof system mismatch for slice {slice_num} in run {run_uid}. Expected {slice_data.prove_system}, got {proof_system}."
+            )
 
         circuit = self._get_circuit_by_id(slice_data.circuit_id)
 
@@ -285,37 +279,14 @@ class DSperseManager:
         for run_uid in list(self.runs.keys()):
             self.cleanup_run(run_uid)
 
-    def _get_slice_settings(self, circuit: Circuit, slice_num: str) -> dict:
-        """
-        Retrieve settings for a specific slice from its metadata.
-        """
-        metadata = self.get_slice_metadata(
-            Path(circuit.paths.external_base_path) / f"slice_{slice_num}"
-        )
-
-        settings_path = (
-            metadata.get("slices", [{}])[0]
-            .get("compilation", {})
-            .get("ezkl", {})
-            .get("files", {})
-            .get("settings", None)
-        )
-        if not settings_path:
-            raise ValueError(
-                f"Settings file path not found in metadata for slice {slice_num} of circuit {circuit.id}."
-            )
-        settings_path = (
-            Path(circuit.paths.external_base_path)
-            / f"slice_{slice_num}"
-            / settings_path
-        )
-        if not settings_path.exists() or not settings_path.is_file():
-            raise ValueError(
-                f"Settings file not found at {settings_path} for slice {slice_num} of circuit {circuit.id}."
-            )
-        with open(settings_path, "r") as f:
-            settings = json.load(f)
-        return settings
+    def _get_proof_system_for_run(self, result: dict) -> ProofSystem | None:
+        method = result.get("method", "")
+        if method.startswith("jstprove"):
+            return ProofSystem.JSTPROVE
+        elif method.startswith("ezkl"):
+            return ProofSystem.EZKL
+        else:
+            return None
 
     def _parse_dsperse_result(
         self, result: dict, execution_type: str
@@ -331,21 +302,6 @@ class DSperseManager:
         execution = execution_result.get(f"{execution_type}_execution", {})
 
         return slice_id, execution
-
-    @classmethod
-    def get_slice_metadata(cls, slice_path: Path | str) -> dict:
-        """
-        Retrieve metadata for a specific DSperse slice.
-        """
-        slice_path = Path(slice_path)
-        metadata_path = slice_path / "metadata.json"
-        if not metadata_path.exists():
-            raise ValueError(f"Metadata file not found at {metadata_path}.")
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-        if not isinstance(metadata, dict):
-            raise ValueError(f"Invalid metadata format at {metadata_path}.")
-        return metadata
 
     @classmethod
     def extract_dslices(cls, model_path: Path | str) -> None:
@@ -377,42 +333,3 @@ class DSperseManager:
             )
             # `cleanup=True` doesn't work for some reason, so we manually delete the .dslice file
             dslice_file.unlink(missing_ok=True)
-
-    @classmethod
-    def compile_dslices(cls, model_path: Path | str) -> None:
-        """
-        Compile DSperse slices in a folder if there are any.
-        XXX: Maybe we actually don't need that method anymore
-        """
-        model_path = Path(model_path)
-        logging.debug(
-            f"Checking compilation status for DSperse slices in {model_path.name}..."
-        )
-        compiler = Compiler()
-        compiler.compile(
-            model_path=model_path,
-            input_file=Path(__file__).parent.parent
-            / "deployment_layer"
-            / "model_b4a373270b59e2b9d5aac05e41df8cdff76a252f5543e00fcd87f2626b37361c"
-            / "input.json",
-        )
-        # for slice_dir in model_path.glob("slice_*"):
-        #     if not slice_dir.is_dir():
-        #         continue
-
-        #     metadata = cls.get_slice_metadata(slice_dir)
-        #     is_compiled = (
-        #         metadata.get("slices", [{}])[0]
-        #         .get("compilation", {})
-        #         .get("ezkl", {})
-        #         .get("compiled", False)
-        #     )
-        #     if is_compiled:
-        #         logging.debug(
-        #             f"DSlice {slice_dir.name} is already compiled. Skipping compilation."
-        #         )
-        #         continue
-
-        #     logging.info(
-        #         f"Compiling DSlice {slice_dir.name} in model {model_path.name}..."
-        #     )

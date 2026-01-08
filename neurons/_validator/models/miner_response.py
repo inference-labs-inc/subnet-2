@@ -23,6 +23,7 @@ class MinerResponse:
     response_time: float
     proof_size: int
     circuit: Circuit
+    proof_system: ProofSystem | None = None
     verification_time: float | None = None
     proof_content: dict | str | None = None
     public_json: list[str] | None = None
@@ -42,6 +43,12 @@ class MinerResponse:
         Creates a MinerResponse object from a raw response dictionary.
         """
         bt.logging.trace(f"Deserialized response: {deserialized_response}")
+
+        proof_system = None
+        if request.data.get("proof_system"):
+            proof_system = request.data["proof_system"]
+        elif request.circuit is not None:
+            proof_system = request.circuit.proof_system
 
         proof = deserialized_response.get("proof", "{}")
         if isinstance(proof, str):
@@ -98,6 +105,7 @@ class MinerResponse:
             response_time=request.response_time,
             proof_size=proof_size or DEFAULT_PROOF_SIZE,
             circuit=request.circuit,
+            proof_system=proof_system,
             proof_content=proof_content,
             request_type=request.request_type,
             external_request_hash=request.external_request_hash,

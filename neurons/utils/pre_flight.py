@@ -235,8 +235,6 @@ def sync_models(role: Optional[Roles] = None):
         if metadata.get("type") == CircuitType.DSPERSE_PROOF_GENERATION:
             download_dslices(external_files_model_path, metadata.get("dslices", []))
             DSperseManager.extract_dslices(external_files_model_path)
-            # Hopefully we don't need to compile dslices here:
-            # DSperseManager.compile_dslices(external_files_model_path)
 
 
 def download_external_files(

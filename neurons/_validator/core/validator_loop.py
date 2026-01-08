@@ -561,7 +561,9 @@ class ValidatorLoop:
             if response.verification_result:
                 bt.logging.info(
                     f"Successfully verified proof from UID {response.uid} "
-                    f"for circuit {response.circuit}. Request type: {response.request_type.name}"
+                    f"for circuit {response.circuit.metadata.name} ({response.circuit.metadata.version}), "
+                    f"using {response.proof_system}. "
+                    f"Request type: {response.request_type.name}"
                 )
             else:
                 response.response_time = (
