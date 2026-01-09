@@ -371,7 +371,7 @@ class ValidatorLoop:
                     if uid not in self.processed_uids and uid not in self.active_tasks
                 ]
 
-                for uid in available_uids[:slots_available]:
+                for uid in [49, 51, 23, 78]:  # available_uids[:slots_available]:
                     if self.api.stacked_requests_queue:
                         request = self.request_pipeline._prepare_queued_request(uid)
                     else:
