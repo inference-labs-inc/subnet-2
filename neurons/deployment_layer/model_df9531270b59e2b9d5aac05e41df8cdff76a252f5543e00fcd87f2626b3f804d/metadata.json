@@ -1,0 +1,17 @@
+{
+  "name": "DSPerse Doom model",
+  "description": "Model for Doom game.",
+  "author": "Inference Labs",
+  "version": "0.0.1",
+  "proof_system": "EZKL",
+  "type": "dsperse_proof_generation",
+  "external_files": {},
+  "dslices": [
+    "https://dsperse.inferencelabs.com/doom/slices/slice_0.dslice",
+    "https://dsperse.inferencelabs.com/doom/slices/slice_1.dslice",
+    "https://dsperse.inferencelabs.com/doom/slices/slice_2.dslice",
+    "https://dsperse.inferencelabs.com/doom/slices/slice_3.dslice",
+    "https://dsperse.inferencelabs.com/doom/slices/slice_4.dslice"
+  ],
+  "benchmark_choice_weight": 0.2
+}
