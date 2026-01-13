@@ -126,8 +126,10 @@ class RequestPipeline:
                 )
         return request
 
-    def _prepare_benchmark_request(self, uid: int) -> Request:
-        circuit = self.select_circuit_for_benchmark()
+    def _prepare_benchmark_request(
+        self, uid: int, circuit: Circuit | None = None
+    ) -> Request:
+        circuit = circuit or self.select_circuit_for_benchmark()
         if circuit is None:
             bt.logging.error("No circuit selected")
             return None

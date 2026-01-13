@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import os
+import random
 import sys
 import time
 import traceback
@@ -14,6 +15,7 @@ import bittensor as bt
 import cli_parser
 import httpx
 from bittensor.core.chain_data import AxonInfo
+from deployment_layer.circuit_store import circuit_store
 from execution_layer.dsperse_manager import DSperseManager
 
 from _validator.api import ValidatorAPI
@@ -36,12 +38,14 @@ from _validator.core.request_pipeline import RequestPipeline
 from _validator.core.response_processor import ResponseProcessor
 from _validator.models.miner_response import MinerResponse
 from _validator.models.request_type import RequestType, ValidatorMessage
+from _validator.pow.proof_of_weights_handler import ProofOfWeightsHandler
 from _validator.scoring.score_manager import ScoreManager
 from _validator.scoring.weights import WeightsManager
 from _validator.utils.logging import log_responses as console_log_responses
 from _validator.utils.proof_of_weights import save_proof_of_weights
 from _validator.utils.uid import get_queryable_uids
 from constants import (
+    BATCHED_PROOF_OF_WEIGHTS_MODEL_ID,
     DEFAULT_PROOF_SIZE,
     EXCEPTION_DELAY_SECONDS,
     FIVE_MINUTES,
@@ -370,9 +374,21 @@ class ValidatorLoop:
                     for uid in self.queryable_uids
                     if uid not in self.processed_uids and uid not in self.active_tasks
                 ]
+                random.shuffle(available_uids)
 
                 for uid in available_uids[:slots_available]:
-                    if self.api.stacked_requests_queue:
+                    if (
+                        len(self.score_manager.pow_manager.proof_of_weights_queue)
+                        >= ProofOfWeightsHandler.BATCH_SIZE
+                    ):
+                        # too many PoW items queued, send a batched PoW request to clear them
+                        request = self.request_pipeline._prepare_benchmark_request(
+                            uid,
+                            circuit_store.get_circuit(
+                                BATCHED_PROOF_OF_WEIGHTS_MODEL_ID
+                            ),
+                        )
+                    elif self.api.stacked_requests_queue:
                         request = self.request_pipeline._prepare_queued_request(uid)
                     else:
                         request = self.request_pipeline._prepare_benchmark_request(uid)
