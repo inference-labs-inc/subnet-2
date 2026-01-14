@@ -46,7 +46,7 @@ class WeightsManager:
             wallet=wallet,
             uids=uids,
             weights=weights,
-            wait_for_inclusion=True,
+            wait_for_inclusion=False,  # Don't block waiting for blockchain confirmation
             version_key=version_key,
         )
 
