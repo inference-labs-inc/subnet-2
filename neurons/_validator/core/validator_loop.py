@@ -132,6 +132,7 @@ class ValidatorLoop:
         self.processed_uids: set[int] = set()
         self.queryable_uids: list[int] = []
         self.last_response_time = time.time()
+        self.last_periodic_task_time = time.time()
 
         self._should_run = True
 
@@ -495,6 +496,7 @@ class ValidatorLoop:
                 await self.log_responses()
                 if self.current_concurrency:
                     await self.sync_competition()
+                self.last_periodic_task_time = time.time()
                 await asyncio.sleep(LOOP_DELAY_SECONDS)
             except Exception as e:
                 bt.logging.error(f"Error in periodic tasks: {e}")
@@ -516,16 +518,26 @@ class ValidatorLoop:
                 await asyncio.sleep(WATCHDOG_INTERVAL)
 
                 time_since_last_response = time.time() - self.last_response_time
+                time_since_last_periodic = time.time() - self.last_periodic_task_time
+                problem_detected = False
 
+                # Check for periodic tasks freeze (more critical - indicates blocking)
+                if time_since_last_periodic > INACTIVITY_THRESHOLD:
+                    bt.logging.error(
+                        f"WATCHDOG: Periodic tasks stalled for {time_since_last_periodic:.0f}s! "
+                        f"Possible blocking operation in progress."
+                    )
+                    problem_detected = True
+
+                # Check for response inactivity (less critical - could be network issues)
                 if time_since_last_response > INACTIVITY_THRESHOLD:
                     bt.logging.warning(
-                        f"WATCHDOG: No activity for {time_since_last_response:.0f}s. "
-                        f"Active tasks: {len(self.active_tasks)}/{MAX_CONCURRENT_REQUESTS}, "
-                        f"Queue size: {self.request_queue.qsize()}, "
-                        f"Queryable UIDs: {len(self.queryable_uids)}, "
-                        f"Current concurrency: {self.current_concurrency}"
+                        f"WATCHDOG: No miner responses for {time_since_last_response:.0f}s."
                     )
-                    # Log thread pool status
+                    problem_detected = True
+
+                if problem_detected:
+                    # Log thread pool status to help diagnose
                     try:
                         thread_pool_queued = self.thread_pool._work_queue.qsize()
                         response_pool_queued = (
@@ -537,9 +549,16 @@ class ValidatorLoop:
                         )
                     except Exception:
                         pass  # Thread pool internals may not be accessible
+                    bt.logging.warning(
+                        f"Active tasks: {len(self.active_tasks)}/{MAX_CONCURRENT_REQUESTS}, "
+                        f"Queue size: {self.request_queue.qsize()}, "
+                        f"Queryable UIDs: {len(self.queryable_uids)}, "
+                        f"Current concurrency: {self.current_concurrency}"
+                    )
                 else:
-                    bt.logging.trace(
-                        f"WATCHDOG: Healthy - last activity {time_since_last_response:.0f}s ago"
+                    bt.logging.debug(
+                        f"WATCHDOG: Healthy - last response {time_since_last_response:.0f}s ago, "
+                        f"last periodic {time_since_last_periodic:.0f}s ago"
                     )
             except asyncio.CancelledError:
                 break
