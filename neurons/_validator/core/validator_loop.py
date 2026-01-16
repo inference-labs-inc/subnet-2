@@ -123,16 +123,21 @@ class ValidatorLoop:
         )
         self.last_pow_commit_block = 0
         self.api = ValidatorAPI(self.config)
+        self.api.dsperse_manager = self.dsperse_manager
         self.request_pipeline = RequestPipeline(
             self.config, self.score_manager, self.api
         )
 
         self.request_queue = asyncio.Queue()
-        self.active_tasks: dict[int, asyncio.Task] = {}
+        self.active_tasks: dict[str, asyncio.Task] = {}
+        self.miner_active_count: dict[int, int] = {}
+        self.miner_capacities: dict[int, int] = {}
+        self.default_miner_capacity = 10
         self.processed_uids: set[int] = set()
         self.queryable_uids: list[int] = []
         self.last_response_time = time.time()
         self.last_periodic_task_time = time.time()
+        self._task_counter = 0
 
         self._should_run = True
 
@@ -218,6 +223,19 @@ class ValidatorLoop:
     async def sync_capacities(self, miners_info: dict[int, AxonInfo]):
         capacities = await self.capacity_manager.sync_capacities(miners_info)
         bt.logging.debug(f"Synced capacities: {capacities}")
+
+        for uid, miner_info in miners_info.items():
+            total_capacity = 0
+            for response in capacities:
+                if hasattr(response, 'capacities') and response.capacities:
+                    for circuit_id, compute_units in response.capacities.items():
+                        total_capacity += compute_units
+            if total_capacity > 0:
+                self.miner_capacities[uid] = min(total_capacity, 20)
+            else:
+                self.miner_capacities[uid] = self.default_miner_capacity
+
+        bt.logging.info(f"Updated capacities for {len(self.miner_capacities)} miners")
         return capacities
 
     @with_rate_limit(period=FIVE_MINUTES)
@@ -385,7 +403,7 @@ class ValidatorLoop:
     async def maintain_request_pool(self):
         """
         Maintain the pool of active requests to miners.
-        Basically, the main loop of the validator.
+        Supports multiple concurrent requests per miner based on their capacity.
         """
         while self._should_run:
             await self.maintain_competitions()
@@ -397,60 +415,68 @@ class ValidatorLoop:
                     continue
 
                 if not self.api.stacked_requests_queue:
-                    # Refill the stacked requests queue from DSperse manager if needed
                     for (
                         dslice_request
                     ) in self.dsperse_manager.generate_dslice_requests():
                         self.api.stacked_requests_queue.insert(0, dslice_request)
 
-                # available miners to send requests to
-                available_uids = [
-                    uid
-                    for uid in self.queryable_uids
-                    if uid not in self.processed_uids and uid not in self.active_tasks
-                ]
-                random.shuffle(available_uids)
+                requests_sent = 0
+                for uid in self.queryable_uids:
+                    if requests_sent >= slots_available:
+                        break
 
-                for uid in available_uids[:slots_available]:
-                    if (
-                        len(self.score_manager.pow_manager.proof_of_weights_queue)
-                        >= ProofOfWeightsHandler.BATCH_SIZE
-                    ):
-                        # too many PoW items queued, send a batched PoW request to clear them
-                        request = self.request_pipeline._prepare_benchmark_request(
-                            uid,
-                            circuit_store.get_circuit(
-                                BATCHED_PROOF_OF_WEIGHTS_MODEL_ID
-                            ),
-                        )
-                    elif self.api.stacked_requests_queue:
-                        request = self.request_pipeline._prepare_queued_request(uid)
-                    else:
-                        request = self.request_pipeline._prepare_benchmark_request(uid)
+                    miner_capacity = self.miner_capacities.get(uid, self.default_miner_capacity)
+                    miner_active = self.miner_active_count.get(uid, 0)
+                    available_slots = miner_capacity - miner_active
 
-                    if not request:
-                        bt.logging.warning(
-                            f"Empty request prepared for UID {uid}, skipping"
-                        )
+                    if available_slots <= 0:
                         continue
 
-                    if DEBUG_SYNC_MODE:
-                        # Synchronous mode for easier debugging -- NOT FOR PRODUCTION
-                        bt.logging.debug(
-                            f"[SYNC MODE] Processing request for UID {uid}"
-                        )
-                        self.active_tasks[uid] = "dummy_task_object"  # type: ignore
-                        await self._process_single_request(request)
-                        self._handle_completed_task(uid)
-                    else:
-                        # Asynchronous mode for normal operation
-                        task = asyncio.create_task(
-                            self._process_single_request(request)
-                        )
-                        self.active_tasks[uid] = task
-                        task.add_done_callback(
-                            lambda _, uid=uid: self._handle_completed_task(uid)
-                        )
+                    requests_for_miner = min(available_slots, slots_available - requests_sent)
+
+                    for _ in range(requests_for_miner):
+                        if (
+                            len(self.score_manager.pow_manager.proof_of_weights_queue)
+                            >= ProofOfWeightsHandler.BATCH_SIZE
+                        ):
+                            request = self.request_pipeline._prepare_benchmark_request(
+                                uid,
+                                circuit_store.get_circuit(
+                                    BATCHED_PROOF_OF_WEIGHTS_MODEL_ID
+                                ),
+                            )
+                        elif self.api.stacked_requests_queue:
+                            request = self.request_pipeline._prepare_queued_request(uid)
+                        else:
+                            request = self.request_pipeline._prepare_benchmark_request(uid)
+
+                        if not request:
+                            bt.logging.warning(
+                                f"Empty request prepared for UID {uid}, skipping"
+                            )
+                            break
+
+                        task_id = self._generate_task_id(uid)
+
+                        if DEBUG_SYNC_MODE:
+                            bt.logging.debug(
+                                f"[SYNC MODE] Processing request {task_id} for UID {uid}"
+                            )
+                            self.active_tasks[task_id] = "dummy_task_object"  # type: ignore
+                            self.miner_active_count[uid] = self.miner_active_count.get(uid, 0) + 1
+                            await self._process_single_request(request)
+                            self._handle_completed_task(task_id, uid)
+                        else:
+                            task = asyncio.create_task(
+                                self._process_single_request(request)
+                            )
+                            self.active_tasks[task_id] = task
+                            self.miner_active_count[uid] = self.miner_active_count.get(uid, 0) + 1
+                            task.add_done_callback(
+                                lambda _, tid=task_id, u=uid: self._handle_completed_task(tid, u)
+                            )
+
+                        requests_sent += 1
 
                 await asyncio.sleep(0)
             except Exception as e:
@@ -458,22 +484,29 @@ class ValidatorLoop:
                 traceback.print_exc()
                 await asyncio.sleep(EXCEPTION_DELAY_SECONDS)
 
-    def _handle_completed_task(self, uid: int):
-        self.processed_uids.add(uid)
+    def _generate_task_id(self, uid: int) -> str:
+        """Generate a unique task ID for tracking."""
+        self._task_counter += 1
+        return f"{uid}_{self._task_counter}_{time.time()}"
 
-        if uid in self.active_tasks:
-            del self.active_tasks[uid]
-            if (
-                self.current_concurrency == 0
-                and not self.active_tasks
-                and self.competition
-            ):
-                bt.logging.info(
-                    "All tasks completed during winddown, sending winddown complete message"
-                )
-                self.validator_to_competition_queue.put(
-                    ValidatorMessage.WINDDOWN_COMPLETE
-                )
+    def _handle_completed_task(self, task_id: str, uid: int):
+        if task_id in self.active_tasks:
+            del self.active_tasks[task_id]
+
+        if uid in self.miner_active_count:
+            self.miner_active_count[uid] = max(0, self.miner_active_count[uid] - 1)
+
+        if (
+            self.current_concurrency == 0
+            and not self.active_tasks
+            and self.competition
+        ):
+            bt.logging.info(
+                "All tasks completed during winddown, sending winddown complete message"
+            )
+            self.validator_to_competition_queue.put(
+                ValidatorMessage.WINDDOWN_COMPLETE
+            )
 
     async def run_periodic_tasks(self):
         while self._should_run:

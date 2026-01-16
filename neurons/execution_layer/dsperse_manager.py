@@ -2,7 +2,8 @@ import json
 import random
 import tempfile
 import shutil
-from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -32,6 +33,27 @@ class DSliceData:
     witness_file: Path | None = None
     proof_file: Path | None = None
     success: bool | None = None
+    frame_idx: int | None = None
+    retry_count: int = 0
+
+
+@dataclass
+class FrameWitnessResult:
+    frame_idx: int
+    run_uid: str
+    slices: list[DSliceData]
+    success: bool
+    error: str | None = None
+
+
+@dataclass
+class BatchRun:
+    batch_id: str
+    circuit_id: str
+    frame_results: dict[int, FrameWitnessResult] = field(default_factory=dict)
+    pending_slices: list[DSliceQueuedProofRequest] = field(default_factory=list)
+    failed_slices: list[DSliceQueuedProofRequest] = field(default_factory=list)
+    completed_slices: list[str] = field(default_factory=list)
 
 
 class DSperseManager:
@@ -339,3 +361,249 @@ class DSperseManager:
             )
             # `cleanup=True` doesn't work for some reason, so we manually delete the .dslice file
             dslice_file.unlink(missing_ok=True)
+
+    def generate_batch_witnesses(
+        self,
+        circuit: Circuit,
+        frame_inputs: list[dict],
+        max_workers: int = 8,
+    ) -> BatchRun:
+        """
+        Generate witnesses for multiple frames in parallel using ProcessPoolExecutor.
+        Each frame is processed independently, allowing true parallelism.
+        """
+        batch_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        batch_run = BatchRun(batch_id=batch_id, circuit_id=circuit.id)
+
+        logging.info(
+            f"Starting batch witness generation for {len(frame_inputs)} frames "
+            f"with {max_workers} workers. Batch ID: {batch_id}"
+        )
+
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _process_single_frame,
+                    frame_idx,
+                    frame_input,
+                    circuit.id,
+                    circuit.paths.external_base_path,
+                    batch_id,
+                ): frame_idx
+                for frame_idx, frame_input in enumerate(frame_inputs)
+            }
+
+            for future in as_completed(futures):
+                frame_idx = futures[future]
+                try:
+                    result = future.result()
+                    batch_run.frame_results[frame_idx] = result
+
+                    if result.success:
+                        logging.info(
+                            f"Frame {frame_idx} witness generation complete: "
+                            f"{len(result.slices)} slices"
+                        )
+                    else:
+                        logging.warning(
+                            f"Frame {frame_idx} witness generation failed: {result.error}"
+                        )
+                except Exception as e:
+                    logging.error(f"Frame {frame_idx} raised exception: {e}")
+                    batch_run.frame_results[frame_idx] = FrameWitnessResult(
+                        frame_idx=frame_idx,
+                        run_uid=f"{batch_id}_{frame_idx}",
+                        slices=[],
+                        success=False,
+                        error=str(e),
+                    )
+
+        self._populate_batch_requests(batch_run, circuit)
+        return batch_run
+
+    def _populate_batch_requests(self, batch_run: BatchRun, circuit: Circuit) -> None:
+        """Convert successful frame results into DSlice proof requests."""
+        for frame_idx, result in batch_run.frame_results.items():
+            if not result.success:
+                continue
+
+            self.runs[result.run_uid] = result.slices
+
+            for slice_data in result.slices:
+                try:
+                    with open(slice_data.input_file, "r") as f:
+                        inputs = json.load(f)
+                    with open(slice_data.output_file, "r") as f:
+                        outputs = json.load(f)
+
+                    witness = None
+                    if slice_data.witness_file and slice_data.witness_file.exists():
+                        witness = slice_data.witness_file.read_bytes()
+
+                    request = DSliceQueuedProofRequest(
+                        circuit=circuit,
+                        inputs=inputs,
+                        outputs=outputs,
+                        witness=witness,
+                        slice_num=slice_data.slice_num,
+                        run_uid=result.run_uid,
+                        proof_system=slice_data.prove_system,
+                    )
+                    batch_run.pending_slices.append(request)
+                except Exception as e:
+                    logging.error(
+                        f"Failed to create request for frame {frame_idx} "
+                        f"slice {slice_data.slice_num}: {e}"
+                    )
+
+        logging.info(
+            f"Batch {batch_run.batch_id}: {len(batch_run.pending_slices)} "
+            f"proof requests ready for distribution"
+        )
+
+    def retry_failed_slice(
+        self, batch_run: BatchRun, failed_request: DSliceQueuedProofRequest, max_retries: int = 3
+    ) -> bool:
+        """
+        Retry a failed slice proof request.
+        Returns True if the request should be retried, False if max retries exceeded.
+        """
+        run_uid = failed_request.run_uid
+        slice_num = failed_request.slice_num
+
+        if run_uid not in self.runs:
+            logging.error(f"Cannot retry: run {run_uid} not found")
+            return False
+
+        slice_data = next(
+            (s for s in self.runs[run_uid] if s.slice_num == slice_num), None
+        )
+        if slice_data is None:
+            logging.error(f"Cannot retry: slice {slice_num} not found in run {run_uid}")
+            return False
+
+        slice_data.retry_count += 1
+        if slice_data.retry_count > max_retries:
+            logging.warning(
+                f"Slice {slice_num} in run {run_uid} exceeded max retries ({max_retries})"
+            )
+            batch_run.failed_slices.append(failed_request)
+            return False
+
+        logging.info(
+            f"Retrying slice {slice_num} in run {run_uid} "
+            f"(attempt {slice_data.retry_count}/{max_retries})"
+        )
+        batch_run.pending_slices.append(failed_request)
+        return True
+
+    def mark_slice_complete(
+        self, batch_run: BatchRun, run_uid: str, slice_num: str
+    ) -> None:
+        """Mark a slice as successfully proven."""
+        slice_key = f"{run_uid}:{slice_num}"
+        if slice_key not in batch_run.completed_slices:
+            batch_run.completed_slices.append(slice_key)
+
+    def get_batch_progress(self, batch_run: BatchRun) -> dict:
+        """Get progress statistics for a batch run."""
+        total_frames = len(batch_run.frame_results)
+        successful_frames = sum(
+            1 for r in batch_run.frame_results.values() if r.success
+        )
+        total_slices = sum(
+            len(r.slices) for r in batch_run.frame_results.values() if r.success
+        )
+
+        return {
+            "batch_id": batch_run.batch_id,
+            "total_frames": total_frames,
+            "successful_frames": successful_frames,
+            "failed_frames": total_frames - successful_frames,
+            "total_slices": total_slices,
+            "pending_slices": len(batch_run.pending_slices),
+            "completed_slices": len(batch_run.completed_slices),
+            "failed_slices": len(batch_run.failed_slices),
+            "progress_percent": (
+                len(batch_run.completed_slices) / total_slices * 100
+                if total_slices > 0
+                else 0
+            ),
+        }
+
+
+def _process_single_frame(
+    frame_idx: int,
+    frame_input: dict,
+    circuit_id: str,
+    slice_path: str,
+    batch_id: str,
+) -> FrameWitnessResult:
+    """
+    Process a single frame's witness generation.
+    This function runs in a separate process via ProcessPoolExecutor.
+    """
+    run_uid = f"{batch_id}_{frame_idx}"
+    run_dir = Path(cli_parser.config.dsperse_run_dir) / f"run_{run_uid}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        input_json_path = run_dir / "input.json"
+        with open(input_json_path, "w") as f:
+            json.dump(frame_input, f)
+
+        save_metadata_path = run_dir / "metadata.json"
+        runner = Runner(save_metadata_path=save_metadata_path)
+        results = runner.run(input_json_path=input_json_path, slice_path=slice_path)
+
+        slice_results = results.get("slice_results", {})
+        if not all(r.get("success", False) for r in slice_results.values()):
+            failed = [k for k, v in slice_results.items() if not v.get("success")]
+            return FrameWitnessResult(
+                frame_idx=frame_idx,
+                run_uid=run_uid,
+                slices=[],
+                success=False,
+                error=f"Slices failed: {failed}",
+            )
+
+        slices = []
+        for slice_num, r in slice_results.items():
+            if r.get("method", "").startswith("onnx"):
+                continue
+
+            method = r.get("method", "")
+            if method.startswith("jstprove"):
+                prove_system = ProofSystem.JSTPROVE
+            elif method.startswith("ezkl"):
+                prove_system = ProofSystem.EZKL
+            else:
+                continue
+
+            slices.append(
+                DSliceData(
+                    slice_num=slice_num.split("_")[-1],
+                    circuit_id=circuit_id,
+                    input_file=Path(r["input_file"]),
+                    output_file=Path(r["output_file"]),
+                    witness_file=Path(r["witness_file"]) if r.get("witness_file") else None,
+                    prove_system=prove_system,
+                    frame_idx=frame_idx,
+                )
+            )
+
+        return FrameWitnessResult(
+            frame_idx=frame_idx,
+            run_uid=run_uid,
+            slices=slices,
+            success=True,
+        )
+
+    except Exception as e:
+        return FrameWitnessResult(
+            frame_idx=frame_idx,
+            run_uid=run_uid,
+            slices=[],
+            success=False,
+            error=str(e),
+        )
