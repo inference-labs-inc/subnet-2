@@ -9,7 +9,7 @@ from typing import Iterable
 
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
-from dsperse.src.compile.compiler import Compiler
+from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.prover import Prover
 from dsperse.src.run.runner import Runner
 from dsperse.src.verifier import Verifier
@@ -74,11 +74,6 @@ class DSperseManager:
                         circuit=circuit,
                         inputs=json.load(input_file),
                         outputs=json.load(output_file),
-                        witness=(
-                            slice_data.witness_file.read_bytes()
-                            if slice_data.witness_file
-                            else None
-                        ),
                         slice_num=slice_data.slice_num,
                         run_uid=run_uid,
                         proof_system=slice_data.prove_system,
@@ -135,7 +130,6 @@ class DSperseManager:
         slice_num: str,
         inputs: dict,
         outputs: dict,
-        witness: bytes | None,
         proof_system: ProofSystem,
     ) -> dict | None:
         """
@@ -143,13 +137,19 @@ class DSperseManager:
         """
         circuit = self._get_circuit_by_id(circuit_id)
         model_dir = Path(circuit.paths.external_base_path) / f"slice_{slice_num}"
+        result = {
+            "circuit_id": circuit_id,
+            "slice_num": slice_num,
+            "success": False,
+            "proof_generation_time": None,
+            "proof": None,
+        }
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
 
             input_file = tmp_path / "input.json"
             output_file = tmp_path / "output.json"
-            witness_file = None
 
             with open(input_file, "w") as f:
                 json.dump(inputs, f)
@@ -157,10 +157,24 @@ class DSperseManager:
             with open(output_file, "w") as f:
                 json.dump(outputs, f)
 
-            if witness is not None:
-                witness_file = tmp_path / "output_witness.bin"
-                with open(witness_file, "wb") as f:
-                    f.write(witness)
+            if proof_system == ProofSystem.JSTPROVE:
+                jstprover = JSTprove()
+                jst_model_path = (
+                    model_dir
+                    / "payload"
+                    / "jstprove"
+                    / f"slice_{slice_num}_circuit.txt"
+                )
+                success, res = jstprover.generate_witness(
+                    input_file=input_file,
+                    model_path=jst_model_path,
+                    output_file=output_file,
+                )
+                if not success:
+                    logging.error(
+                        f"Failed to generate witness for slice {slice_num} using JSTprove. Error: {res}"
+                    )
+                    return result
 
             prover = Prover()
             result = prover.prove(
@@ -184,13 +198,10 @@ class DSperseManager:
                     with open(proof_execution["proof_file"], "r") as proof_file:
                         proof_data = json.load(proof_file)
 
-            return {
-                "circuit_id": circuit_id,
-                "slice_num": slice_id,
-                "success": success,
-                "proof_generation_time": proof_generation_time,
-                "proof": proof_data,
-            }
+            result["success"] = success
+            result["proof_generation_time"] = proof_generation_time
+            result["proof"] = proof_data
+            return result
 
     def verify_slice_proof(
         self, run_uid: str, slice_num: str, proof: dict | str, proof_system: ProofSystem
@@ -292,7 +303,9 @@ class DSperseManager:
             return ProofSystem.JSTPROVE
         elif method.startswith("ezkl"):
             return ProofSystem.EZKL
-        raise ValueError(f"Unknown proof method '{method}' - cannot determine proof system")
+        raise ValueError(
+            f"Unknown proof method '{method}' - cannot determine proof system"
+        )
 
     def _parse_dsperse_result(
         self, result: dict, execution_type: str

@@ -362,7 +362,6 @@ class MinerSession:
                 slice_num=data.slice_num,
                 inputs=data.inputs,
                 outputs=data.outputs,
-                witness=bytes.fromhex(data.witness) if data.witness else None,
                 proof_system=data.proof_system,
             )
 
