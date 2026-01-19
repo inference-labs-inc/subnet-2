@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Iterable
 
 import torch
 from rich.console import Console, JustifyMethod
@@ -90,7 +91,7 @@ def log_verify_result(results: list[tuple[int, bool]]):
     )
 
 
-def log_responses(responses: list[MinerResponse]):
+def log_responses(responses: Iterable[MinerResponse]):
     """
     Log miner responses to a table and Weights & Biases.
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import deque
 import torch
 import bittensor as bt
 
@@ -14,11 +15,15 @@ from _validator.utils.logging import log_scores
 
 
 class ProofOfWeightsManager:
+    # Maximum queue size: 4 batches worth (4 * 256)
+    MAX_QUEUE_SIZE = 1024
+
     def __init__(self, metagraph: bt.metagraph, scores: torch.Tensor):
         self.metagraph = metagraph
         self.scores = scores
-        self.proof_of_weights_queue = []
+        self.proof_of_weights_queue = deque(maxlen=self.MAX_QUEUE_SIZE)
         self.last_processed_queue_step = -1
+        self.orphaned_items_count = 0
 
     def _update_scores_from_witness(
         self, proof_of_weights_items: list[ProofOfWeightsItem], model_id: str
@@ -72,6 +77,16 @@ class ProofOfWeightsManager:
         if not new_items:
             return
 
+        # Track if items will be dropped due to capacity
+        new_size = len(self.proof_of_weights_queue) + len(new_items)
+        if new_size > self.MAX_QUEUE_SIZE:
+            dropped = new_size - self.MAX_QUEUE_SIZE
+            self.orphaned_items_count += dropped
+            bt.logging.error(
+                f"PoW queue at capacity ({self.MAX_QUEUE_SIZE}), dropping {dropped} oldest items. "
+                f"Total dropped: {self.orphaned_items_count}"
+            )
+
         self.proof_of_weights_queue.extend(new_items)
         self.log_pow_queue_status()
 
@@ -81,9 +96,10 @@ class ProofOfWeightsManager:
 
     def process_pow_queue(self, model_id: str) -> bool:
         """Process items in the proof of weights queue for a specific model."""
+        CHUNK_SIZE = 256
         if (
-            len(self.proof_of_weights_queue) < 256
-            or len(self.proof_of_weights_queue) % 256 != 0
+            len(self.proof_of_weights_queue) < CHUNK_SIZE
+            or len(self.proof_of_weights_queue) % CHUNK_SIZE != 0
         ):
             return False
 
@@ -96,9 +112,14 @@ class ProofOfWeightsManager:
             bt.logging.error(f"Circuit not found for model ID: {model_id}")
             return False
 
-        items_to_process = self.proof_of_weights_queue[-256:]
+        # Process oldest 256 items (FIFO)
+        items_to_process = list(self.proof_of_weights_queue)[:CHUNK_SIZE]
         self._update_scores_from_witness(items_to_process, model_id)
+
         self.last_processed_queue_step = current_step
+        bt.logging.info(
+            f"Processed {CHUNK_SIZE} PoW items, {len(self.proof_of_weights_queue)} remaining in queue"
+        )
 
         return True
 
@@ -108,9 +129,10 @@ class ProofOfWeightsManager:
 
     def get_pow_queue(self) -> list[ProofOfWeightsItem]:
         """Get the current proof of weights queue."""
-        return self.proof_of_weights_queue
+        return list(self.proof_of_weights_queue)
 
     def remove_processed_items(self, count: int):
         if count <= 0:
             return
-        self.proof_of_weights_queue = self.proof_of_weights_queue[count:]
+        for _ in range(min(count, len(self.proof_of_weights_queue))):
+            self.proof_of_weights_queue.popleft()

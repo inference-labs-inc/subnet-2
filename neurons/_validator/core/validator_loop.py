@@ -7,6 +7,7 @@ import random
 import sys
 import time
 import traceback
+from collections import deque
 from multiprocessing import Queue as MPQueue
 from queue import Empty
 from typing import NoReturn
@@ -142,9 +143,8 @@ class ValidatorLoop:
         )
         self.last_competition_sync = 0
         self.is_syncing_competition = False
-        self.competition_commitments = []
 
-        self.recent_responses: list[MinerResponse] = []
+        self.recent_responses: deque[MinerResponse] = deque(maxlen=1000)
 
         if self.config.bt_config.prometheus_monitoring:
             start_prometheus_logging(self.config.bt_config.prometheus_port)
@@ -355,7 +355,7 @@ class ValidatorLoop:
                     bt.logging.error(f"Error in GC logging: {e}")
 
             self.last_response_time = time.time()
-            self.recent_responses = []
+            self.recent_responses.clear()
 
     async def maintain_competitions(self):
         """
@@ -739,13 +739,49 @@ class ValidatorLoop:
     async def _cleanup(self):
         """Handle keyboard interrupt by cleaning up and exiting."""
         bt.logging.success("Keyboard interrupt detected. Exiting validator.")
+
+        # Cancel all active tasks first
+        bt.logging.info(f"Cancelling {len(self.active_tasks)} active tasks...")
+        for uid, task in self.active_tasks.items():
+            if not task.done():
+                task.cancel()
+
+        # Wait briefly for tasks to cancel
+        if self.active_tasks:
+            await asyncio.gather(*self.active_tasks.values(), return_exceptions=True)
+        self.active_tasks.clear()
+        bt.logging.success("Active tasks cancelled")
+
+        # Shutdown thread pools with timeout
+        bt.logging.info("Shutting down thread pools...")
+        self.thread_pool.shutdown(wait=True, cancel_futures=True)
+        self.response_thread_pool.shutdown(wait=True, cancel_futures=True)
+        bt.logging.success("Thread pools shut down")
+
+        # Existing cleanup continues
         await self.api.stop()
         await self.httpx_client.aclose()
         stop_prometheus_logging()
         clean_temp_files()
         self.dsperse_manager.total_cleanup()
+
+        # Drain MPQueues to prevent memory leaks
+        bt.logging.info("Draining message queues...")
+        while not self.validator_to_competition_queue.empty():
+            try:
+                self.validator_to_competition_queue.get_nowait()
+            except Exception:
+                break
+        while not self.competition_to_validator_queue.empty():
+            try:
+                self.competition_to_validator_queue.get_nowait()
+            except Exception:
+                break
+        bt.logging.success("Message queues drained")
+
         if self.competition:
             self.competition.competition_thread.stop()
             if hasattr(self.competition.circuit_manager, "close"):
                 await self.competition.circuit_manager.close()
+
         sys.exit(0)

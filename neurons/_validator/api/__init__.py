@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import traceback
+from collections import deque
 from fastapi import (
     FastAPI,
     WebSocket,
@@ -69,12 +70,17 @@ def _should_rate_limit(ip: str):
 
 
 class ValidatorAPI:
+    # Maximum stacked requests queue size
+    MAX_STACKED_REQUESTS = 1000
+
     def __init__(self, config: ValidatorConfig):
         self.config = config
         # a Queue of requests to be sent to miners
         # consists of "real world requests" ProofOfWeightsRPCRequest and ProofOfComputationRPCRequest
         # and a Request with one slice of a DSperse model (DSlice)
-        self.stacked_requests_queue: list[QueuedRequestDataModel] = []
+        self.stacked_requests_queue: deque[QueuedRequestDataModel] = deque(
+            maxlen=self.MAX_STACKED_REQUESTS
+        )
         self.ws_manager = WebSocketManager()
         self.recent_requests: dict[str, int] = {}
         self.validator_keys_cache = ValidatorKeysCache(config)
@@ -309,6 +315,8 @@ class ValidatorAPI:
                 bt.logging.error(
                     f"External request with hash {external_request.hash} timed out"
                 )
+                # Clean up request_results on timeout to prevent memory leak
+                self.request_results.pop(external_request.hash, None)
                 return Error(9, "Request processing failed", "Request timed out")
             finally:
                 self.pending_requests.pop(external_request.hash, None)
@@ -368,6 +376,8 @@ class ValidatorAPI:
                 bt.logging.error(
                     f"External request with hash {external_request.hash} timed out"
                 )
+                # Clean up request_results on timeout to prevent memory leak
+                self.request_results.pop(external_request.hash, None)
                 return Error(9, "Request processing failed", "Request timed out")
             finally:
                 self.pending_requests.pop(external_request.hash, None)

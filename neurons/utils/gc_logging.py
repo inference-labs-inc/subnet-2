@@ -1,7 +1,7 @@
 import base64
 import json
 import os
-from typing import Optional, TYPE_CHECKING
+from typing import Iterable, Optional, TYPE_CHECKING
 
 import bittensor as bt
 import requests
@@ -36,7 +36,7 @@ def log_responses(
     metagraph: bt.metagraph,
     hotkey: bt.Keypair,
     uid: int,
-    responses: list["MinerResponse"],
+    responses: Iterable["MinerResponse"],
     overhead_time: float,
     block: int,
     scores: torch.Tensor,
