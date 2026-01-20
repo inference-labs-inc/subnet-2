@@ -131,7 +131,7 @@ class DSperseManager:
         inputs: dict,
         outputs: dict,
         proof_system: ProofSystem,
-    ) -> dict | None:
+    ) -> dict:
         """
         Generate proof for a given slice.
         """
@@ -185,7 +185,7 @@ class DSperseManager:
             )
             logging.debug(f"Got proof generation result. Result: {result}")
 
-            slice_id, proof_execution = self._parse_dsperse_result(result, "proof")
+            _, proof_execution = self._parse_dsperse_result(result, "proof")
 
             success = proof_execution.get("success", False)
             proof_generation_time = proof_execution.get("proof_generation_time", None)
