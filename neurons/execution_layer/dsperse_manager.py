@@ -28,7 +28,7 @@ class DSliceData:
     circuit_id: str
     input_file: Path
     output_file: Path
-    prove_system: ProofSystem
+    proof_system: ProofSystem
     witness_file: Path | None = None
     proof_file: Path | None = None
     success: bool | None = None
@@ -76,7 +76,7 @@ class DSperseManager:
                         outputs=json.load(output_file),
                         slice_num=slice_data.slice_num,
                         run_uid=run_uid,
-                        proof_system=slice_data.prove_system,
+                        proof_system=slice_data.proof_system,
                     )
 
     def run_dsperse(
@@ -118,7 +118,7 @@ class DSperseManager:
                 output_file=Path(r["output_file"]),
                 witness_file=Path(r["witness_file"]) if r.get("witness_file") else None,
                 circuit_id=circuit.id,
-                prove_system=self._get_proof_system_for_run(r),
+                proof_system=self._get_proof_system_for_run(r),
             )
             for slice_num, r in slice_results.items()
             if not r["method"].startswith("onnx")
@@ -177,15 +177,15 @@ class DSperseManager:
                     return result
 
             prover = Prover()
-            result = prover.prove(
+            proving_result = prover.prove(
                 run_path=tmp_path,
                 model_dir=model_dir,
                 output_path=tmp_path,
                 backend=proof_system.value.lower(),
             )
-            logging.debug(f"Got proof generation result. Result: {result}")
+            logging.debug(f"Got proof generation result. Result: {proving_result}")
 
-            _, proof_execution = self._parse_dsperse_result(result, "proof")
+            _, proof_execution = self._parse_dsperse_result(proving_result, "proof")
 
             success = proof_execution.get("success", False)
             proof_generation_time = proof_execution.get("proof_generation_time", None)
@@ -219,9 +219,9 @@ class DSperseManager:
         )
         if slice_data is None:
             raise ValueError(f"Slice data for slice number {slice_num} not found.")
-        if slice_data.prove_system != proof_system:
+        if slice_data.proof_system != proof_system:
             raise ValueError(
-                f"Proof system mismatch for slice {slice_num} in run {run_uid}. Expected {slice_data.prove_system}, got {proof_system}."
+                f"Proof system mismatch for slice {slice_num} in run {run_uid}. Expected {slice_data.proof_system}, got {proof_system}."
             )
 
         circuit = self._get_circuit_by_id(slice_data.circuit_id)
