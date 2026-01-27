@@ -32,7 +32,11 @@ class InputRegistry:
                         f"Input handler for circuit {circuit_id} was not registered"
                     )
             except ImportError:
-                if metadata and hasattr(metadata, "input_schema") and metadata.input_schema:
+                if (
+                    metadata
+                    and hasattr(metadata, "input_schema")
+                    and metadata.input_schema
+                ):
                     from execution_layer.generic_input import GenericInputHandler
 
                     return cls._create_generic_handler(metadata.input_schema)

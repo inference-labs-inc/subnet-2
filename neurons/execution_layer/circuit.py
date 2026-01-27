@@ -376,9 +376,7 @@ class CircuitEvaluationData:
 
 
 class Circuit:
-    def __init__(
-        self, circuit_id: str, metadata: CircuitMetadata | None = None
-    ):
+    def __init__(self, circuit_id: str, metadata: CircuitMetadata | None = None):
         if not circuit_id:
             raise ValueError("Circuit ID cannot be empty")
 
@@ -397,7 +395,9 @@ class Circuit:
             f"model_{circuit_id}",
         )
 
-        folder_exists = os.path.exists(cache_folder) or os.path.exists(deployment_folder)
+        folder_exists = os.path.exists(cache_folder) or os.path.exists(
+            deployment_folder
+        )
 
         if not folder_exists and metadata is None:
             raise ValueError(f"Circuit folder does not exist: model_{circuit_id}")

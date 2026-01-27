@@ -180,13 +180,17 @@ class DSperseManager:
                         slice_num=base_slice_num,
                         input_file=Path(r["input_file"]),
                         output_file=Path(r["output_file"]),
-                        witness_file=Path(r["witness_file"]) if r.get("witness_file") else None,
+                        witness_file=(
+                            Path(r["witness_file"]) if r.get("witness_file") else None
+                        ),
                         circuit_id=circuit.id,
                         proof_system=self._get_proof_system_for_run(r),
                     )
                 )
 
-        logging.info(f"Generated {len(dslice_data_list)} DSlice requests (tiles expanded)")
+        logging.info(
+            f"Generated {len(dslice_data_list)} DSlice requests (tiles expanded)"
+        )
         return dslice_data_list
 
     def _get_proof_system_for_tile(self, tile_info: dict) -> ProofSystem:
@@ -224,14 +228,8 @@ class DSperseManager:
             with open(input_file, "w") as f:
                 json.dump(inputs, f)
 
-            runner = Runner(
-                run_dir=tmp_path,
-                parallel_tiles=16
-            )
-            runner.run(
-                input_json_path=input_file,
-                slice_path=model_dir
-            )
+            runner = Runner(run_dir=tmp_path, parallel_tiles=16)
+            runner.run(input_json_path=input_file, slice_path=model_dir)
             run_dir = runner.last_run_dir
             logging.info(f"Runner completed for slice_{slice_num}, run_dir: {run_dir}")
 
@@ -332,7 +330,8 @@ class DSperseManager:
         verifier = Verifier()
         result = verifier.verify(
             run_path=slice_data.input_file.parent,
-            model_path=Path(circuit.paths.external_base_path) / f"slice_{base_slice_num}",
+            model_path=Path(circuit.paths.external_base_path)
+            / f"slice_{base_slice_num}",
             backend=proof_system.value.lower() if proof_system else None,
         )
 
@@ -516,7 +515,10 @@ class DSperseManager:
         )
 
     def retry_failed_slice(
-        self, batch_run: BatchRun, failed_request: DSliceQueuedProofRequest, max_retries: int = 3
+        self,
+        batch_run: BatchRun,
+        failed_request: DSliceQueuedProofRequest,
+        max_retries: int = 3,
     ) -> bool:
         run_uid = failed_request.run_uid
         slice_num = failed_request.slice_num
@@ -674,7 +676,9 @@ def _process_single_frame(
                         circuit_id=circuit_id,
                         input_file=Path(r["input_file"]),
                         output_file=Path(r["output_file"]),
-                        witness_file=Path(r["witness_file"]) if r.get("witness_file") else None,
+                        witness_file=(
+                            Path(r["witness_file"]) if r.get("witness_file") else None
+                        ),
                         proof_system=proof_system,
                         frame_idx=frame_idx,
                     )
