@@ -1,6 +1,6 @@
 FROM --platform=linux/amd64 ubuntu:noble
 
-# Install dependencies and Python 3.15 free-threaded (no GIL)
+# Install dependencies and Python 3.13 free-threaded (no GIL)
 RUN apt update && \
     apt install -y software-properties-common && \
     add-apt-repository -y ppa:deadsnakes/ppa && \
@@ -26,7 +26,7 @@ RUN apt update && \
     gosu \
     && apt clean && rm -rf /var/lib/apt/lists/*
 
-# Set Python 3.15 free-threaded as default
+# Set Python 3.13 free-threaded as default
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.13t 1
 
 # Make directories under opt and set owner to ubuntu
@@ -59,7 +59,7 @@ COPY --chown=ubuntu:ubuntu --chmod=775 pyproject.toml /opt/subnet-2/pyproject.to
 COPY --chown=ubuntu:ubuntu --chmod=775 uv.lock /opt/subnet-2/uv.lock
 RUN pipx install uv && \
     cd /opt/subnet-2 && \
-    ~/.local/bin/uv sync --frozen --no-dev --compile-bytecode --python 3.15t && \
+    ~/.local/bin/uv sync --frozen --no-dev --compile-bytecode --python 3.13t && \
     ~/.local/bin/uv cache clean && \
     echo "source /opt/subnet-2/.venv/bin/activate" >> ~/.bashrc && \
     chmod -R 775 /opt/subnet-2/.venv

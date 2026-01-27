@@ -1,12 +1,26 @@
 from __future__ import annotations
 
-import random
 from typing import Any
 
+import numpy as np
 from pydantic import BaseModel
 
 from _validator.models.request_type import RequestType
 from execution_layer.base_input import BaseInput
+
+DTYPE_MAP = {
+    "float32": np.float32,
+    "float64": np.float64,
+    "float16": np.float16,
+    "int32": np.int32,
+    "int64": np.int64,
+    "int16": np.int16,
+    "int8": np.int8,
+    "uint8": np.uint8,
+    "uint16": np.uint16,
+    "uint32": np.uint32,
+    "uint64": np.uint64,
+}
 
 
 class TensorInputSchema(BaseModel):
@@ -44,15 +58,18 @@ class GenericInputHandler(BaseInput):
     def _generate_tensor(
         self, shape: list[int], dtype: str, normalization: str | None
     ) -> list:
-        if len(shape) == 0:
-            if normalization == "imagenet":
-                return random.gauss(0.0, 1.0)
-            return random.random()
+        np_dtype = DTYPE_MAP.get(dtype, np.float32)
+        is_integer = np.issubdtype(np_dtype, np.integer)
 
-        return [
-            self._generate_tensor(shape[1:], dtype, normalization)
-            for _ in range(shape[0])
-        ]
+        if is_integer:
+            info = np.iinfo(np_dtype)
+            arr = np.random.randint(info.min, info.max + 1, size=shape, dtype=np_dtype)
+        elif normalization == "imagenet":
+            arr = np.random.randn(*shape).astype(np_dtype)
+        else:
+            arr = np.random.rand(*shape).astype(np_dtype)
+
+        return arr.tolist()
 
     def validate(self, data: dict[str, object]) -> None:
         self.schema(**data)
