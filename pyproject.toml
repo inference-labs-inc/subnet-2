@@ -9,7 +9,7 @@ description = ""
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-  "aiohttp>=3.10.11",
+  "aiohttp>=3.13.3",
   "async-substrate-interface>=1.0.8",
   "attrs==24.3.0",
   "bittensor==10.0.1",
@@ -37,7 +37,7 @@ dependencies = [
   "substrate-interface>=1.7.11",
   "torch==2.7.1",
   "tqdm>=4.67.1",
-  "urllib3>=2.3.0",
+  "urllib3>=2.6.3",
   "uvicorn==0.34.0",
   "wandb==0.21.0",
   "websocket-client>=1.8.0",
@@ -73,7 +73,7 @@ addopts = "-v --tb=short"
 pythonpath = [".", "neurons"]
 
 [tool.uv]
-override-dependencies = ["setuptools>=78.1.1"]
+override-dependencies = ["setuptools>=78.1.1", "wheel>=0.46.2"]
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
