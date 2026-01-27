@@ -224,22 +224,23 @@ class ValidatorLoop:
 
     @with_rate_limit(period=ONE_HOUR)
     async def sync_capacities(self, miners_info: dict[int, AxonInfo]):
-        capacities = await self.capacity_manager.sync_capacities(miners_info)
-        bt.logging.debug(f"Synced capacities: {capacities}")
+        capacities_by_uid = await self.capacity_manager.sync_capacities(miners_info)
+        bt.logging.debug(f"Synced capacities for {len(capacities_by_uid)} miners")
 
-        for uid, miner_info in miners_info.items():
-            total_capacity = 0
-            for response in capacities:
-                if hasattr(response, "capacities") and response.capacities:
-                    for circuit_id, compute_units in response.capacities.items():
-                        total_capacity += compute_units
-            if total_capacity > 0:
-                self.miner_capacities[uid] = min(total_capacity, 20)
+        for uid in miners_info:
+            response = capacities_by_uid.get(uid)
+            if response and hasattr(response, "capacities") and response.capacities:
+                total_capacity = sum(response.capacities.values())
+                self.miner_capacities[uid] = (
+                    min(total_capacity, 20)
+                    if total_capacity > 0
+                    else self.default_miner_capacity
+                )
             else:
                 self.miner_capacities[uid] = self.default_miner_capacity
 
         bt.logging.info(f"Updated capacities for {len(self.miner_capacities)} miners")
-        return capacities
+        return capacities_by_uid
 
     @with_rate_limit(period=FIVE_MINUTES)
     def check_auto_update(self):

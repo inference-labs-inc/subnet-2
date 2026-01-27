@@ -163,27 +163,23 @@ class CircuitStore:
             bt.logging.warning(f"Circuit {circuit_id} not found")
         return circuit
 
-    def ensure_circuit(self, circuit_id: str) -> Circuit | None:
+    def ensure_circuit(self, circuit_id: str) -> Circuit:
         if circuit_id in self.circuits:
             return self.circuits[circuit_id]
 
         bt.logging.info(f"Circuit {circuit_id} not loaded, fetching from API...")
-        try:
-            with httpx.Client(timeout=30) as client:
-                response = client.get(f"{self._api_url}/circuits/{circuit_id}")
-                response.raise_for_status()
-                circuit_data = response.json()
+        with httpx.Client(timeout=30) as client:
+            response = client.get(f"{self._api_url}/circuits/{circuit_id}")
+            response.raise_for_status()
+            circuit_data = response.json()
 
-            self._cache_circuit(circuit_id, circuit_data)
-            metadata_dict = circuit_data.get("metadata", {})
-            metadata = CircuitMetadata(**metadata_dict)
-            circuit = Circuit(circuit_id, metadata=metadata)
-            self.circuits[circuit_id] = circuit
-            bt.logging.success(f"Fetched and loaded circuit {circuit_id}")
-            return circuit
-        except Exception as e:
-            bt.logging.error(f"Failed to fetch circuit {circuit_id}: {e}")
-            return None
+        self._cache_circuit(circuit_id, circuit_data)
+        metadata_dict = circuit_data.get("metadata", {})
+        metadata = CircuitMetadata(**metadata_dict)
+        circuit = Circuit(circuit_id, metadata=metadata)
+        self.circuits[circuit_id] = circuit
+        bt.logging.success(f"Fetched and loaded circuit {circuit_id}")
+        return circuit
 
     def get_latest_circuit_for_netuid(self, netuid: int):
         matching_circuits = [

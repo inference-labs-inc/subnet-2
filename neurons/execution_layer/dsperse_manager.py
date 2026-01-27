@@ -68,8 +68,6 @@ class DSperseManager:
         circuit = next((c for c in self.circuits if c.id == circuit_id), None)
         if circuit is None:
             circuit = circuit_store.ensure_circuit(circuit_id)
-            if circuit is None:
-                raise ValueError(f"Circuit with ID {circuit_id} not found.")
             if circuit.metadata.type != CircuitType.DSPERSE_PROOF_GENERATION:
                 raise ValueError(
                     f"Circuit {circuit_id} is not a DSperse circuit (type: {circuit.metadata.type})"

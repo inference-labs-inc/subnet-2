@@ -47,14 +47,3 @@ class InputRegistry:
                 super().__init__(request_type, data, input_schema=input_schema)
 
         return ConfiguredGenericHandler
-
-    @classmethod
-    def has_handler(
-        cls, circuit_id: str, metadata: "CircuitMetadata | None" = None
-    ) -> bool:
-        _validate_circuit_id(circuit_id)
-        if circuit_id in cls._handlers:
-            return True
-        return bool(
-            metadata and hasattr(metadata, "input_schema") and metadata.input_schema
-        )

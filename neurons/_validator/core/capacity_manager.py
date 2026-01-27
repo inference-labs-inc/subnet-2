@@ -16,7 +16,7 @@ class CapacityManager:
         self.config = config
         self.httpx_client = httpx_client
 
-    async def sync_capacities(self, miners_info: dict[int, AxonInfo]):
+    async def sync_capacities(self, miners_info: dict[int, AxonInfo]) -> dict[int, any]:
         bt.logging.info(f"Syncing capacities for {len(miners_info)} miners...")
         request_data = QueryForCapacities()
 
@@ -40,9 +40,11 @@ class CapacityManager:
             ),
             return_exceptions=True,
         )
+        capacities_by_uid = {}
         for i, result in enumerate(results):
+            uid = requests[i].uid
             if isinstance(result, Exception):
-                bt.logging.debug(
-                    f"Failed to sync capacity for UID {requests[i].uid}: {result}"
-                )
-        return [r for r in results if not isinstance(r, Exception)]
+                bt.logging.debug(f"Failed to sync capacity for UID {uid}: {result}")
+            else:
+                capacities_by_uid[uid] = result
+        return capacities_by_uid
