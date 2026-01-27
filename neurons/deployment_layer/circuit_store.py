@@ -101,11 +101,17 @@ class CircuitStore:
             return
 
         bt.logging.debug(f"Downloading {url} to {dest_path}")
-        with httpx.Client(timeout=120) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            with open(dest_path, "wb") as f:
-                f.write(response.content)
+        try:
+            with httpx.Client(timeout=httpx.Timeout(30.0, read=300.0)) as client:
+                with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    with open(dest_path, "wb") as f:
+                        for chunk in response.iter_bytes(chunk_size=65536):
+                            f.write(chunk)
+        except Exception:
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+            raise
 
     def _load_from_filesystem(self, deployment_layer_path: Optional[str] = None):
         if deployment_layer_path is None:
