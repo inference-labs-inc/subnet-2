@@ -489,7 +489,9 @@ class ValidatorAPI:
                 try:
                     self.dsperse_manager.cleanup_run(frame_result.run_uid)
                 except ValueError:
-                    pass
+                    bt.logging.debug(
+                        f"Run {frame_result.run_uid} already cleaned up or not found"
+                    )
         bt.logging.info(f"Batch {batch_id} completed and cleaned up")
 
     def start_server(self):

@@ -86,12 +86,6 @@ class ProofOfWeightsManager:
         if current_step == self.last_processed_queue_step:
             return False
 
-        try:
-            pow_circuit = circuit_store.ensure_circuit(model_id)
-        except Exception as e:
-            bt.logging.error(f"Failed to load circuit {model_id}: {e}")
-            return False
-
         items_to_process = self.proof_of_weights_queue[-256:]
         self._update_scores_from_witness(items_to_process, model_id)
         self.last_processed_queue_step = current_step
