@@ -705,8 +705,14 @@ class ValidatorLoop:
                 f"{request.request_type.name} request exceeded max retries "
                 f"({MAX_SLICE_RETRIES}) for UID {request.uid}"
             )
+            self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
             if request.request_type == RequestType.DSLICE:
                 self._mark_dslice_failed(queued)
+            elif request.request_type == RequestType.RWR:
+                self.api.set_request_result(
+                    request.external_request_hash,
+                    {"success": False, "error": "Max retries exceeded"},
+                )
             return
 
         bt.logging.info(

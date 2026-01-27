@@ -37,8 +37,6 @@ class InputRegistry:
                     and hasattr(metadata, "input_schema")
                     and metadata.input_schema
                 ):
-                    from execution_layer.generic_input import GenericInputHandler
-
                     return cls._create_generic_handler(metadata.input_schema)
                 raise ValueError(f"No input handler found for circuit {circuit_id}")
 
