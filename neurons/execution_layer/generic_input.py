@@ -44,7 +44,10 @@ class GenericInputHandler(BaseInput):
     def _generate_tensor(
         self, shape: list[int], dtype: str, normalization: str | None
     ) -> list:
-        np_dtype = np.dtype(dtype)
+        try:
+            np_dtype = np.dtype(dtype)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Invalid dtype '{dtype}' from input schema metadata: {e}")
 
         if np.issubdtype(np_dtype, np.integer):
             info = np.iinfo(np_dtype)
@@ -74,7 +77,13 @@ class GenericInputHandler(BaseInput):
                 f"Dimension mismatch: expected {expected_shape[0]}, got {len(data)}"
             )
 
-        if len(expected_shape) > 1:
+        if len(expected_shape) == 1:
+            for i, item in enumerate(data):
+                if isinstance(item, (list, tuple)):
+                    raise ValueError(
+                        f"Dimension mismatch: expected scalar at index {i}, got nested {type(item).__name__}"
+                    )
+        elif len(expected_shape) > 1:
             for item in data:
                 self._validate_shape(item, expected_shape[1:])
 
