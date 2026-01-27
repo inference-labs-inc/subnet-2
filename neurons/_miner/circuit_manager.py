@@ -1,17 +1,23 @@
 from __future__ import annotations
-import time
+
 import hashlib
-import boto3
-import traceback
+import json
+import os
 import threading
-from typing import Optional, Dict
-from substrateinterface import Keypair
+import time
+import traceback
 from pathlib import Path
-from botocore.config import Config
+from typing import Dict, Optional
+
+import boto3
 import bittensor as bt
-from constants import ACTIVE_COMPETITION
+import httpx
+from botocore.config import Config
 from pydantic import BaseModel
+from substrateinterface import Keypair
+
 import cli_parser
+from constants import ACTIVE_COMPETITION, CIRCUIT_API_URL, CIRCUIT_CACHE_DIR
 
 
 class CircuitCommitment(BaseModel):
@@ -326,3 +332,53 @@ class CircuitManager:
             )
 
             return commitment
+
+
+def fetch_circuit_from_api(circuit_id: str) -> Optional[Dict]:
+    cache_path = Path(CIRCUIT_CACHE_DIR) / f"model_{circuit_id}"
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.get(f"{CIRCUIT_API_URL}/circuits/{circuit_id}")
+            response.raise_for_status()
+            circuit_data = response.json()
+
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        metadata = circuit_data.get("metadata", {})
+        metadata_path = cache_path / "metadata.json"
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+
+        files = circuit_data.get("files", {})
+        with httpx.Client(timeout=120) as client:
+            for filename, url in files.items():
+                if filename == "metadata.json":
+                    continue
+                file_path = cache_path / filename
+                if file_path.exists():
+                    continue
+                bt.logging.info(f"Downloading {filename}")
+                file_response = client.get(url)
+                file_response.raise_for_status()
+                with open(file_path, "wb") as f:
+                    f.write(file_response.content)
+
+        bt.logging.success(f"Fetched circuit {circuit_id}")
+        return circuit_data
+
+    except Exception as e:
+        bt.logging.error(f"Failed to fetch circuit {circuit_id}: {e}")
+        return None
+
+
+def list_available_circuits() -> list[Dict]:
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.get(f"{CIRCUIT_API_URL}/circuits")
+            response.raise_for_status()
+            data = response.json()
+        return data.get("circuits", [])
+    except Exception as e:
+        bt.logging.error(f"Failed to list circuits from API: {e}")
+        return []

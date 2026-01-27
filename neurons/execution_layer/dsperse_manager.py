@@ -215,25 +215,30 @@ class DSperseManager:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-
             input_file = tmp_path / "input.json"
-            output_file = tmp_path / "output.json"
-            witness_file = None
 
             with open(input_file, "w") as f:
                 json.dump(inputs, f)
 
-            with open(output_file, "w") as f:
-                json.dump(outputs, f)
+            runner = Runner(
+                run_dir=tmp_path,
+                parallel_tiles=16
+            )
+            run_result = runner.run(
+                input_json_path=input_file,
+                slice_path=model_dir
+            )
+            run_dir = runner.last_run_dir
+            logging.info(f"Runner completed for slice_{slice_num}, run_dir: {run_dir}")
 
-            if witness is not None:
-                witness_file = tmp_path / "output_witness.bin"
-                with open(witness_file, "wb") as f:
-                    f.write(witness)
+            if runner.run_metadata:
+                metadata_path = run_dir / "metadata.json"
+                with open(metadata_path, "w") as f:
+                    json.dump(runner.run_metadata.to_dict(), f)
 
             prover = Prover()
             result = prover.prove(
-                run_path=tmp_path,
+                run_path=run_dir,
                 model_dir=model_dir,
                 output_path=tmp_path,
                 backend=proof_system.value.lower(),
@@ -383,6 +388,15 @@ class DSperseManager:
 
         slice_id = execution_result.get("slice_id", None)
         execution = execution_result.get(f"{execution_type}_execution", {})
+
+        if execution_type == "proof" and not execution.get("proof_file"):
+            tile_proofs = execution.get("tile_proofs_info") or []
+            if tile_proofs and len(tile_proofs) > 0:
+                tile_0 = tile_proofs[0]
+                if isinstance(tile_0, dict) and tile_0.get("proof_path"):
+                    execution["proof_file"] = tile_0["proof_path"]
+                    if tile_0.get("success") is not None:
+                        execution["success"] = tile_0["success"]
 
         return slice_id, execution
 

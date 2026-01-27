@@ -68,10 +68,6 @@ class ProofSystem(str, Enum):
 
 @dataclass
 class CircuitPaths:
-    """
-    Paths to all files for the provided model.
-    """
-
     model_id: str
     base_path: str = field(init=False)
     input: str = field(init=False)
@@ -86,12 +82,23 @@ class CircuitPaths:
     witness_executable: str = field(init=False)
 
     def __post_init__(self):
-        self.base_path = os.path.join(
+        from constants import CIRCUIT_CACHE_DIR
+
+        cache_path = os.path.join(CIRCUIT_CACHE_DIR, f"model_{self.model_id}")
+        deployment_path = os.path.join(
             os.path.dirname(__file__),
             "..",
             "deployment_layer",
             f"model_{self.model_id}",
         )
+
+        if os.path.exists(cache_path):
+            self.base_path = cache_path
+        elif os.path.exists(deployment_path):
+            self.base_path = deployment_path
+        else:
+            self.base_path = cache_path
+
         if hasattr(cli_parser, "config") and cli_parser.config.full_path_models:
             self.external_base_path = os.path.join(
                 cli_parser.config.full_path_models,
@@ -140,10 +147,6 @@ class CircuitPaths:
 
 @dataclass
 class CircuitMetadata:
-    """
-    Metadata for a specific model, such as name, version, description, etc.
-    """
-
     name: str
     description: str
     author: str
@@ -156,6 +159,7 @@ class CircuitMetadata:
     weights_version: int | None = None
     timeout: int | None = None
     benchmark_choice_weight: float | None = None
+    input_schema: dict | None = None
 
     @classmethod
     def from_file(cls, metadata_path: str) -> CircuitMetadata:
@@ -370,18 +374,9 @@ class CircuitEvaluationData:
 
 
 class Circuit:
-    """
-    A class representing a circuit.
-    """
-
-    def __init__(self, circuit_id: str):
-        """
-        Initialize a Model instance.
-
-        Args:
-            circuit_id (str): Unique identifier for the model.
-        """
-
+    def __init__(
+        self, circuit_id: str, metadata: CircuitMetadata | None = None
+    ):
         if not circuit_id:
             raise ValueError("Circuit ID cannot be empty")
 
@@ -390,6 +385,9 @@ class Circuit:
                 "Circuit ID must be a valid SHA-256 hash (64 lowercase hex characters)"
             )
 
+        from constants import CIRCUIT_CACHE_DIR
+
+        cache_folder = os.path.join(CIRCUIT_CACHE_DIR, f"model_{circuit_id}")
         deployment_folder = os.path.join(
             os.path.dirname(__file__),
             "..",
@@ -397,16 +395,19 @@ class Circuit:
             f"model_{circuit_id}",
         )
 
-        if not os.path.exists(deployment_folder):
+        folder_exists = os.path.exists(cache_folder) or os.path.exists(deployment_folder)
+
+        if not folder_exists and metadata is None:
             raise ValueError(f"Circuit folder does not exist: model_{circuit_id}")
 
-        if not os.path.isdir(deployment_folder):
-            raise ValueError(f"Circuit path is not a directory: model_{circuit_id}")
-
-        # XXX: might not fit to dsperse...
         self.paths = CircuitPaths(circuit_id)
-        self.metadata = CircuitMetadata.from_file(self.paths.metadata)
         self.id = circuit_id
+
+        if metadata is not None:
+            self.metadata = metadata
+        else:
+            self.metadata = CircuitMetadata.from_file(self.paths.metadata)
+
         self.proof_system = ProofSystem[self.metadata.proof_system]
         self.paths.set_proof_system_paths(self.proof_system)
         self.settings = {}
@@ -423,7 +424,9 @@ class Circuit:
             logging.warning(
                 f"Failed to load settings for model {self.id}. Using default settings."
             )
-        self.input_handler: BaseInput = InputRegistry.get_handler(self.id)
+        self.input_handler: BaseInput = InputRegistry.get_handler(
+            self.id, metadata=self.metadata
+        )
 
     def __str__(self):
         return (
