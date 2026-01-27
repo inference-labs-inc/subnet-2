@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from importlib import import_module
 from typing import TYPE_CHECKING
 
@@ -7,6 +8,13 @@ from .base_input import BaseInput
 
 if TYPE_CHECKING:
     from execution_layer.circuit import CircuitMetadata
+
+CIRCUIT_ID_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _validate_circuit_id(circuit_id: str) -> None:
+    if not CIRCUIT_ID_PATTERN.match(circuit_id):
+        raise ValueError(f"Invalid circuit_id format: {circuit_id!r}")
 
 
 class InputRegistry:
@@ -24,14 +32,20 @@ class InputRegistry:
     def get_handler(
         cls, circuit_id: str, metadata: "CircuitMetadata | None" = None
     ) -> type[BaseInput]:
+        _validate_circuit_id(circuit_id)
         if circuit_id not in cls._handlers:
+            target_module = f"deployment_layer.model_{circuit_id}.input"
             try:
-                import_module(f"deployment_layer.model_{circuit_id}.input")
+                import_module(target_module)
                 if circuit_id not in cls._handlers:
                     raise ValueError(
                         f"Input handler for circuit {circuit_id} was not registered"
                     )
-            except ImportError:
+            except ModuleNotFoundError as e:
+                if e.name != target_module and not e.name.startswith(
+                    target_module + "."
+                ):
+                    raise
                 if (
                     metadata
                     and hasattr(metadata, "input_schema")
@@ -54,10 +68,14 @@ class InputRegistry:
 
     @classmethod
     def has_handler(cls, circuit_id: str) -> bool:
+        _validate_circuit_id(circuit_id)
         if circuit_id in cls._handlers:
             return True
+        target_module = f"deployment_layer.model_{circuit_id}.input"
         try:
-            import_module(f"deployment_layer.model_{circuit_id}.input")
+            import_module(target_module)
             return circuit_id in cls._handlers
-        except ImportError:
+        except ModuleNotFoundError as e:
+            if e.name != target_module and not e.name.startswith(target_module + "."):
+                raise
             return False
