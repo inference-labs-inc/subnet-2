@@ -36,6 +36,7 @@ from _validator.core.prometheus import (
 from _validator.core.request import Request
 from _validator.core.request_pipeline import RequestPipeline
 from _validator.core.response_processor import ResponseProcessor
+from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.miner_response import MinerResponse
 from _validator.models.request_type import RequestType, ValidatorMessage
 from _validator.pow.proof_of_weights_handler import ProofOfWeightsHandler
@@ -60,6 +61,8 @@ from utils.gc_logging import log_responses as gc_log_responses
 
 # Set to True for synchronous request processing (easier debugging)
 DEBUG_SYNC_MODE = os.environ.get("DEBUG_SYNC_MODE", "").lower() in ("1", "true", "yes")
+
+MAX_SLICE_RETRIES = 3
 
 
 class ValidatorLoop:
@@ -227,7 +230,7 @@ class ValidatorLoop:
         for uid, miner_info in miners_info.items():
             total_capacity = 0
             for response in capacities:
-                if hasattr(response, 'capacities') and response.capacities:
+                if hasattr(response, "capacities") and response.capacities:
                     for circuit_id, compute_units in response.capacities.items():
                         total_capacity += compute_units
             if total_capacity > 0:
@@ -425,14 +428,18 @@ class ValidatorLoop:
                     if requests_sent >= slots_available:
                         break
 
-                    miner_capacity = self.miner_capacities.get(uid, self.default_miner_capacity)
+                    miner_capacity = self.miner_capacities.get(
+                        uid, self.default_miner_capacity
+                    )
                     miner_active = self.miner_active_count.get(uid, 0)
                     available_slots = miner_capacity - miner_active
 
                     if available_slots <= 0:
                         continue
 
-                    requests_for_miner = min(available_slots, slots_available - requests_sent)
+                    requests_for_miner = min(
+                        available_slots, slots_available - requests_sent
+                    )
 
                     for _ in range(requests_for_miner):
                         if (
@@ -448,7 +455,9 @@ class ValidatorLoop:
                         elif self.api.stacked_requests_queue:
                             request = self.request_pipeline._prepare_queued_request(uid)
                         else:
-                            request = self.request_pipeline._prepare_benchmark_request(uid)
+                            request = self.request_pipeline._prepare_benchmark_request(
+                                uid
+                            )
 
                         if not request:
                             bt.logging.warning(
@@ -463,7 +472,9 @@ class ValidatorLoop:
                                 f"[SYNC MODE] Processing request {task_id} for UID {uid}"
                             )
                             self.active_tasks[task_id] = "dummy_task_object"  # type: ignore
-                            self.miner_active_count[uid] = self.miner_active_count.get(uid, 0) + 1
+                            self.miner_active_count[uid] = (
+                                self.miner_active_count.get(uid, 0) + 1
+                            )
                             await self._process_single_request(request)
                             self._handle_completed_task(task_id, uid)
                         else:
@@ -471,9 +482,13 @@ class ValidatorLoop:
                                 self._process_single_request(request)
                             )
                             self.active_tasks[task_id] = task
-                            self.miner_active_count[uid] = self.miner_active_count.get(uid, 0) + 1
+                            self.miner_active_count[uid] = (
+                                self.miner_active_count.get(uid, 0) + 1
+                            )
                             task.add_done_callback(
-                                lambda _, tid=task_id, u=uid: self._handle_completed_task(tid, u)
+                                lambda _, tid=task_id, u=uid: self._handle_completed_task(
+                                    tid, u
+                                )
                             )
 
                         requests_sent += 1
@@ -496,17 +511,11 @@ class ValidatorLoop:
         if uid in self.miner_active_count:
             self.miner_active_count[uid] = max(0, self.miner_active_count[uid] - 1)
 
-        if (
-            self.current_concurrency == 0
-            and not self.active_tasks
-            and self.competition
-        ):
+        if self.current_concurrency == 0 and not self.active_tasks and self.competition:
             bt.logging.info(
                 "All tasks completed during winddown, sending winddown complete message"
             )
-            self.validator_to_competition_queue.put(
-                ValidatorMessage.WINDDOWN_COMPLETE
-            )
+            self.validator_to_competition_queue.put(ValidatorMessage.WINDDOWN_COMPLETE)
 
     async def run_periodic_tasks(self):
         while self._should_run:
@@ -674,7 +683,7 @@ class ValidatorLoop:
     def _reschedule_request(self, request: Request) -> None:
         """
         Reschedule a failed request for retry.
-        Only RWR and DSLICE requests are rescheduled.
+        Only RWR and DSLICE requests are rescheduled, up to MAX_SLICE_RETRIES times.
         """
         if request.request_type not in (RequestType.RWR, RequestType.DSLICE):
             bt.logging.debug(
@@ -688,14 +697,55 @@ class ValidatorLoop:
             )
             return
 
+        queued = request.queued_request
+        queued.retry_count += 1
+
+        if queued.retry_count > MAX_SLICE_RETRIES:
+            bt.logging.warning(
+                f"{request.request_type.name} request exceeded max retries "
+                f"({MAX_SLICE_RETRIES}) for UID {request.uid}"
+            )
+            if request.request_type == RequestType.DSLICE:
+                self._mark_dslice_failed(queued)
+            return
+
         bt.logging.info(
-            f"Rescheduling {request.request_type.name} request for UID {request.uid}..."
+            f"Rescheduling {request.request_type.name} request for UID {request.uid} "
+            f"(attempt {queued.retry_count}/{MAX_SLICE_RETRIES})..."
         )
 
-        # Remove hash from HashGuard to allow retry
         self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
-        # Re-add to the stacked requests queue for retry with a different miner
-        self.api.stacked_requests_queue.append(request.queued_request)
+        self.api.stacked_requests_queue.append(queued)
+
+    def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
+        """Mark a DSLICE request as permanently failed in its batch."""
+        for batch_run in self.api.active_batches.values():
+            if any(
+                fr.run_uid == queued.run_uid for fr in batch_run.frame_results.values()
+            ):
+                batch_run.failed_slices.append(queued)
+                bt.logging.warning(
+                    f"Slice {queued.slice_num} in run {queued.run_uid} "
+                    f"permanently failed after {MAX_SLICE_RETRIES} retries"
+                )
+                return
+        bt.logging.warning(
+            f"Could not find batch for failed slice {queued.slice_num} "
+            f"in run {queued.run_uid}"
+        )
+
+    def _mark_dslice_complete(self, response: MinerResponse) -> None:
+        """Mark a successfully verified DSLICE as complete in its batch."""
+        run_uid = response.dsperse_run_uid
+        slice_num = response.dsperse_slice_num
+        if not run_uid or slice_num is None:
+            return
+        for batch_run in self.api.active_batches.values():
+            if any(fr.run_uid == run_uid for fr in batch_run.frame_results.values()):
+                self.dsperse_manager.mark_slice_complete(
+                    batch_run, run_uid, str(slice_num)
+                )
+                return
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
@@ -737,6 +787,11 @@ class ValidatorLoop:
                             "success": False,
                         },
                     )
+            elif (
+                response.request_type == RequestType.DSLICE
+                and response.verification_result
+            ):
+                self._mark_dslice_complete(response)
 
             if response.verification_result and response.save:
                 save_proof_of_weights(

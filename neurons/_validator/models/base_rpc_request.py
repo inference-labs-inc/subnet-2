@@ -14,6 +14,7 @@ class QueuedRequestDataModel(BaseModel):
     circuit: Circuit
     inputs: dict
     request_type: RequestType = RequestType.RWR
+    retry_count: int = 0
 
     model_config = {"arbitrary_types_allowed": True}
 

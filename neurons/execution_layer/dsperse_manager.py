@@ -34,7 +34,6 @@ class DSliceData:
     proof_file: Path | None = None
     success: bool | None = None
     frame_idx: int | None = None
-    retry_count: int = 0
 
 
 @dataclass
@@ -522,41 +521,6 @@ class DSperseManager:
             f"Batch {batch_run.batch_id}: {len(batch_run.pending_slices)} "
             f"proof requests ready for distribution"
         )
-
-    def retry_failed_slice(
-        self,
-        batch_run: BatchRun,
-        failed_request: DSliceQueuedProofRequest,
-        max_retries: int = 3,
-    ) -> bool:
-        run_uid = failed_request.run_uid
-        slice_num = failed_request.slice_num
-
-        if run_uid not in self.runs:
-            logging.error(f"Cannot retry: run {run_uid} not found")
-            return False
-
-        slice_data = next(
-            (s for s in self.runs[run_uid] if s.slice_num == slice_num), None
-        )
-        if slice_data is None:
-            logging.error(f"Cannot retry: slice {slice_num} not found in run {run_uid}")
-            return False
-
-        slice_data.retry_count += 1
-        if slice_data.retry_count > max_retries:
-            logging.warning(
-                f"Slice {slice_num} in run {run_uid} exceeded max retries ({max_retries})"
-            )
-            batch_run.failed_slices.append(failed_request)
-            return False
-
-        logging.info(
-            f"Retrying slice {slice_num} in run {run_uid} "
-            f"(attempt {slice_data.retry_count}/{max_retries})"
-        )
-        batch_run.pending_slices.append(failed_request)
-        return True
 
     def mark_slice_complete(
         self, batch_run: BatchRun, run_uid: str, slice_num: str
