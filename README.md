@@ -203,13 +203,14 @@ Miners contribute to this subnet by providing compute to generate output from, a
 
 #### Minimum
 
-| Component    | Requirement   |
-| ------------ | ------------- |
-| CPU          | 8 core 3.2GHz |
-| RAM          | 32GB          |
-| Network Up   | 400Mbps       |
-| Network Down | 400Mbps       |
-| Storage      | 100GB         |
+| Component      | Requirement   |
+| -------------- | ------------- |
+| CPU            | 8 core 3.2GHz |
+| RAM            | 32GB          |
+| Network Up     | 400Mbps       |
+| Network Down   | 400Mbps       |
+| Storage        | 1TB           |
+| Storage Medium | NVMe SSD      |
 
 #### Recommended
 
@@ -218,12 +219,12 @@ Miners contribute to this subnet by providing compute to generate output from, a
 
 | Component      | Recommendation |
 | -------------- | -------------- |
-| CPU            | 8 core 3.6GHz  |
-| RAM            | 64GB           |
-| Network Up     | 1Gbps          |
-| Network Down   | 1Gbps          |
-| Storage        | 400GB          |
-| Storage Medium | SSD            |
+| CPU            | 8 core 3.6GHz+  |
+| RAM            | 64GB+           |
+| Network Up     | 1Gbps           |
+| Network Down   | 1Gbps           |
+| Storage        | 2TB             |
+| Storage Medium | NVMe SSD        |
 
 ## Validator
 

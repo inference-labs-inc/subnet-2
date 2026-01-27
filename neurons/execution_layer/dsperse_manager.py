@@ -10,7 +10,7 @@ from typing import Iterable
 
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
-from dsperse.src.compile.compiler import Compiler
+from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.prover import Prover
 from dsperse.src.run.runner import Runner
 from dsperse.src.verifier import Verifier
@@ -29,7 +29,7 @@ class DSliceData:
     circuit_id: str
     input_file: Path
     output_file: Path
-    prove_system: ProofSystem
+    proof_system: ProofSystem
     witness_file: Path | None = None
     proof_file: Path | None = None
     success: bool | None = None
@@ -63,7 +63,7 @@ class DSperseManager:
             for circuit in circuit_store.circuits.values()
             if circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION
         ]
-        self.runs = {}  # run_uid -> run data (slices etc.), used by validator only
+        self.runs = {}
 
     def _get_circuit_by_id(self, circuit_id: str) -> Circuit | None:
         circuit = next((c for c in self.circuits if c.id == circuit_id), None)
@@ -76,12 +76,7 @@ class DSperseManager:
         return circuit
 
     def generate_dslice_requests(self) -> Iterable[DSliceQueuedProofRequest]:
-        """
-        Generate DSlice requests for DSperse models.
-        Each DSlice request corresponds to one slice of a DSperse model.
-        """
         if not self.circuits:
-            # No DSperse circuits available, skip request generation
             return
 
         circuit = random.choice(self.circuits)
@@ -100,14 +95,9 @@ class DSperseManager:
                         circuit=circuit,
                         inputs=json.load(input_file),
                         outputs=json.load(output_file),
-                        witness=(
-                            slice_data.witness_file.read_bytes()
-                            if slice_data.witness_file
-                            else None
-                        ),
                         slice_num=slice_data.slice_num,
                         run_uid=run_uid,
-                        proof_system=slice_data.prove_system,
+                        proof_system=slice_data.proof_system,
                     )
 
     def run_dsperse(
@@ -173,7 +163,7 @@ class DSperseManager:
                             output_file=Path(tile_output),
                             witness_file=Path(tile_witness) if tile_witness else None,
                             circuit_id=circuit.id,
-                            prove_system=self._get_proof_system_for_tile(tile_info),
+                            proof_system=self._get_proof_system_for_tile(tile_info),
                         )
                     )
             else:
@@ -184,7 +174,7 @@ class DSperseManager:
                         output_file=Path(r["output_file"]),
                         witness_file=Path(r["witness_file"]) if r.get("witness_file") else None,
                         circuit_id=circuit.id,
-                        prove_system=self._get_proof_system_for_run(r),
+                        proof_system=self._get_proof_system_for_run(r),
                     )
                 )
 
@@ -205,21 +195,23 @@ class DSperseManager:
         slice_num: str,
         inputs: dict,
         outputs: dict,
-        witness: bytes | None,
         proof_system: ProofSystem,
-    ) -> dict | None:
-        """
-        Generate proof for a given slice or tile.
-        slice_num can be "0" (regular slice) or "0_tile_5" (tile 5 of slice 0).
-        """
+    ) -> dict:
         circuit = self._get_circuit_by_id(circuit_id)
-
         base_slice_num, tile_idx = self._parse_slice_num(slice_num)
         model_dir = Path(circuit.paths.external_base_path) / f"slice_{base_slice_num}"
+        result = {
+            "circuit_id": circuit_id,
+            "slice_num": slice_num,
+            "success": False,
+            "proof_generation_time": None,
+            "proof": None,
+        }
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             input_file = tmp_path / "input.json"
+            output_file = tmp_path / "output.json"
 
             with open(input_file, "w") as f:
                 json.dump(inputs, f)
@@ -228,7 +220,7 @@ class DSperseManager:
                 run_dir=tmp_path,
                 parallel_tiles=16
             )
-            run_result = runner.run(
+            runner.run(
                 input_json_path=input_file,
                 slice_path=model_dir
             )
@@ -240,16 +232,35 @@ class DSperseManager:
                 with open(metadata_path, "w") as f:
                     json.dump(runner.run_metadata.to_dict(), f)
 
+            if proof_system == ProofSystem.JSTPROVE:
+                jstprover = JSTprove()
+                jst_model_path = (
+                    model_dir
+                    / "payload"
+                    / "jstprove"
+                    / f"slice_{base_slice_num}_circuit.txt"
+                )
+                success, res = jstprover.generate_witness(
+                    input_file=input_file,
+                    model_path=jst_model_path,
+                    output_file=output_file,
+                )
+                if not success:
+                    logging.error(
+                        f"Failed to generate witness for slice {slice_num} using JSTprove. Error: {res}"
+                    )
+                    return result
+
             prover = Prover()
-            result = prover.prove(
+            proving_result = prover.prove(
                 run_path=run_dir,
                 model_dir=model_dir,
                 output_path=tmp_path,
                 backend=proof_system.value.lower(),
             )
-            logging.debug(f"Got proof generation result. Result: {result}")
+            logging.debug(f"Got proof generation result. Result: {proving_result}")
 
-            _, proof_execution = self._parse_dsperse_result(result, "proof")
+            _, proof_execution = self._parse_dsperse_result(proving_result, "proof")
 
             success = proof_execution.get("success", False)
             proof_generation_time = proof_execution.get("proof_generation_time", None)
@@ -262,20 +273,12 @@ class DSperseManager:
                     with open(proof_execution["proof_file"], "r") as proof_file:
                         proof_data = json.load(proof_file)
 
-            return {
-                "circuit_id": circuit_id,
-                "slice_num": slice_num,
-                "success": success,
-                "proof_generation_time": proof_generation_time,
-                "proof": proof_data,
-            }
+            result["success"] = success
+            result["proof_generation_time"] = proof_generation_time
+            result["proof"] = proof_data
+            return result
 
     def _parse_slice_num(self, slice_num: str) -> tuple[str, int | None]:
-        """
-        Parse slice_num to extract base slice and optional tile index.
-        "0" -> ("0", None)
-        "0_tile_5" -> ("0", 5)
-        """
         if "_tile_" in slice_num:
             parts = slice_num.split("_tile_")
             return parts[0], int(parts[1])
@@ -284,10 +287,6 @@ class DSperseManager:
     def verify_slice_proof(
         self, run_uid: str, slice_num: str, proof: dict | str, proof_system: ProofSystem
     ) -> bool:
-        """
-        Verify proof for a given slice or tile.
-        slice_num can be "0" (regular slice) or "0_tile_5" (tile 5 of slice 0).
-        """
         if run_uid not in self.runs:
             raise ValueError(f"Run UID {run_uid} not found.")
 
@@ -296,9 +295,9 @@ class DSperseManager:
         )
         if slice_data is None:
             raise ValueError(f"Slice data for slice number {slice_num} not found.")
-        if slice_data.prove_system != proof_system:
+        if slice_data.proof_system != proof_system:
             raise ValueError(
-                f"Proof system mismatch for slice {slice_num} in run {run_uid}. Expected {slice_data.prove_system}, got {proof_system}."
+                f"Proof system mismatch for slice {slice_num} in run {run_uid}. Expected {slice_data.proof_system}, got {proof_system}."
             )
 
         circuit = self._get_circuit_by_id(slice_data.circuit_id)
@@ -339,9 +338,6 @@ class DSperseManager:
     def check_run_completion(
         self, run_uid: str, remove_completed: bool = False
     ) -> bool:
-        """
-        Check if all slices in a run have been successfully verified.
-        """
         if run_uid not in self.runs:
             raise ValueError(f"Run UID {run_uid} not found.")
 
@@ -352,9 +348,6 @@ class DSperseManager:
         return all_verified
 
     def cleanup_run(self, run_uid: str):
-        """
-        Cleanup run data and delete run folder for a given run UID.
-        """
         if run_uid not in self.runs:
             raise ValueError(f"Cannot cleanup run data. Run UID {run_uid} not found.")
         logging.info(f"Cleaning up run data for run UID {run_uid}...")
@@ -364,10 +357,6 @@ class DSperseManager:
         del self.runs[run_uid]
 
     def total_cleanup(self):
-        """
-        Cleanup all run data and delete all run folders.
-        Used during validator shutdown to free up disk space.
-        """
         logging.info("Performing total cleanup of all DSperse run data...")
         for run_uid in list(self.runs.keys()):
             self.cleanup_run(run_uid)
@@ -378,7 +367,9 @@ class DSperseManager:
             return ProofSystem.JSTPROVE
         elif method.startswith("ezkl"):
             return ProofSystem.EZKL
-        raise ValueError(f"Unknown proof method '{method}' - cannot determine proof system")
+        raise ValueError(
+            f"Unknown proof method '{method}' - cannot determine proof system"
+        )
 
     def _parse_dsperse_result(
         self, result: dict, execution_type: str
@@ -406,21 +397,14 @@ class DSperseManager:
 
     @classmethod
     def extract_dslices(cls, model_path: Path | str) -> None:
-        """
-        Extract DSperse slice files in a folder if there are any.
-        """
         model_path = Path(model_path)
-        # dslice_files = glob.glob(os.path.join(model_path, "slice_*.dslice"))
         dslice_files = list(model_path.glob("slice_*.dslice"))
         if not dslice_files:
             return
         logging.debug(SYNC_LOG_PREFIX + f"Extracting DSlices for model {model_path}...")
         for dslice_file in dslice_files:
-            # extracted_path = os.path.splitext(dslice_file)[0]
-            extracted_path = dslice_file.with_suffix("")  # remove .dslice suffix
+            extracted_path = dslice_file.with_suffix("")
             if extracted_path.exists():
-                # Extracted folder already exists, but the .dslice file is not deleted
-                # that means we probably interrupted extraction previously. Let's extract again
                 shutil.rmtree(extracted_path)
             logging.info(
                 SYNC_LOG_PREFIX
@@ -432,7 +416,6 @@ class DSperseManager:
                 output_path=extracted_path,
                 cleanup=True,
             )
-            # `cleanup=True` doesn't work for some reason, so we manually delete the .dslice file
             dslice_file.unlink(missing_ok=True)
 
     def generate_batch_witnesses(
@@ -441,10 +424,6 @@ class DSperseManager:
         frame_inputs: list[dict],
         max_workers: int = 8,
     ) -> BatchRun:
-        """
-        Generate witnesses for multiple frames in parallel using ProcessPoolExecutor.
-        Each frame is processed independently, allowing true parallelism.
-        """
         batch_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
         batch_run = BatchRun(batch_id=batch_id, circuit_id=circuit.id)
 
@@ -495,7 +474,6 @@ class DSperseManager:
         return batch_run
 
     def _populate_batch_requests(self, batch_run: BatchRun, circuit: Circuit) -> None:
-        """Convert successful frame results into DSlice proof requests."""
         for frame_idx, result in batch_run.frame_results.items():
             if not result.success:
                 continue
@@ -509,18 +487,13 @@ class DSperseManager:
                     with open(slice_data.output_file, "r") as f:
                         outputs = json.load(f)
 
-                    witness = None
-                    if slice_data.witness_file and slice_data.witness_file.exists():
-                        witness = slice_data.witness_file.read_bytes()
-
                     request = DSliceQueuedProofRequest(
                         circuit=circuit,
                         inputs=inputs,
                         outputs=outputs,
-                        witness=witness,
                         slice_num=slice_data.slice_num,
                         run_uid=result.run_uid,
-                        proof_system=slice_data.prove_system,
+                        proof_system=slice_data.proof_system,
                     )
                     batch_run.pending_slices.append(request)
                 except Exception as e:
@@ -537,10 +510,6 @@ class DSperseManager:
     def retry_failed_slice(
         self, batch_run: BatchRun, failed_request: DSliceQueuedProofRequest, max_retries: int = 3
     ) -> bool:
-        """
-        Retry a failed slice proof request.
-        Returns True if the request should be retried, False if max retries exceeded.
-        """
         run_uid = failed_request.run_uid
         slice_num = failed_request.slice_num
 
@@ -573,13 +542,11 @@ class DSperseManager:
     def mark_slice_complete(
         self, batch_run: BatchRun, run_uid: str, slice_num: str
     ) -> None:
-        """Mark a slice as successfully proven."""
         slice_key = f"{run_uid}:{slice_num}"
         if slice_key not in batch_run.completed_slices:
             batch_run.completed_slices.append(slice_key)
 
     def get_batch_progress(self, batch_run: BatchRun) -> dict:
-        """Get progress statistics for a batch run."""
         total_frames = len(batch_run.frame_results)
         successful_frames = sum(
             1 for r in batch_run.frame_results.values() if r.success
@@ -612,10 +579,6 @@ def _process_single_frame(
     slice_path: str,
     batch_id: str,
 ) -> FrameWitnessResult:
-    """
-    Process a single frame's witness generation.
-    This function runs in a separate process via ProcessPoolExecutor.
-    """
     run_uid = f"{batch_id}_{frame_idx}"
     run_dir = Path(cli_parser.config.dsperse_run_dir) / f"run_{run_uid}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -661,9 +624,9 @@ def _process_single_frame(
 
                     tile_method = tile_info.get("method", "")
                     if tile_method.startswith("jstprove"):
-                        prove_system = ProofSystem.JSTPROVE
+                        proof_system = ProofSystem.JSTPROVE
                     elif tile_method.startswith("ezkl"):
-                        prove_system = ProofSystem.EZKL
+                        proof_system = ProofSystem.EZKL
                     else:
                         continue
 
@@ -674,15 +637,15 @@ def _process_single_frame(
                             input_file=Path(tile_input),
                             output_file=Path(tile_output),
                             witness_file=Path(tile_witness) if tile_witness else None,
-                            prove_system=prove_system,
+                            proof_system=proof_system,
                             frame_idx=frame_idx,
                         )
                     )
             else:
                 if method.startswith("jstprove"):
-                    prove_system = ProofSystem.JSTPROVE
+                    proof_system = ProofSystem.JSTPROVE
                 elif method.startswith("ezkl"):
-                    prove_system = ProofSystem.EZKL
+                    proof_system = ProofSystem.EZKL
                 else:
                     continue
 
@@ -693,7 +656,7 @@ def _process_single_frame(
                         input_file=Path(r["input_file"]),
                         output_file=Path(r["output_file"]),
                         witness_file=Path(r["witness_file"]) if r.get("witness_file") else None,
-                        prove_system=prove_system,
+                        proof_system=proof_system,
                         frame_idx=frame_idx,
                     )
                 )

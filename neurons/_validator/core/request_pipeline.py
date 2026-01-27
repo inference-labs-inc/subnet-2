@@ -218,7 +218,6 @@ class RequestPipeline:
                     circuit=circuit.id,
                     inputs=request.inputs,
                     outputs=request.outputs,
-                    witness=request.witness.hex() if request.witness else None,
                     slice_num=request.slice_num,
                     run_uid=request.run_uid,
                     proof_system=request.proof_system,
