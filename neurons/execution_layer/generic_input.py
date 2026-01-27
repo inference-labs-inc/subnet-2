@@ -8,20 +8,6 @@ from pydantic import BaseModel
 from _validator.models.request_type import RequestType
 from execution_layer.base_input import BaseInput
 
-DTYPE_MAP = {
-    "float32": np.float32,
-    "float64": np.float64,
-    "float16": np.float16,
-    "int32": np.int32,
-    "int64": np.int64,
-    "int16": np.int16,
-    "int8": np.int8,
-    "uint8": np.uint8,
-    "uint16": np.uint16,
-    "uint32": np.uint32,
-    "uint64": np.uint64,
-}
-
 
 class TensorInputSchema(BaseModel):
     input_data: list
@@ -58,10 +44,9 @@ class GenericInputHandler(BaseInput):
     def _generate_tensor(
         self, shape: list[int], dtype: str, normalization: str | None
     ) -> list:
-        np_dtype = DTYPE_MAP.get(dtype, np.float32)
-        is_integer = np.issubdtype(np_dtype, np.integer)
+        np_dtype = np.dtype(dtype)
 
-        if is_integer:
+        if np.issubdtype(np_dtype, np.integer):
             info = np.iinfo(np_dtype)
             arr = np.random.randint(info.min, info.max + 1, size=shape, dtype=np_dtype)
         elif normalization == "imagenet":
