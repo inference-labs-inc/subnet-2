@@ -150,18 +150,7 @@ class CircuitStore:
                     traceback.print_exc()
 
     def refresh_circuits(self):
-        try:
-            self._load_from_api()
-        except Exception as e:
-            bt.logging.warning(f"Failed to refresh circuits from API: {e}")
-
-    def get_circuit(self, circuit_id: str) -> Circuit | None:
-        circuit = self.circuits.get(circuit_id)
-        if circuit:
-            bt.logging.debug(f"Retrieved circuit {circuit}")
-        else:
-            bt.logging.warning(f"Circuit {circuit_id} not found")
-        return circuit
+        self._load_from_api()
 
     def ensure_circuit(self, circuit_id: str) -> Circuit:
         if circuit_id in self.circuits:

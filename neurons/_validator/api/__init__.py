@@ -399,10 +399,7 @@ class ValidatorAPI:
             return InvalidParams("Missing or invalid frames (must be a list)")
 
         try:
-            circuit = circuit_store.get_circuit(circuit_id)
-            if not circuit:
-                return InvalidParams(f"Circuit {circuit_id} not found")
-
+            circuit = circuit_store.ensure_circuit(circuit_id)
             if not self.dsperse_manager:
                 return Error(10, "DSperse manager not initialized")
 
@@ -415,7 +412,7 @@ class ValidatorAPI:
                 None,
                 lambda: self.dsperse_manager.generate_batch_witnesses(
                     circuit, frames, max_workers
-                )
+                ),
             )
 
             self.active_batches[batch_run.batch_id] = batch_run
@@ -428,11 +425,13 @@ class ValidatorAPI:
                 f"Batch {batch_run.batch_id} created: {progress['total_slices']} slices queued"
             )
 
-            return Success({
-                "batch_id": batch_run.batch_id,
-                "status": "processing",
-                "progress": progress,
-            })
+            return Success(
+                {
+                    "batch_id": batch_run.batch_id,
+                    "status": "processing",
+                    "progress": progress,
+                }
+            )
 
         except Exception as e:
             bt.logging.error(f"Error in batch submission: {str(e)}")
@@ -457,23 +456,41 @@ class ValidatorAPI:
             batch_run = self.active_batches[batch_id]
             progress = self.dsperse_manager.get_batch_progress(batch_run)
 
-            status = "processing"
-            if progress["pending_slices"] == 0:
-                if progress["failed_slices"] == 0:
-                    status = "completed"
-                else:
-                    status = "completed_with_errors"
+            total = progress["total_slices"]
+            done = progress["completed_slices"] + progress["failed_slices"]
 
-            return Success({
-                "batch_id": batch_id,
-                "status": status,
-                "progress": progress,
-            })
+            if done >= total and total > 0:
+                status = (
+                    "completed"
+                    if progress["failed_slices"] == 0
+                    else "completed_with_errors"
+                )
+                self._cleanup_batch(batch_id, batch_run)
+            else:
+                status = "processing"
+
+            return Success(
+                {
+                    "batch_id": batch_id,
+                    "status": status,
+                    "progress": progress,
+                }
+            )
 
         except Exception as e:
             bt.logging.error(f"Error getting batch status: {str(e)}")
             traceback.print_exc()
             return Error(9, "Failed to get batch status", str(e))
+
+    def _cleanup_batch(self, batch_id: str, batch_run: BatchRun) -> None:
+        del self.active_batches[batch_id]
+        if self.dsperse_manager:
+            for frame_result in batch_run.frame_results.values():
+                try:
+                    self.dsperse_manager.cleanup_run(frame_result.run_uid)
+                except ValueError:
+                    pass
+        bt.logging.info(f"Batch {batch_id} completed and cleaned up")
 
     def start_server(self):
         """Start the uvicorn server in a separate thread"""

@@ -23,15 +23,10 @@ class ProofOfWeightsManager:
     def _update_scores_from_witness(
         self, proof_of_weights_items: list[ProofOfWeightsItem], model_id: str
     ):
-        pow_circuit = circuit_store.get_circuit(model_id)
+        pow_circuit = circuit_store.ensure_circuit(model_id)
         bt.logging.info(
             f"Processing PoW witness generation for {len(proof_of_weights_items)} items using {str(pow_circuit)}"
         )
-        if not pow_circuit:
-            raise ValueError(
-                f"Proof of weights circuit not found for model ID: {model_id}"
-            )
-
         inputs = pow_circuit.input_handler(
             RequestType.RWR, ProofOfWeightsItem.to_dict_list(proof_of_weights_items)
         )
@@ -91,9 +86,10 @@ class ProofOfWeightsManager:
         if current_step == self.last_processed_queue_step:
             return False
 
-        pow_circuit = circuit_store.get_circuit(model_id)
-        if not pow_circuit:
-            bt.logging.error(f"Circuit not found for model ID: {model_id}")
+        try:
+            pow_circuit = circuit_store.ensure_circuit(model_id)
+        except Exception as e:
+            bt.logging.error(f"Failed to load circuit {model_id}: {e}")
             return False
 
         items_to_process = self.proof_of_weights_queue[-256:]

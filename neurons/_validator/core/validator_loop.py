@@ -449,7 +449,7 @@ class ValidatorLoop:
                         ):
                             request = self.request_pipeline._prepare_benchmark_request(
                                 uid,
-                                circuit_store.get_circuit(
+                                circuit_store.ensure_circuit(
                                     BATCHED_PROOF_OF_WEIGHTS_MODEL_ID
                                 ),
                             )
@@ -726,7 +726,7 @@ class ValidatorLoop:
 
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
         """Mark a DSLICE request as permanently failed in its batch."""
-        for batch_run in self.api.active_batches.values():
+        for batch_run in list(self.api.active_batches.values()):
             if any(
                 fr.run_uid == queued.run_uid for fr in batch_run.frame_results.values()
             ):
@@ -746,13 +746,19 @@ class ValidatorLoop:
         run_uid = response.dsperse_run_uid
         slice_num = response.dsperse_slice_num
         if not run_uid or slice_num is None:
+            bt.logging.warning(
+                f"Cannot mark DSLICE complete: missing run_uid={run_uid} or slice_num={slice_num}"
+            )
             return
-        for batch_run in self.api.active_batches.values():
+        for batch_run in list(self.api.active_batches.values()):
             if any(fr.run_uid == run_uid for fr in batch_run.frame_results.values()):
                 self.dsperse_manager.mark_slice_complete(
                     batch_run, run_uid, str(slice_num)
                 )
                 return
+        bt.logging.warning(
+            f"Could not find batch for completed slice {slice_num} in run {run_uid}"
+        )
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
