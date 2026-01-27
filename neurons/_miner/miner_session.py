@@ -396,11 +396,15 @@ class MinerSession:
 
         try:
             circuit = circuit_store.get_circuit(model_id)
-        except Exception as e:
-            bt.logging.error(f"Error loading circuit {model_id}: {e}")
+        except (ValueError, KeyError) as e:
+            bt.logging.warning(f"Invalid circuit ID {model_id}: {e}")
             return JSONResponse(
                 content=f"Invalid circuit ID: {model_id}", status_code=422
             )
+        except Exception as e:
+            bt.logging.error(f"Server error loading circuit {model_id}: {e}")
+            traceback.print_exc()
+            return JSONResponse(content="Internal server error", status_code=500)
 
         if not circuit:
             bt.logging.warning(f"Circuit not found: {model_id}")

@@ -38,14 +38,54 @@ class CircuitStore:
     def load_circuits(self, deployment_layer_path: Optional[str] = None):
         bt.logging.info("Loading circuits...")
 
-        try:
-            self._load_from_api()
-        except Exception as e:
-            bt.logging.warning(f"Failed to load circuits from API: {e}")
-            bt.logging.info("Falling back to local filesystem")
-
         self._load_from_filesystem(deployment_layer_path)
+        self._load_from_cache()
+
+        if not self.circuits:
+            bt.logging.info("No local circuits found, fetching from API...")
+            try:
+                self._load_from_api()
+            except Exception as e:
+                bt.logging.warning(f"Failed to load circuits from API: {e}")
+
         bt.logging.info(f"Loaded {len(self.circuits)} circuits")
+
+    def _load_from_cache(self):
+        if not os.path.exists(self._cache_dir):
+            return
+
+        bt.logging.info(f"Loading circuits from cache: {self._cache_dir}")
+
+        for folder_name in os.listdir(self._cache_dir):
+            folder_path = os.path.join(self._cache_dir, folder_name)
+
+            if not os.path.isdir(folder_path) or not folder_name.startswith("model_"):
+                continue
+
+            circuit_id = folder_name[6:]
+
+            if circuit_id in IGNORED_MODEL_HASHES:
+                bt.logging.debug(f"Ignoring cached circuit {circuit_id}")
+                continue
+
+            if circuit_id in self.circuits:
+                continue
+
+            metadata_path = os.path.join(folder_path, "metadata.json")
+            if not os.path.isfile(metadata_path):
+                bt.logging.debug(f"Skipping cached {folder_name} - no metadata.json")
+                continue
+
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    metadata_dict = json.load(f)
+                metadata = CircuitMetadata(**metadata_dict)
+                circuit = Circuit(circuit_id, metadata=metadata)
+                self.circuits[circuit_id] = circuit
+                bt.logging.info(f"Loaded circuit {circuit_id} from cache")
+            except Exception as e:
+                bt.logging.error(f"Error loading cached circuit {circuit_id}: {e}")
+                traceback.print_exc()
 
     def _load_from_api(self):
         bt.logging.info(f"Fetching circuits from {self._api_url}")
