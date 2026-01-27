@@ -176,10 +176,10 @@ EMA_BOOST_FACTOR = 1.2
 EMA_ENABLED = False
 
 CIRCUIT_API_URL = os.getenv(
-    "CIRCUIT_API_URL", "https://api.circuits.inferencelabs.com"
+    "CIRCUIT_API_URL", "https://sn2-api.inferencelabs.com"
 )
 CIRCUIT_R2_BASE_URL = os.getenv(
-    "CIRCUIT_R2_BASE_URL", "https://circuits.r2.inferencelabs.com"
+    "CIRCUIT_R2_BASE_URL", "https://dsperse.inferencelabs.com"
 )
 CIRCUIT_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".bittensor", "subnet-2", "circuit_cache"

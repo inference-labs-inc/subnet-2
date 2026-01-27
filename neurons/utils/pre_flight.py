@@ -233,6 +233,16 @@ def sync_models(role: Optional[Roles] = None):
     from execution_layer.dsperse_manager import DSperseManager
     from execution_layer.circuit import CircuitType
 
+    if not getattr(cli_parser.config, "download_all_circuits", False):
+        bt.logging.info(
+            SYNC_LOG_PREFIX + "Skipping circuit download (use --download-all-circuits to enable)"
+        )
+        return
+
+    bt.logging.warning(
+        SYNC_LOG_PREFIX + "Downloading all circuits may consume a large amount of storage"
+    )
+
     MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "deployment_layer")
 
     loop = asyncio.get_event_loop()

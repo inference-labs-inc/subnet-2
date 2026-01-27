@@ -107,6 +107,12 @@ def init_config(role: Optional[str] = None):
         default=None,
         help="Custom location for storing dsperse run data (optional)",
     )
+    parser.add_argument(
+        "--download-all-circuits",
+        default=False,
+        action="store_true",
+        help="Download all circuits from API during startup (default: False)",
+    )
     if role == Roles.VALIDATOR:
         # CLI arguments specific to the validator
         _validator_config()
