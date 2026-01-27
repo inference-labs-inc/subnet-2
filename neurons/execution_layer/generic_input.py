@@ -52,7 +52,9 @@ class GenericInputHandler(BaseInput):
 
         if np.issubdtype(np_dtype, np.integer):
             info = np.iinfo(np_dtype)
-            arr = np.random.randint(info.min, info.max + 1, size=shape, dtype=np_dtype)
+            low = int(info.min)
+            high = int(info.max) + 1
+            arr = np.random.randint(low, high, size=shape, dtype=np_dtype)
         elif normalization == "imagenet":
             arr = np.random.randn(*shape).astype(np_dtype)
         else:

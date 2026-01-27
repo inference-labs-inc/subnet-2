@@ -508,6 +508,15 @@ class DSperseManager:
                         f"Failed to create request for frame {frame_idx} "
                         f"slice {slice_data.slice_num}: {e}"
                     )
+                    failed_request = DSliceQueuedProofRequest(
+                        circuit=circuit,
+                        inputs={},
+                        outputs={},
+                        slice_num=slice_data.slice_num,
+                        run_uid=result.run_uid,
+                        proof_system=slice_data.proof_system,
+                    )
+                    batch_run.failed_slices.append(failed_request)
 
         logging.info(
             f"Batch {batch_run.batch_id}: {len(batch_run.pending_slices)} "
