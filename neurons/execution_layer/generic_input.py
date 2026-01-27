@@ -14,9 +14,10 @@ class TensorInputSchema(BaseModel):
 
 
 def create_schema_from_metadata(input_schema: dict) -> type[BaseModel]:
-    if input_schema.get("type") == "tensor":
+    schema_type = input_schema.get("type")
+    if schema_type == "tensor":
         return TensorInputSchema
-    return TensorInputSchema
+    raise ValueError(f"Unsupported input schema type: '{schema_type}'")
 
 
 class GenericInputHandler(BaseInput):

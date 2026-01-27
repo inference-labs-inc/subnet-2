@@ -65,14 +65,17 @@ class DSperseManager:
         ]
         self.runs = {}
 
-    def _get_circuit_by_id(self, circuit_id: str) -> Circuit | None:
+    def _get_circuit_by_id(self, circuit_id: str) -> Circuit:
         circuit = next((c for c in self.circuits if c.id == circuit_id), None)
         if circuit is None:
             circuit = circuit_store.ensure_circuit(circuit_id)
-            if circuit and circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
-                self.circuits.append(circuit)
-        if circuit is None:
-            raise ValueError(f"Circuit with ID {circuit_id} not found.")
+            if circuit is None:
+                raise ValueError(f"Circuit with ID {circuit_id} not found.")
+            if circuit.metadata.type != CircuitType.DSPERSE_PROOF_GENERATION:
+                raise ValueError(
+                    f"Circuit {circuit_id} is not a DSperse circuit (type: {circuit.metadata.type})"
+                )
+            self.circuits.append(circuit)
         return circuit
 
     def generate_dslice_requests(self) -> Iterable[DSliceQueuedProofRequest]:
@@ -150,11 +153,16 @@ class DSperseManager:
                     tile_output = tile_info.get("output_file")
                     tile_witness = tile_info.get("witness_file")
 
-                    if not tile_input or not tile_output:
-                        logging.warning(
-                            f"Skipping tile {tile_idx} of slice {slice_num}: missing input/output"
+                    missing = []
+                    if not tile_input:
+                        missing.append("input_file")
+                    if not tile_output:
+                        missing.append("output_file")
+                    if missing:
+                        raise ValueError(
+                            f"Tile {tile_idx} of slice {slice_num} (base: {base_slice_num}) "
+                            f"missing required fields: {', '.join(missing)}"
                         )
-                        continue
 
                     dslice_data_list.append(
                         DSliceData(
@@ -619,8 +627,15 @@ def _process_single_frame(
                     tile_output = tile_info.get("output_file")
                     tile_witness = tile_info.get("witness_file")
 
-                    if not tile_input or not tile_output:
-                        continue
+                    missing = []
+                    if not tile_input:
+                        missing.append("input_file")
+                    if not tile_output:
+                        missing.append("output_file")
+                    if missing:
+                        raise ValueError(
+                            f"Tile {tile_slice_num} missing required fields: {', '.join(missing)}"
+                        )
 
                     tile_method = tile_info.get("method", "")
                     if tile_method.startswith("jstprove"):
@@ -628,7 +643,9 @@ def _process_single_frame(
                     elif tile_method.startswith("ezkl"):
                         proof_system = ProofSystem.EZKL
                     else:
-                        continue
+                        raise ValueError(
+                            f"Unsupported proof method '{tile_method}' for tile {tile_slice_num}"
+                        )
 
                     slices.append(
                         DSliceData(
@@ -647,7 +664,9 @@ def _process_single_frame(
                 elif method.startswith("ezkl"):
                     proof_system = ProofSystem.EZKL
                 else:
-                    continue
+                    raise ValueError(
+                        f"Unsupported proof method '{method}' for slice {base_slice_num}"
+                    )
 
                 slices.append(
                     DSliceData(
