@@ -300,7 +300,8 @@ class DSperseManager:
             raise ValueError(f"Slice data for slice number {slice_num} not found.")
         if slice_data.proof_system != proof_system:
             raise ValueError(
-                f"Proof system mismatch for slice {slice_num} in run {run_uid}. Expected {slice_data.proof_system}, got {proof_system}."
+                f"Proof system mismatch for slice {slice_num} in run {run_uid}. "
+                f"Expected {slice_data.proof_system}, got {proof_system}."
             )
 
         circuit = self._get_circuit_by_id(slice_data.circuit_id)
@@ -383,7 +384,7 @@ class DSperseManager:
         )
         execution_result = execution_results[0] if execution_results else {}
         if not execution_result:
-            logging.error(f"No execution results found in proof generation result.")
+            logging.error("No execution results found in proof generation result.")
 
         slice_id = execution_result.get("slice_id", None)
         execution = execution_result.get(f"{execution_type}_execution", {})

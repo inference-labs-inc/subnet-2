@@ -20,7 +20,15 @@ class ProofOfComputationRPCRequest(QueuedRequestDataModel):
         if not circuit_id:
             raise ValueError("circuit_id is required")
 
-        circuit = circuit_store.ensure_circuit(circuit_id)
+        try:
+            circuit = circuit_store.get_circuit(circuit_id)
+            if circuit is None:
+                raise ValueError(f"No circuit found for ID {circuit_id}")
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Failed to load circuit {circuit_id}: {e}") from e
+
         if circuit.metadata.type != CircuitType.PROOF_OF_COMPUTATION:
             raise ValueError(
                 f"Circuit {circuit_id} is not a proof of computation circuit"

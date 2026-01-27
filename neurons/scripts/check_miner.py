@@ -24,13 +24,12 @@ import httpx
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from deployment_layer.circuit_store import circuit_store
-from protocol import QueryZkProof
+from deployment_layer.circuit_store import circuit_store  # noqa: E402
+from protocol import QueryZkProof  # noqa: E402
 
-from _validator.api.client import query_miner
-from _validator.core.request import Request
-from _validator.models.miner_response import MinerResponse
-from _validator.models.request_type import RequestType
+from _validator.api.client import query_miner  # noqa: E402
+from _validator.core.request import Request  # noqa: E402
+from _validator.models.request_type import RequestType  # noqa: E402
 
 # Parse external IP and port from command line arguments
 parser = argparse.ArgumentParser(description="Check the miner server", add_help=False)

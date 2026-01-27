@@ -393,9 +393,24 @@ class MinerSession:
 
         model_id = str(data.model_id or SINGLE_PROOF_OF_WEIGHTS_MODEL_ID)
         circuit_timeout = CIRCUIT_TIMEOUT_SECONDS
+
         try:
-            circuit = circuit_store.ensure_circuit(model_id)
-            circuit_timeout = circuit.timeout
+            circuit = circuit_store.get_circuit(model_id)
+        except Exception as e:
+            bt.logging.error(f"Error loading circuit {model_id}: {e}")
+            return JSONResponse(
+                content=f"Invalid circuit ID: {model_id}", status_code=422
+            )
+
+        if not circuit:
+            bt.logging.warning(f"Circuit not found: {model_id}")
+            return JSONResponse(
+                content=f"Circuit not found: {model_id}", status_code=404
+            )
+
+        circuit_timeout = circuit.timeout
+
+        try:
             bt.logging.info(f"Running proof generation for {circuit}")
             model_session = VerifiedModelSession(
                 GenericInput(RequestType.RWR, data.query_input), circuit

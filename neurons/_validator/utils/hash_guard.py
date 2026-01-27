@@ -1,5 +1,4 @@
 from execution_layer.base_input import BaseInput
-import bittensor as bt
 import json
 import hashlib
 from collections import deque

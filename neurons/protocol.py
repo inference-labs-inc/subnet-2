@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Optional
 import bittensor as bt
 import toml
 from execution_layer.circuit import ProofSystem
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 
 class QueryZkProof(BaseModel):

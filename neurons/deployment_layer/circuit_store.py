@@ -198,6 +198,8 @@ class CircuitStore:
         matching_circuits = [
             c for c in self.circuits.values() if c.metadata.name == circuit_name
         ]
+        if not matching_circuits:
+            return None
         return max(matching_circuits, key=lambda c: version.parse(c.metadata.version))
 
     def get_circuit_by_name_and_version(
