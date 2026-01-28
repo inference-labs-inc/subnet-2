@@ -22,7 +22,6 @@ from jsonrpcserver import (
 from fastapi.routing import APIRoute, APIWebSocketRoute
 import bittensor as bt
 from _validator.models.poc_rpc_request import ProofOfComputationRPCRequest
-from _validator.models.pow_rpc_request import ProofOfWeightsRPCRequest
 from _validator.models.base_rpc_request import QueuedRequestDataModel
 import hashlib
 from constants import (
@@ -72,7 +71,7 @@ class ValidatorAPI:
     def __init__(self, config: ValidatorConfig):
         self.config = config
         # a Queue of requests to be sent to miners
-        # consists of "real world requests" ProofOfWeightsRPCRequest and ProofOfComputationRPCRequest
+        # consists of "real world requests" - ProofOfComputationRPCRequest and
         # and a Request with one slice of a DSperse model (DSlice)
         self.stacked_requests_queue: list[QueuedRequestDataModel] = []
         self.ws_manager = WebSocketManager()
@@ -119,7 +118,6 @@ class ValidatorAPI:
                     data,
                     context=websocket,
                     methods={
-                        "subnet-2.proof_of_weights": self.handle_proof_of_weights,
                         "subnet-2.proof_of_computation": self.handle_proof_of_computation,
                         "subnet-2.dsperse_submit": self.handle_dsperse_submit,
                         "subnet-2.run_status": self.handle_run_status,
@@ -246,80 +244,6 @@ class ValidatorAPI:
             "/verify-and-upload", self.submit_proof, methods=["POST"]
         )
         return [rpc_endpoint, get_circuits_endpoint, submit_proof_endpoint]
-
-    async def handle_proof_of_weights(
-        self, websocket: WebSocket, **params: dict[str, object]
-    ) -> dict[str, object]:
-        if not websocket.headers.get("x-netuid"):
-            return InvalidParams(
-                "Missing x-netuid header (required for proof of weights requests)"
-            )
-
-        evaluation_data = params.get("evaluation_data")
-        weights_version = params.get("weights_version")
-
-        if not evaluation_data:
-            return InvalidParams("Missing evaluation data")
-
-        try:
-            netuid = websocket.headers.get("x-netuid")
-            if netuid is None:
-                return InvalidParams("Missing x-netuid header")
-
-            if self.is_testnet:
-                testnet_uids = [
-                    uid[0] for uid in MAINNET_TESTNET_UIDS if uid[1] == int(netuid)
-                ]
-                if not testnet_uids:
-                    return InvalidParams(
-                        f"No testnet UID mapping found for mainnet UID {netuid}"
-                    )
-                netuid = testnet_uids[0]
-
-            netuid = int(netuid)
-            try:
-                external_request = ProofOfWeightsRPCRequest(
-                    evaluation_data=evaluation_data,
-                    netuid=netuid,
-                    weights_version=weights_version,
-                )
-            except ValueError as e:
-                return InvalidParams(str(e))
-
-            self.pending_requests[external_request.hash] = asyncio.Event()
-            self.stacked_requests_queue.insert(0, external_request)
-            bt.logging.success(
-                f"External request with hash {external_request.hash} added to queue"
-            )
-            try:
-                await asyncio.wait_for(
-                    self.pending_requests[external_request.hash].wait(),
-                    timeout=external_request.circuit.timeout
-                    + EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
-                )
-                result = self.request_results.pop(external_request.hash, None)
-
-                if result["success"]:
-                    bt.logging.success(
-                        f"External request with hash {external_request.hash} processed successfully"
-                    )
-                    return Success(result)
-                bt.logging.error(
-                    f"External request with hash {external_request.hash} failed to process"
-                )
-                return Error(9, "Request processing failed")
-            except asyncio.TimeoutError:
-                bt.logging.error(
-                    f"External request with hash {external_request.hash} timed out"
-                )
-                return Error(9, "Request processing failed", "Request timed out")
-            finally:
-                self.pending_requests.pop(external_request.hash, None)
-
-        except Exception as e:
-            bt.logging.error(f"Error processing request: {str(e)}")
-            traceback.print_exc()
-            return Error(9, "Request processing failed", str(e))
 
     async def handle_proof_of_computation(
         self, websocket: WebSocket, **params: dict[str, object]
