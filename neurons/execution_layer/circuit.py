@@ -425,13 +425,14 @@ class Circuit:
             if hasattr(self.metadata, "timeout") and self.metadata.timeout is not None
             else CIRCUIT_TIMEOUT_SECONDS
         )
-        try:
-            with open(self.paths.settings, "r", encoding="utf-8") as f:
-                self.settings = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            logging.warning(
-                f"Failed to load settings for model {self.id}. Using default settings."
-            )
+        if self.proof_system == ProofSystem.EZKL:
+            try:
+                with open(self.paths.settings, "r", encoding="utf-8") as f:
+                    self.settings = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                logging.warning(
+                    f"Failed to load settings for model {self.id}. Using default settings."
+                )
         self.input_handler: BaseInput = InputRegistry.get_handler(
             self.id, metadata=self.metadata
         )
