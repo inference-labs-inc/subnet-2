@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import random
+import secrets
 from typing import Any
 
 import numpy as np
@@ -8,15 +10,42 @@ from pydantic import BaseModel
 from _validator.models.request_type import RequestType
 from execution_layer.base_input import BaseInput
 
+ONE_MINUTE = 60
+
 
 class TensorInputSchema(BaseModel):
     input_data: list
+
+
+class PoWBatchInputSchema(BaseModel):
+    maximum_score: list[float]
+    previous_score: list[float]
+    verified: list[bool]
+    proof_size: list[float]
+    response_time: list[float]
+    competition: list[float]
+    maximum_response_time: list[float]
+    minimum_response_time: list[float]
+    validator_uid: list[int]
+    block_number: list[int]
+    miner_uid: list[int]
+    scaling: int
+    RATE_OF_DECAY: int
+    RATE_OF_RECOVERY: int
+    FLATTENING_COEFFICIENT: int
+    COMPETITION_WEIGHT: int
+    PROOF_SIZE_WEIGHT: int
+    PROOF_SIZE_THRESHOLD: int
+    RESPONSE_TIME_WEIGHT: int
+    MAXIMUM_RESPONSE_TIME_DECIMAL: int
 
 
 def create_schema_from_metadata(input_schema: dict) -> type[BaseModel]:
     schema_type = input_schema.get("type")
     if schema_type == "tensor":
         return TensorInputSchema
+    if schema_type == "pow_batch":
+        return PoWBatchInputSchema
     raise ValueError(f"Unsupported input schema type: '{schema_type}'")
 
 
@@ -35,12 +64,73 @@ class GenericInputHandler(BaseInput):
         super().__init__(request_type, data)
 
     def generate(self) -> dict[str, object]:
+        schema_type = self.input_schema.get("type", "tensor")
+        if schema_type == "pow_batch":
+            return self._generate_pow_batch()
+
         shape = self.input_schema.get("shape", [1, 3, 224, 224])
         dtype = self.input_schema.get("dtype", "float32")
         normalization = self.input_schema.get("normalization")
 
         input_data = self._generate_tensor(shape, dtype, normalization)
         return {"input_data": input_data}
+
+    def _generate_pow_batch(self) -> dict[str, object]:
+        batch_size = self.input_schema.get("batch_size", 256)
+        scaling = self.input_schema.get("scaling", 100000000)
+        constants = self.input_schema.get("constants", {})
+
+        rate_of_decay = constants.get("rate_of_decay", 0.4)
+        rate_of_recovery = constants.get("rate_of_recovery", 0.1)
+        flattening_coefficient = constants.get("flattening_coefficient", 0.9)
+        proof_size_threshold = constants.get("proof_size_threshold", 3648)
+        proof_size_weight = constants.get("proof_size_weight", 0)
+        response_time_weight = constants.get("response_time_weight", 1)
+        competition_weight = constants.get("competition_weight", 0)
+        maximum_response_time_decimal = constants.get(
+            "maximum_response_time_decimal", 0.99
+        )
+
+        minimum_response_time = int(random.random() * ONE_MINUTE * scaling)
+        maximum_response_time = minimum_response_time + int(
+            random.random() * ONE_MINUTE * scaling
+        )
+        response_time = (
+            int(random.random() * (maximum_response_time - minimum_response_time))
+            + minimum_response_time
+        )
+        max_score = int(1 / 256 * scaling)
+
+        return {
+            "maximum_score": [max_score for _ in range(batch_size)],
+            "previous_score": [
+                int(random.random() * max_score) for _ in range(batch_size)
+            ],
+            "verified": [random.choice([True, False]) for _ in range(batch_size)],
+            "proof_size": [
+                int(random.randint(0, 5000) * scaling) for _ in range(batch_size)
+            ],
+            "validator_uid": [random.randint(0, 255) for _ in range(batch_size)],
+            "block_number": [
+                random.randint(3000000, 10000000) for _ in range(batch_size)
+            ],
+            "miner_uid": [random.randint(0, 255) for _ in range(batch_size)],
+            "minimum_response_time": [minimum_response_time for _ in range(batch_size)],
+            "maximum_response_time": [maximum_response_time for _ in range(batch_size)],
+            "response_time": [response_time for _ in range(batch_size)],
+            "competition": [int(random.random() * scaling) for _ in range(batch_size)],
+            "scaling": scaling,
+            "RATE_OF_DECAY": int(rate_of_decay * scaling),
+            "RATE_OF_RECOVERY": int(rate_of_recovery * scaling),
+            "FLATTENING_COEFFICIENT": int(flattening_coefficient * scaling),
+            "PROOF_SIZE_WEIGHT": int(proof_size_weight * scaling),
+            "PROOF_SIZE_THRESHOLD": int(proof_size_threshold * scaling),
+            "COMPETITION_WEIGHT": int(competition_weight * scaling),
+            "RESPONSE_TIME_WEIGHT": int(response_time_weight * scaling),
+            "MAXIMUM_RESPONSE_TIME_DECIMAL": int(
+                maximum_response_time_decimal * scaling
+            ),
+        }
 
     def _generate_tensor(
         self, shape: list[int], dtype: str, normalization: str | None
@@ -64,6 +154,9 @@ class GenericInputHandler(BaseInput):
 
     def validate(self, data: dict[str, object]) -> None:
         self.schema(**data)
+        schema_type = self.input_schema.get("type", "tensor")
+        if schema_type == "pow_batch":
+            return
         input_data = data.get("input_data", [])
         expected_shape = self.input_schema.get("shape", [])
         self._validate_shape(input_data, expected_shape)
@@ -90,8 +183,65 @@ class GenericInputHandler(BaseInput):
             for item in data:
                 self._validate_shape(item, expected_shape[1:])
 
-    @staticmethod
-    def process(data: dict[str, object]) -> dict[str, object]:
+    def process(self, data: dict[str, object]) -> dict[str, object]:
+        schema_type = self.input_schema.get("type", "tensor")
+        if schema_type == "pow_batch":
+            return self._process_pow_batch(data)
+        return data
+
+    def _process_pow_batch(self, data: dict[str, object]) -> dict[str, object]:
+        scaling = self.input_schema.get("scaling", 100000000)
+        constants = self.input_schema.get("constants", {})
+
+        data["maximum_score"] = [int(v * scaling) for v in data["maximum_score"]]
+        data["previous_score"] = [int(v * scaling) for v in data["previous_score"]]
+        data["proof_size"] = [int(v * scaling) for v in data["proof_size"]]
+        data["minimum_response_time"] = [
+            int(v * scaling) for v in data["minimum_response_time"]
+        ]
+        data["maximum_response_time"] = [
+            int(v * scaling) for v in data["maximum_response_time"]
+        ]
+        data["response_time"] = [int(v * scaling) for v in data["response_time"]]
+        data["competition"] = [int(v * scaling) for v in data["competition"]]
+
+        batch_size = self.input_schema.get("batch_size", 256)
+        for i in range(16):
+            if batch_size - 16 + i < len(data["validator_uid"]):
+                data["validator_uid"][batch_size - 16 + i] = secrets.randbits(16)
+
+        rate_of_decay = constants.get("rate_of_decay", 0.4)
+        rate_of_recovery = constants.get("rate_of_recovery", 0.1)
+        flattening_coefficient = constants.get("flattening_coefficient", 0.9)
+        proof_size_threshold = constants.get("proof_size_threshold", 3648)
+        proof_size_weight = constants.get("proof_size_weight", 0)
+        response_time_weight = constants.get("response_time_weight", 1)
+        competition_weight = constants.get("competition_weight", 0)
+        maximum_response_time_decimal = constants.get(
+            "maximum_response_time_decimal", 0.99
+        )
+
+        if "RATE_OF_DECAY" not in data:
+            data["RATE_OF_DECAY"] = int(rate_of_decay * scaling)
+        if "RATE_OF_RECOVERY" not in data:
+            data["RATE_OF_RECOVERY"] = int(rate_of_recovery * scaling)
+        if "FLATTENING_COEFFICIENT" not in data:
+            data["FLATTENING_COEFFICIENT"] = int(flattening_coefficient * scaling)
+        if "PROOF_SIZE_WEIGHT" not in data:
+            data["PROOF_SIZE_WEIGHT"] = int(proof_size_weight * scaling)
+        if "PROOF_SIZE_THRESHOLD" not in data:
+            data["PROOF_SIZE_THRESHOLD"] = int(proof_size_threshold * scaling)
+        if "COMPETITION_WEIGHT" not in data:
+            data["COMPETITION_WEIGHT"] = int(competition_weight * scaling)
+        if "RESPONSE_TIME_WEIGHT" not in data:
+            data["RESPONSE_TIME_WEIGHT"] = int(response_time_weight * scaling)
+        if "MAXIMUM_RESPONSE_TIME_DECIMAL" not in data:
+            data["MAXIMUM_RESPONSE_TIME_DECIMAL"] = int(
+                maximum_response_time_decimal * scaling
+            )
+        if "scaling" not in data:
+            data["scaling"] = scaling
+
         return data
 
     def to_array(self) -> list:

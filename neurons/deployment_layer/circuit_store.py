@@ -79,6 +79,7 @@ class CircuitStore:
             try:
                 with open(metadata_path, "r", encoding="utf-8") as f:
                     metadata_dict = json.load(f)
+                metadata_dict.setdefault("external_files", None)
                 metadata = CircuitMetadata(**metadata_dict)
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit
