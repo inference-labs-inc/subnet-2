@@ -16,7 +16,7 @@ from constants import (
     IGNORED_MODEL_HASHES,
     MAINNET_TESTNET_UIDS,
 )
-from execution_layer.circuit import Circuit, CircuitMetadata
+from execution_layer.circuit import Circuit, CircuitMetadata, CircuitType
 
 
 class CircuitStore:
@@ -273,10 +273,15 @@ class CircuitStore:
             response.raise_for_status()
             circuit_data = response.json()
 
+        cache_path = os.path.join(self._cache_dir, f"model_{circuit_id}")
         self._cache_circuit(circuit_id, circuit_data)
         metadata_dict = circuit_data.get("metadata", {})
         metadata_dict.setdefault("external_files", None)
         metadata = CircuitMetadata(**metadata_dict)
+        if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
+            from execution_layer.dsperse_manager import DSperseManager
+
+            DSperseManager.extract_dslices(cache_path)
         circuit = Circuit(circuit_id, metadata=metadata)
         self.circuits[circuit_id] = circuit
         bt.logging.success(f"Fetched and loaded circuit {circuit_id}")
