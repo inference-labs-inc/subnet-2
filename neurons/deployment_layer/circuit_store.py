@@ -113,6 +113,7 @@ class CircuitStore:
             try:
                 self._cache_circuit(circuit_id, circuit_data)
                 metadata_dict = circuit_data.get("metadata", {})
+                metadata_dict.setdefault("external_files", None)
                 metadata = CircuitMetadata(**metadata_dict)
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit
@@ -204,6 +205,7 @@ class CircuitStore:
 
         self._cache_circuit(circuit_id, circuit_data)
         metadata_dict = circuit_data.get("metadata", {})
+        metadata_dict.setdefault("external_files", None)
         metadata = CircuitMetadata(**metadata_dict)
         circuit = Circuit(circuit_id, metadata=metadata)
         self.circuits[circuit_id] = circuit
