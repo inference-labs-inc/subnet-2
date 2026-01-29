@@ -10,6 +10,7 @@ from typing import Iterable
 
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
+from dsperse.src.analyzers.schema import ExecutionInfo, ExecutionMethod
 from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.prove.prover import Prover
 from dsperse.src.run.runner import Runner
@@ -117,88 +118,94 @@ class DSperseManager:
         results = runner.run(
             input_json_path=input_json_path, slice_path=circuit.paths.external_base_path
         )
-        logging.debug(
-            f"DSperse run completed. Results data saved at {run_metadata_path}"
-        )
-        slice_results = {
-            k: (v.to_dict() if hasattr(v, "to_dict") else v)
-            for k, v in results["slice_results"].items()
-        }
+        run_dir = runner.last_run_dir
+        logging.debug(f"DSperse run completed. Results data saved at {run_dir}")
 
-        if not all(slice_result["success"] for slice_result in slice_results.values()):
+        slice_results: dict[str, ExecutionInfo] = results.get("slice_results", {})
+
+        if not all(info.success for info in slice_results.values()):
             logging.error(
                 "DSperse run failed for some slices. Aborting request generation..."
             )
             return []
 
+        return DSperseManager._extract_dslice_data(slice_results, run_dir, circuit.id)
+
+    @staticmethod
+    def _extract_dslice_data(
+        slice_results: dict[str, ExecutionInfo],
+        run_dir: Path,
+        circuit_id: str,
+        frame_idx: int | None = None,
+    ) -> list[DSliceData]:
         dslice_data_list = []
-        for slice_num, r in slice_results.items():
-            method = r.get("method", "")
+
+        for slice_num, exec_info in slice_results.items():
+            method = str(exec_info.method)
             if method.startswith("onnx"):
                 continue
 
             base_slice_num = slice_num.split("_")[-1]
+            slice_run_dir = run_dir / slice_num
 
-            if method == "tiled_parallel":
-                tile_exec_infos = r.get("tile_exec_infos", [])
-                num_tiles = r.get("num_tiles", len(tile_exec_infos))
+            if exec_info.method == ExecutionMethod.TILED:
                 logging.info(
-                    f"Expanding tiled slice {slice_num} into {num_tiles} tile requests"
+                    f"Expanding tiled slice {slice_num} into {len(exec_info.tiles)} tile requests"
                 )
+                for tile_idx, tile_result in enumerate(exec_info.tiles):
+                    tile_run_dir = slice_run_dir / f"tile_{tile_idx}"
+                    tile_input = tile_run_dir / "input.json"
+                    tile_output = tile_run_dir / "output.json"
 
-                for tile_idx, tile_info in enumerate(tile_exec_infos):
-                    tile_slice_num = f"{base_slice_num}_tile_{tile_idx}"
-                    tile_input = tile_info.get("input_file")
-                    tile_output = tile_info.get("output_file")
-                    tile_witness = tile_info.get("witness_file")
-
-                    missing = []
-                    if not tile_input:
-                        missing.append("input_file")
-                    if not tile_output:
-                        missing.append("output_file")
-                    if missing:
+                    if not tile_input.exists() or not tile_output.exists():
                         raise ValueError(
-                            f"Tile {tile_idx} of slice {slice_num} (base: {base_slice_num}) "
-                            f"missing required fields: {', '.join(missing)}"
+                            f"Tile {tile_idx} of slice {slice_num} missing input/output files"
                         )
 
                     dslice_data_list.append(
                         DSliceData(
-                            slice_num=tile_slice_num,
-                            input_file=Path(tile_input),
-                            output_file=Path(tile_output),
-                            witness_file=Path(tile_witness) if tile_witness else None,
-                            circuit_id=circuit.id,
-                            proof_system=self._get_proof_system_for_tile(tile_info),
+                            slice_num=f"{base_slice_num}_tile_{tile_idx}",
+                            input_file=tile_input,
+                            output_file=tile_output,
+                            witness_file=None,
+                            circuit_id=circuit_id,
+                            proof_system=DSperseManager._method_to_proof_system(
+                                tile_result.method
+                            ),
+                            frame_idx=frame_idx,
                         )
                     )
             else:
+                slice_input = slice_run_dir / "input.json"
+                slice_output = slice_run_dir / "output.json"
+
+                if not slice_input.exists() or not slice_output.exists():
+                    logging.warning(f"Slice {slice_num} missing input/output files")
+                    continue
+
                 dslice_data_list.append(
                     DSliceData(
                         slice_num=base_slice_num,
-                        input_file=Path(r["input_file"]),
-                        output_file=Path(r["output_file"]),
-                        witness_file=(
-                            Path(r["witness_file"]) if r.get("witness_file") else None
-                        ),
-                        circuit_id=circuit.id,
-                        proof_system=self._get_proof_system_for_run(r),
+                        input_file=slice_input,
+                        output_file=slice_output,
+                        witness_file=None,
+                        circuit_id=circuit_id,
+                        proof_system=DSperseManager._method_to_proof_system(method),
+                        frame_idx=frame_idx,
                     )
                 )
 
-        logging.info(
-            f"Generated {len(dslice_data_list)} DSlice requests (tiles expanded)"
-        )
+        logging.info(f"Generated {len(dslice_data_list)} DSlice requests")
         return dslice_data_list
 
-    def _get_proof_system_for_tile(self, tile_info: dict) -> ProofSystem:
-        method = tile_info.get("method", "")
-        if method.startswith("jstprove"):
+    @staticmethod
+    def _method_to_proof_system(method: str | None) -> ProofSystem:
+        if not method:
             return ProofSystem.JSTPROVE
-        elif method.startswith("ezkl"):
+        method_lower = str(method).lower()
+        if "ezkl" in method_lower:
             return ProofSystem.EZKL
-        raise ValueError(f"Unknown tile proof method '{method}'")
+        return ProofSystem.JSTPROVE
 
     def prove_slice(
         self,
@@ -368,16 +375,6 @@ class DSperseManager:
         for run_uid in list(self.runs.keys()):
             self.cleanup_run(run_uid)
 
-    def _get_proof_system_for_run(self, result: dict) -> ProofSystem:
-        method = result.get("method", "")
-        if method.startswith("jstprove"):
-            return ProofSystem.JSTPROVE
-        elif method.startswith("ezkl"):
-            return ProofSystem.EZKL
-        raise ValueError(
-            f"Unknown proof method '{method}' - cannot determine proof system"
-        )
-
     def _parse_dsperse_result(
         self, result: dict, execution_type: str
     ) -> tuple[str | None, dict]:
@@ -390,15 +387,23 @@ class DSperseManager:
 
         slice_id = execution_result.get("slice_id", None)
         execution = execution_result.get(f"{execution_type}_execution", {})
+        if execution is None:
+            execution = {}
 
-        if execution_type == "proof" and not execution.get("proof_file"):
-            tile_proofs = execution.get("tile_proofs_info") or []
-            if tile_proofs and len(tile_proofs) > 0:
-                tile_0 = tile_proofs[0]
-                if isinstance(tile_0, dict) and tile_0.get("proof_path"):
-                    execution["proof_file"] = tile_0["proof_path"]
-                    if tile_0.get("success") is not None:
-                        execution["success"] = tile_0["success"]
+        if execution_type == "proof":
+            proof_file = execution.get("proof_file") or execution.get("proof_path")
+            if not proof_file:
+                tiles = (
+                    execution.get("tiles") or execution.get("tile_proofs_info") or []
+                )
+                if tiles and len(tiles) > 0:
+                    tile_0 = tiles[0]
+                    if isinstance(tile_0, dict):
+                        proof_file = tile_0.get("proof_path")
+                        if tile_0.get("success") is not None:
+                            execution["success"] = tile_0["success"]
+            if proof_file:
+                execution["proof_file"] = proof_file
 
         return slice_id, execution
 
@@ -563,24 +568,25 @@ def _process_single_frame(
     slice_path: str,
     batch_id: str,
 ) -> FrameWitnessResult:
+    from dsperse.src.analyzers.schema import ExecutionInfo
+
     run_uid = f"{batch_id}_{frame_idx}"
-    run_dir = Path(cli_parser.config.dsperse_run_dir) / f"run_{run_uid}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir_base = Path(cli_parser.config.dsperse_run_dir) / f"run_{run_uid}"
+    run_dir_base.mkdir(parents=True, exist_ok=True)
 
     try:
-        input_json_path = run_dir / "input.json"
+        input_json_path = run_dir_base / "input.json"
         with open(input_json_path, "w") as f:
             json.dump(frame_input, f)
 
-        runner = Runner(run_dir=run_dir)
+        runner = Runner(run_dir=run_dir_base)
         results = runner.run(input_json_path=input_json_path, slice_path=slice_path)
+        run_dir = runner.last_run_dir
 
-        slice_results = {
-            k: (v.to_dict() if hasattr(v, "to_dict") else v)
-            for k, v in results.get("slice_results", {}).items()
-        }
-        if not all(r.get("success", False) for r in slice_results.values()):
-            failed = [k for k, v in slice_results.items() if not v.get("success")]
+        slice_results: dict[str, ExecutionInfo] = results.get("slice_results", {})
+
+        if not all(info.success for info in slice_results.values()):
+            failed = [k for k, v in slice_results.items() if not v.success]
             return FrameWitnessResult(
                 frame_idx=frame_idx,
                 run_uid=run_uid,
@@ -589,76 +595,9 @@ def _process_single_frame(
                 error=f"Slices failed: {failed}",
             )
 
-        slices = []
-        for slice_num, r in slice_results.items():
-            method = r.get("method", "")
-            if method.startswith("onnx"):
-                continue
-
-            base_slice_num = slice_num.split("_")[-1]
-
-            if method == "tiled_parallel":
-                tile_exec_infos = r.get("tile_exec_infos", [])
-                for tile_idx, tile_info in enumerate(tile_exec_infos):
-                    tile_slice_num = f"{base_slice_num}_tile_{tile_idx}"
-                    tile_input = tile_info.get("input_file")
-                    tile_output = tile_info.get("output_file")
-                    tile_witness = tile_info.get("witness_file")
-
-                    missing = []
-                    if not tile_input:
-                        missing.append("input_file")
-                    if not tile_output:
-                        missing.append("output_file")
-                    if missing:
-                        raise ValueError(
-                            f"Tile {tile_slice_num} missing required fields: {', '.join(missing)}"
-                        )
-
-                    tile_method = tile_info.get("method", "")
-                    if tile_method.startswith("jstprove"):
-                        proof_system = ProofSystem.JSTPROVE
-                    elif tile_method.startswith("ezkl"):
-                        proof_system = ProofSystem.EZKL
-                    else:
-                        raise ValueError(
-                            f"Unsupported proof method '{tile_method}' for tile {tile_slice_num}"
-                        )
-
-                    slices.append(
-                        DSliceData(
-                            slice_num=tile_slice_num,
-                            circuit_id=circuit_id,
-                            input_file=Path(tile_input),
-                            output_file=Path(tile_output),
-                            witness_file=Path(tile_witness) if tile_witness else None,
-                            proof_system=proof_system,
-                            frame_idx=frame_idx,
-                        )
-                    )
-            else:
-                if method.startswith("jstprove"):
-                    proof_system = ProofSystem.JSTPROVE
-                elif method.startswith("ezkl"):
-                    proof_system = ProofSystem.EZKL
-                else:
-                    raise ValueError(
-                        f"Unsupported proof method '{method}' for slice {base_slice_num}"
-                    )
-
-                slices.append(
-                    DSliceData(
-                        slice_num=base_slice_num,
-                        circuit_id=circuit_id,
-                        input_file=Path(r["input_file"]),
-                        output_file=Path(r["output_file"]),
-                        witness_file=(
-                            Path(r["witness_file"]) if r.get("witness_file") else None
-                        ),
-                        proof_system=proof_system,
-                        frame_idx=frame_idx,
-                    )
-                )
+        slices = DSperseManager._extract_dslice_data(
+            slice_results, run_dir, circuit_id, frame_idx
+        )
 
         return FrameWitnessResult(
             frame_idx=frame_idx,
