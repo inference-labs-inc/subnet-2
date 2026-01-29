@@ -277,7 +277,10 @@ class CircuitStore:
         self._cache_circuit(circuit_id, circuit_data)
         metadata_dict = circuit_data.get("metadata", {})
         metadata_dict.setdefault("external_files", None)
-        metadata = CircuitMetadata(**metadata_dict)
+        valid_fields = {f.name for f in CircuitMetadata.__dataclass_fields__.values()}
+        metadata = CircuitMetadata(
+            **{k: v for k, v in metadata_dict.items() if k in valid_fields}
+        )
         if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
             from execution_layer.dsperse_manager import DSperseManager
 
