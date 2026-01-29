@@ -159,7 +159,7 @@ class RequestPipeline:
         return random.choices(
             circuits,
             weights=[
-                (circuit.metadata.benchmark_choice_weight or 0) for circuit in circuits
+                (circuit.metadata.benchmark_choice_weight or 1) for circuit in circuits
             ],
             k=1,
         )[0]
