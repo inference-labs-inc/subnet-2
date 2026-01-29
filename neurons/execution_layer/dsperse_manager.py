@@ -107,19 +107,18 @@ class DSperseManager:
     ) -> list[DSliceData]:
         run_metadata_path = Path(cli_parser.config.dsperse_run_dir) / f"run_{run_uid}"
         run_metadata_path.mkdir(parents=True, exist_ok=True)
-        save_metadata_path = run_metadata_path / "metadata.json"
         logging.debug(f"Running DSperse model. Run metadata path: {run_metadata_path}")
 
         input_json_path = run_metadata_path / "input.json"
         with open(input_json_path, "w") as f:
             json.dump(circuit.input_handler(RequestType.BENCHMARK).generate(), f)
 
-        runner = Runner(save_metadata_path=save_metadata_path)
+        runner = Runner(run_dir=run_metadata_path)
         results = runner.run(
             input_json_path=input_json_path, slice_path=circuit.paths.external_base_path
         )
         logging.debug(
-            f"DSperse run completed. Results data saved at {save_metadata_path}"
+            f"DSperse run completed. Results data saved at {run_metadata_path}"
         )
         slice_results = results["slice_results"]
 
@@ -225,7 +224,7 @@ class DSperseManager:
             with open(input_file, "w") as f:
                 json.dump(inputs, f)
 
-            runner = Runner(run_dir=tmp_path, parallel_tiles=16)
+            runner = Runner(run_dir=tmp_path, threads=16)
             runner.run(input_json_path=input_file, slice_path=model_dir)
             run_dir = runner.last_run_dir
             logging.info(f"Runner completed for slice_{slice_num}, run_dir: {run_dir}")
@@ -570,8 +569,7 @@ def _process_single_frame(
         with open(input_json_path, "w") as f:
             json.dump(frame_input, f)
 
-        save_metadata_path = run_dir / "metadata.json"
-        runner = Runner(save_metadata_path=save_metadata_path)
+        runner = Runner(run_dir=run_dir)
         results = runner.run(input_json_path=input_json_path, slice_path=slice_path)
 
         slice_results = results.get("slice_results", {})
