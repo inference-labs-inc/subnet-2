@@ -170,15 +170,14 @@ class RequestPipeline:
         circuit: Circuit,
         request: any | None = None,
     ) -> tuple[ProofOfWeightsDataModel | QueryZkProof, bool]:
-        inputs = (
-            circuit.input_handler(request_type)
-            if request_type == RequestType.BENCHMARK
-            else circuit.input_handler(
-                request_type,
-                copy.deepcopy(request.inputs),
-            )
-        )
-        inputs = inputs.to_json() if hasattr(inputs, "to_json") else inputs
+        if request_type == RequestType.DSLICE:
+            inputs = request.inputs
+        elif request_type == RequestType.BENCHMARK:
+            inputs = circuit.input_handler(request_type)
+            inputs = inputs.to_json() if hasattr(inputs, "to_json") else inputs
+        else:
+            inputs = circuit.input_handler(request_type, copy.deepcopy(request.inputs))
+            inputs = inputs.to_json() if hasattr(inputs, "to_json") else inputs
 
         if request_type == RequestType.RWR:
             if circuit.metadata.type == CircuitType.PROOF_OF_WEIGHTS:
