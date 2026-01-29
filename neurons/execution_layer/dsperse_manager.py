@@ -120,7 +120,10 @@ class DSperseManager:
         logging.debug(
             f"DSperse run completed. Results data saved at {run_metadata_path}"
         )
-        slice_results = results["slice_results"]
+        slice_results = {
+            k: (v.to_dict() if hasattr(v, "to_dict") else v)
+            for k, v in results["slice_results"].items()
+        }
 
         if not all(slice_result["success"] for slice_result in slice_results.values()):
             logging.error(
@@ -572,7 +575,10 @@ def _process_single_frame(
         runner = Runner(run_dir=run_dir)
         results = runner.run(input_json_path=input_json_path, slice_path=slice_path)
 
-        slice_results = results.get("slice_results", {})
+        slice_results = {
+            k: (v.to_dict() if hasattr(v, "to_dict") else v)
+            for k, v in results.get("slice_results", {}).items()
+        }
         if not all(r.get("success", False) for r in slice_results.values()):
             failed = [k for k, v in slice_results.items() if not v.get("success")]
             return FrameWitnessResult(
