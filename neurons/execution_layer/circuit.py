@@ -32,9 +32,15 @@ class CircuitType(str, Enum):
     Enum representing the type of circuit.
     """
 
-    PROOF_OF_WEIGHTS = "proof_of_weights"
-    PROOF_OF_COMPUTATION = "proof_of_computation"
-    DSPERSE_PROOF_GENERATION = "dsperse_proof_generation"
+    PROOF_OF_WEIGHTS = "PROOF_OF_WEIGHTS"
+    PROOF_OF_COMPUTATION = "PROOF_OF_COMPUTATION"
+    DSPERSE_PROOF_GENERATION = "DSPERSE_PROOF_GENERATION"
+
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            return cls(value.upper())
+        raise ValueError(f"Cannot convert {value} to {cls.__name__}")
 
 
 class ProofSystem(str, Enum):
