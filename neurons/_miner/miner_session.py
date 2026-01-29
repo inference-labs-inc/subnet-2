@@ -152,12 +152,14 @@ class MinerSession:
                     table = Table(title=f"Miner Status (UID: {self.subnet_uid})")
                     table.add_column("Block", justify="center", style="cyan")
                     table.add_column("Stake", justify="center", style="cyan")
+                    table.add_column("Trust", justify="center", style="cyan")
                     table.add_column("Consensus", justify="center", style="cyan")
                     table.add_column("Incentive", justify="center", style="cyan")
                     table.add_column("Emission", justify="center", style="cyan")
                     table.add_row(
                         str(self.metagraph.block.item()),
                         str(self.metagraph.S[self.subnet_uid]),
+                        str(self.metagraph.TS[self.subnet_uid]),
                         str(self.metagraph.C[self.subnet_uid]),
                         str(self.metagraph.I[self.subnet_uid]),
                         str(self.metagraph.E[self.subnet_uid]),
