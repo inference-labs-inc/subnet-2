@@ -203,12 +203,13 @@ class DSperseManager:
         }
 
     @staticmethod
-    def _flatten_nested_list(data: any) -> list:
+    def _flatten_to_1d(data: any) -> list:
         if not isinstance(data, list):
-            return data
-        if len(data) == 1 and isinstance(data[0], list):
-            return DSperseManager._flatten_nested_list(data[0])
-        return data
+            return [data]
+        result = []
+        for item in data:
+            result.extend(DSperseManager._flatten_to_1d(item))
+        return result
 
     @staticmethod
     def _normalize_io_file(file_path: Path) -> None:
@@ -217,9 +218,8 @@ class DSperseManager:
         modified = False
         for key in ["input", "output"]:
             if key in data and isinstance(data[key], list):
-                flattened = DSperseManager._flatten_nested_list(data[key])
-                if flattened is not data[key]:
-                    data[key] = flattened
+                if any(isinstance(x, list) for x in data[key]):
+                    data[key] = DSperseManager._flatten_to_1d(data[key])
                     modified = True
         if modified:
             with open(file_path, "w") as f:
