@@ -16,6 +16,7 @@ from execution_layer.input_registry import InputRegistry
 
 import cli_parser
 from constants import (
+    CIRCUIT_METADATA_FILENAME,
     CIRCUIT_TIMEOUT_SECONDS,
     DEFAULT_PROOF_SIZE,
     MAX_EVALUATION_ITEMS,
@@ -119,7 +120,7 @@ class CircuitPaths:
                 f"model_{self.model_id}",
             )
         self.input = os.path.join(self.base_path, "input.json")
-        self.metadata = os.path.join(self.base_path, "metadata.json")
+        self.metadata = os.path.join(self.base_path, CIRCUIT_METADATA_FILENAME)
         self.compiled_model = os.path.join(self.base_path, "model.compiled")
         self.settings = os.path.join(self.base_path, "settings.json")
         self.witness = os.path.join(self.base_path, "witness.json")

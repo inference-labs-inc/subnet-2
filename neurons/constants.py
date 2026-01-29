@@ -182,3 +182,4 @@ CIRCUIT_R2_BASE_URL = os.getenv(
 CIRCUIT_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".bittensor", "subnet-2", "circuit_cache"
 )
+CIRCUIT_METADATA_FILENAME = "circuit_metadata.json"

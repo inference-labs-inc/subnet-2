@@ -15,7 +15,12 @@ import ezkl
 import requests
 
 import cli_parser
-from constants import FIVE_MINUTES, IGNORED_MODEL_HASHES, Roles
+from constants import (
+    CIRCUIT_METADATA_FILENAME,
+    FIVE_MINUTES,
+    IGNORED_MODEL_HASHES,
+    Roles,
+)
 
 LOCAL_SNARKJS_INSTALL_DIR = os.path.join(os.path.expanduser("~"), ".snarkjs")
 LOCAL_SNARKJS_PATH = os.path.join(
@@ -279,10 +284,11 @@ def sync_models(role: Optional[Roles] = None):
             )
             continue
 
-        metadata_file = model_path / "metadata.json"
+        metadata_file = model_path / CIRCUIT_METADATA_FILENAME
         if not metadata_file.is_file():
             bt.logging.warning(
-                SYNC_LOG_PREFIX + f"Skipping {model_path.name} - no metadata.json"
+                SYNC_LOG_PREFIX
+                + f"Skipping {model_path.name} - no {CIRCUIT_METADATA_FILENAME}"
             )
             continue
 

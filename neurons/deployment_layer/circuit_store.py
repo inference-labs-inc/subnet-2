@@ -12,6 +12,7 @@ from packaging import version
 from constants import (
     CIRCUIT_API_URL,
     CIRCUIT_CACHE_DIR,
+    CIRCUIT_METADATA_FILENAME,
     IGNORED_MODEL_HASHES,
     MAINNET_TESTNET_UIDS,
 )
@@ -88,9 +89,11 @@ class CircuitStore:
             if circuit_id in self.circuits:
                 continue
 
-            metadata_path = os.path.join(folder_path, "metadata.json")
+            metadata_path = os.path.join(folder_path, CIRCUIT_METADATA_FILENAME)
             if not os.path.isfile(metadata_path):
-                bt.logging.debug(f"Skipping cached {folder_name} - no metadata.json")
+                bt.logging.debug(
+                    f"Skipping cached {folder_name} - no {CIRCUIT_METADATA_FILENAME}"
+                )
                 continue
 
             try:
@@ -174,7 +177,7 @@ class CircuitStore:
         complete = len(failed_critical) == 0
 
         metadata["complete"] = complete
-        metadata_path = os.path.join(cache_path, "metadata.json")
+        metadata_path = os.path.join(cache_path, CIRCUIT_METADATA_FILENAME)
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
 
@@ -237,9 +240,11 @@ class CircuitStore:
                 if circuit_id in self.circuits:
                     continue
 
-                metadata_path = os.path.join(folder_path, "metadata.json")
+                metadata_path = os.path.join(folder_path, CIRCUIT_METADATA_FILENAME)
                 if not os.path.isfile(metadata_path):
-                    bt.logging.debug(f"Skipping {folder_name} - no metadata.json")
+                    bt.logging.debug(
+                        f"Skipping {folder_name} - no {CIRCUIT_METADATA_FILENAME}"
+                    )
                     continue
 
                 try:

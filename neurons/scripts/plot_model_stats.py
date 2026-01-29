@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from pathlib import Path
 from collections import defaultdict
+from constants import CIRCUIT_METADATA_FILENAME
 from typing import Dict, List, Optional, Union
 from rich.console import Console
 from rich.table import Table
@@ -22,7 +23,7 @@ def load_circuit_names(deployment_layer_path: str) -> Dict[str, str]:
         if os.path.isdir(folder_path) and folder_name.startswith("model_"):
             circuit_id = folder_name.split("_")[1]
         try:
-            with open(os.path.join(folder_path, "metadata.json"), "r") as f:
+            with open(os.path.join(folder_path, CIRCUIT_METADATA_FILENAME), "r") as f:
                 circuit_data = json.load(f)
                 circuit_name = circuit_data["name"]
                 circuits[circuit_id] = circuit_name
