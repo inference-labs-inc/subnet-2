@@ -11,9 +11,9 @@ from typing import Iterable
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
 from dsperse.src.backends.jstprove import JSTprove
-from dsperse.src.prover import Prover
+from dsperse.src.prove.prover import Prover
 from dsperse.src.run.runner import Runner
-from dsperse.src.verifier import Verifier
+from dsperse.src.verify.verifier import Verifier
 from dsperse.src.slice.utils.converter import Converter
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
 
