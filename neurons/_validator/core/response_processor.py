@@ -79,13 +79,8 @@ class ResponseProcessor:
                 run_uid=response.dsperse_run_uid,
                 slice_num=response.dsperse_slice_num,
                 proof=response.proof_content,
-                proof_system=request.data.get("proof_system"),  # TODO: test it
+                proof_system=request.data.get("proof_system"),
             )
-            if res:
-                # Check if the entire DSperse run is complete and clean up if so:
-                self.dsperse_manager.check_run_completion(
-                    run_uid=response.dsperse_run_uid, remove_completed=True
-                )
         else:
             if not response.public_json:
                 raise ValueError(f"Public signals not found for UID: {response.uid}")
