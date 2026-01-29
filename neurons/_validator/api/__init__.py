@@ -44,7 +44,7 @@ from OpenSSL import crypto
 from deployment_layer.circuit_store import circuit_store
 from _validator.utils.pps import ProofPublishingService
 from constants import PPS_URL, TESTNET_PPS_URL
-from execution_layer.dsperse_manager import BatchRun
+from execution_layer.dsperse_manager import DsperseRun
 
 app = FastAPI()
 
@@ -83,7 +83,7 @@ class ValidatorAPI:
         self.pending_requests: dict[str, asyncio.Event] = {}
         self.request_results: dict[str, dict[str, any]] = {}
         self.is_testnet = config.bt_config.subtensor.network == "test"
-        self.active_batches: dict[str, BatchRun] = {}
+        self.active_runs: dict[str, DsperseRun] = {}
         self.dsperse_manager = None
         self._setup_api()
 
@@ -123,8 +123,8 @@ class ValidatorAPI:
                     methods={
                         "subnet-2.proof_of_weights": self.handle_proof_of_weights,
                         "subnet-2.proof_of_computation": self.handle_proof_of_computation,
-                        "subnet-2.submit_video_batch": self.handle_video_batch_submission,
-                        "subnet-2.batch_status": self.handle_batch_status,
+                        "subnet-2.dsperse_submit": self.handle_dsperse_submit,
+                        "subnet-2.run_status": self.handle_run_status,
                     },
                 )
                 await websocket.send_text(str(response))
@@ -382,117 +382,89 @@ class ValidatorAPI:
             traceback.print_exc()
             return Error(9, "Request processing failed", str(e))
 
-    async def handle_video_batch_submission(
+    async def handle_dsperse_submit(
         self, websocket: WebSocket, **params: dict[str, object]
     ) -> dict[str, object]:
-        """
-        Handle batch video frame submission for parallel witness generation.
-        Expects: circuit_id, frames (list of input dicts), max_workers (optional)
-        """
         circuit_id = params.get("circuit_id")
-        frames = params.get("frames")
-        max_workers = params.get("max_workers", 8)
+        inputs = params.get("inputs")
 
         if not circuit_id:
             return InvalidParams("Missing circuit_id")
-        if not frames or not isinstance(frames, list):
-            return InvalidParams("Missing or invalid frames (must be a list)")
+        if not inputs or not isinstance(inputs, dict):
+            return InvalidParams("Missing or invalid inputs")
 
         try:
             circuit = circuit_store.ensure_circuit(circuit_id)
             if not self.dsperse_manager:
                 return Error(10, "DSperse manager not initialized")
 
-            bt.logging.info(
-                f"Starting batch submission for {len(frames)} frames on circuit {circuit_id}"
-            )
+            bt.logging.info(f"Starting DSperse run for circuit {circuit_id}")
 
             loop = asyncio.get_event_loop()
-            batch_run = await loop.run_in_executor(
+            run_uid, requests = await loop.run_in_executor(
                 None,
-                lambda: self.dsperse_manager.generate_batch_witnesses(
-                    circuit, frames, max_workers
-                ),
+                lambda: self.dsperse_manager.start_run(circuit, inputs),
             )
 
-            self.active_batches[batch_run.batch_id] = batch_run
+            if run_uid in self.dsperse_manager.runs:
+                self.active_runs[run_uid] = self.dsperse_manager.runs[run_uid]
 
-            for request in batch_run.pending_slices:
+            for request in requests:
                 self.stacked_requests_queue.append(request)
 
-            progress = self.dsperse_manager.get_batch_progress(batch_run)
+            status = self.dsperse_manager.get_run_status(run_uid)
             bt.logging.success(
-                f"Batch {batch_run.batch_id} created: {progress['total_slices']} slices queued"
+                f"Run {run_uid} created: {status['total_slices']} slices queued"
             )
 
             return Success(
-                {
-                    "batch_id": batch_run.batch_id,
-                    "status": "processing",
-                    "progress": progress,
-                }
+                {"run_uid": run_uid, "status": "processing", "progress": status}
             )
 
         except Exception as e:
-            bt.logging.error(f"Error in batch submission: {str(e)}")
+            bt.logging.error(f"Error in DSperse submission: {str(e)}")
             traceback.print_exc()
-            return Error(9, "Batch submission failed", str(e))
+            return Error(9, "DSperse submission failed", str(e))
 
-    async def handle_batch_status(
+    async def handle_run_status(
         self, websocket: WebSocket, **params: dict[str, object]
     ) -> dict[str, object]:
-        """
-        Get status and progress of a batch video processing job.
-        """
-        batch_id = params.get("batch_id")
+        run_uid = params.get("run_uid")
 
-        if not batch_id:
-            return InvalidParams("Missing batch_id")
+        if not run_uid:
+            return InvalidParams("Missing run_uid")
 
-        if batch_id not in self.active_batches:
-            return Error(11, "Batch not found", f"No batch with ID {batch_id}")
+        status = self.dsperse_manager.get_run_status(run_uid)
+        if not status:
+            return Error(11, "Run not found", f"No run with ID {run_uid}")
 
         try:
-            batch_run = self.active_batches[batch_id]
-            progress = self.dsperse_manager.get_batch_progress(batch_run)
-
-            total = progress["total_slices"]
-            done = progress["completed_slices"] + progress["failed_slices"]
-
-            if done >= total and total > 0:
-                status = (
-                    "completed"
-                    if progress["failed_slices"] == 0
-                    else "completed_with_errors"
+            if status["is_complete"]:
+                run_status = (
+                    "completed" if status["all_successful"] else "completed_with_errors"
                 )
-                self._cleanup_batch(batch_id, batch_run)
+                self._cleanup_run(run_uid)
             else:
-                status = "processing"
+                run_status = "processing"
 
             return Success(
-                {
-                    "batch_id": batch_id,
-                    "status": status,
-                    "progress": progress,
-                }
+                {"run_uid": run_uid, "status": run_status, "progress": status}
             )
 
         except Exception as e:
-            bt.logging.error(f"Error getting batch status: {str(e)}")
+            bt.logging.error(f"Error getting run status: {str(e)}")
             traceback.print_exc()
-            return Error(9, "Failed to get batch status", str(e))
+            return Error(9, "Failed to get run status", str(e))
 
-    def _cleanup_batch(self, batch_id: str, batch_run: BatchRun) -> None:
-        del self.active_batches[batch_id]
+    def _cleanup_run(self, run_uid: str) -> None:
+        if run_uid in self.active_runs:
+            del self.active_runs[run_uid]
         if self.dsperse_manager:
-            for frame_result in batch_run.frame_results.values():
-                try:
-                    self.dsperse_manager.cleanup_run(frame_result.run_uid)
-                except ValueError:
-                    bt.logging.debug(
-                        f"Run {frame_result.run_uid} already cleaned up or not found"
-                    )
-        bt.logging.info(f"Batch {batch_id} completed and cleaned up")
+            try:
+                self.dsperse_manager.cleanup_run(run_uid)
+            except ValueError:
+                bt.logging.debug(f"Run {run_uid} already cleaned up or not found")
+        bt.logging.info(f"Run {run_uid} completed and cleaned up")
 
     def start_server(self):
         """Start the uvicorn server in a separate thread"""

@@ -724,24 +724,11 @@ class ValidatorLoop:
         self.api.stacked_requests_queue.append(queued)
 
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
-        """Mark a DSLICE request as permanently failed in its batch."""
-        for batch_run in list(self.api.active_batches.values()):
-            if any(
-                fr.run_uid == queued.run_uid for fr in batch_run.frame_results.values()
-            ):
-                batch_run.failed_slices.append(queued)
-                bt.logging.warning(
-                    f"Slice {queued.slice_num} in run {queued.run_uid} "
-                    f"permanently failed after {MAX_SLICE_RETRIES} retries"
-                )
-                return
-        bt.logging.warning(
-            f"Could not find batch for failed slice {queued.slice_num} "
-            f"in run {queued.run_uid}"
+        self.dsperse_manager.on_slice_result(
+            queued.run_uid, queued.slice_num, success=False
         )
 
     def _mark_dslice_complete(self, response: MinerResponse) -> None:
-        """Mark a successfully verified DSLICE as complete in its batch."""
         run_uid = response.dsperse_run_uid
         slice_num = response.dsperse_slice_num
         if not run_uid or slice_num is None:
@@ -749,15 +736,7 @@ class ValidatorLoop:
                 f"Cannot mark DSLICE complete: missing run_uid={run_uid} or slice_num={slice_num}"
             )
             return
-        for batch_run in list(self.api.active_batches.values()):
-            if any(fr.run_uid == run_uid for fr in batch_run.frame_results.values()):
-                self.dsperse_manager.mark_slice_complete(
-                    batch_run, run_uid, str(slice_num)
-                )
-                return
-        bt.logging.warning(
-            f"Could not find batch for completed slice {slice_num} in run {run_uid}"
-        )
+        self.dsperse_manager.on_slice_result(run_uid, str(slice_num), success=True)
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
