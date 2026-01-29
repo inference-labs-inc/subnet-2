@@ -203,29 +203,6 @@ class DSperseManager:
         }
 
     @staticmethod
-    def _flatten_to_1d(data: any) -> list:
-        if not isinstance(data, list):
-            return [data]
-        result = []
-        for item in data:
-            result.extend(DSperseManager._flatten_to_1d(item))
-        return result
-
-    @staticmethod
-    def _normalize_io_file(file_path: Path) -> None:
-        with open(file_path, "r") as f:
-            data = json.load(f)
-        modified = False
-        for key in ["input", "output"]:
-            if key in data and isinstance(data[key], list):
-                if any(isinstance(x, list) for x in data[key]):
-                    data[key] = DSperseManager._flatten_to_1d(data[key])
-                    modified = True
-        if modified:
-            with open(file_path, "w") as f:
-                json.dump(data, f)
-
-    @staticmethod
     def _extract_dslice_data(
         slice_results: dict[str, ExecutionInfo],
         run_dir: Path,
@@ -260,7 +237,7 @@ class DSperseManager:
                             slice_num=f"{base_slice_num}_tile_{tile_idx}",
                             input_file=tile_input,
                             output_file=tile_output,
-                            witness_file=None,
+                            witness_file=tile_run_dir / "output_witness.bin",
                             circuit_id=circuit_id,
                             proof_system=DSperseManager._method_to_proof_system(
                                 tile_result.method
@@ -280,7 +257,7 @@ class DSperseManager:
                         slice_num=base_slice_num,
                         input_file=slice_input,
                         output_file=slice_output,
-                        witness_file=None,
+                        witness_file=slice_run_dir / "output_witness.bin",
                         circuit_id=circuit_id,
                         proof_system=DSperseManager._method_to_proof_system(method),
                     )
@@ -425,22 +402,41 @@ class DSperseManager:
         slice_data.proof_file = proof_file_path
 
         if proof_system == ProofSystem.JSTPROVE:
-            DSperseManager._normalize_io_file(slice_data.input_file)
-            DSperseManager._normalize_io_file(slice_data.output_file)
+            slice_dir = (
+                Path(circuit.paths.external_base_path) / f"slice_{base_slice_num}"
+            )
+            circuit_path = (
+                slice_dir
+                / "payload"
+                / "jstprove"
+                / f"slice_{base_slice_num}_circuit.txt"
+            )
+            witness_path = slice_data.witness_file or (
+                slice_data.input_file.parent / "output_witness.bin"
+            )
 
-        verifier = Verifier()
-        run_path = slice_data.input_file.parent.parent
-        result = verifier.verify(
-            run_path=run_path,
-            model_path=Path(circuit.paths.external_base_path)
-            / f"slice_{base_slice_num}",
-            backend=proof_system.value.lower() if proof_system else None,
-        )
+            jstprove = JSTprove()
+            success = jstprove.verify(
+                proof_path=proof_file_path,
+                circuit_path=circuit_path,
+                input_path=slice_data.input_file,
+                output_path=slice_data.output_file,
+                witness_path=witness_path,
+            )
+        else:
+            verifier = Verifier()
+            run_path = slice_data.input_file.parent.parent
+            result = verifier.verify(
+                run_path=run_path,
+                model_path=Path(circuit.paths.external_base_path)
+                / f"slice_{base_slice_num}",
+                backend=proof_system.value.lower() if proof_system else None,
+            )
+            _, verification_execution = self._parse_dsperse_result(
+                result, "verification"
+            )
+            success = verification_execution.get("success", False)
 
-        logging.debug(f"Got proof verification result. Result: {result}")
-
-        _, verification_execution = self._parse_dsperse_result(result, "verification")
-        success = verification_execution.get("success", False)
         slice_data.success = success
         return success
 
