@@ -24,7 +24,7 @@ class ProofOfWeightsManager:
         self, proof_of_weights_items: list[ProofOfWeightsItem], model_id: str
     ):
         try:
-            pow_circuit = circuit_store.get_circuit(model_id)
+            pow_circuit = circuit_store.ensure_circuit(model_id)
         except Exception as e:
             bt.logging.error(f"Failed to load circuit for model ID {model_id}: {e}")
             return
@@ -99,7 +99,7 @@ class ProofOfWeightsManager:
             return False
 
         try:
-            pow_circuit = circuit_store.get_circuit(model_id)
+            pow_circuit = circuit_store.ensure_circuit(model_id)
         except Exception as e:
             bt.logging.error(f"Failed to load circuit {model_id}: {e}")
             return False

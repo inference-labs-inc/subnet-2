@@ -395,7 +395,7 @@ class MinerSession:
         circuit_timeout = CIRCUIT_TIMEOUT_SECONDS
 
         try:
-            circuit = circuit_store.get_circuit(model_id)
+            circuit = circuit_store.ensure_circuit(model_id)
         except (ValueError, KeyError) as e:
             bt.logging.warning(f"Invalid circuit ID {model_id}: {e}")
             return JSONResponse(
