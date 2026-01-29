@@ -106,6 +106,8 @@ class DSperseManager:
         if not all(info.success for info in slice_results.values()):
             failed = [k for k, v in slice_results.items() if not v.success]
             logging.error(f"DSperse witness generation failed for slices: {failed}")
+            if actual_run_dir.exists():
+                shutil.rmtree(actual_run_dir)
             return run_uid, []
 
         slice_data_list = self._extract_dslice_data(
@@ -273,6 +275,9 @@ class DSperseManager:
         method_lower = str(method).lower()
         if "ezkl" in method_lower:
             return ProofSystem.EZKL
+        if "jstprove" in method_lower or "jst" in method_lower:
+            return ProofSystem.JSTPROVE
+        logging.warning(f"Unknown proof method '{method}', defaulting to JSTPROVE")
         return ProofSystem.JSTPROVE
 
     def prove_slice(
