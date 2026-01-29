@@ -203,6 +203,29 @@ class DSperseManager:
         }
 
     @staticmethod
+    def _flatten_nested_list(data: any) -> list:
+        if not isinstance(data, list):
+            return data
+        if len(data) == 1 and isinstance(data[0], list):
+            return DSperseManager._flatten_nested_list(data[0])
+        return data
+
+    @staticmethod
+    def _normalize_io_file(file_path: Path) -> None:
+        with open(file_path, "r") as f:
+            data = json.load(f)
+        modified = False
+        for key in ["input", "output"]:
+            if key in data and isinstance(data[key], list):
+                flattened = DSperseManager._flatten_nested_list(data[key])
+                if flattened is not data[key]:
+                    data[key] = flattened
+                    modified = True
+        if modified:
+            with open(file_path, "w") as f:
+                json.dump(data, f)
+
+    @staticmethod
     def _extract_dslice_data(
         slice_results: dict[str, ExecutionInfo],
         run_dir: Path,
@@ -232,6 +255,9 @@ class DSperseManager:
                             f"Tile {tile_idx} of slice {slice_num} missing input/output files"
                         )
 
+                    DSperseManager._normalize_io_file(tile_input)
+                    DSperseManager._normalize_io_file(tile_output)
+
                     dslice_data_list.append(
                         DSliceData(
                             slice_num=f"{base_slice_num}_tile_{tile_idx}",
@@ -251,6 +277,9 @@ class DSperseManager:
                 if not slice_input.exists() or not slice_output.exists():
                     logging.warning(f"Slice {slice_num} missing input/output files")
                     continue
+
+                DSperseManager._normalize_io_file(slice_input)
+                DSperseManager._normalize_io_file(slice_output)
 
                 dslice_data_list.append(
                     DSliceData(
