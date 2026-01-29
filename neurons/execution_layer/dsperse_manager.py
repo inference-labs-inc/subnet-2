@@ -275,9 +275,6 @@ class DSperseManager:
                     logging.warning(f"Slice {slice_num} missing input/output files")
                     continue
 
-                DSperseManager._normalize_io_file(slice_input)
-                DSperseManager._normalize_io_file(slice_output)
-
                 dslice_data_list.append(
                     DSliceData(
                         slice_num=base_slice_num,
@@ -426,6 +423,10 @@ class DSperseManager:
                 json.dump(proof, proof_file)
 
         slice_data.proof_file = proof_file_path
+
+        if proof_system == ProofSystem.JSTPROVE:
+            DSperseManager._normalize_io_file(slice_data.input_file)
+            DSperseManager._normalize_io_file(slice_data.output_file)
 
         verifier = Verifier()
         run_path = slice_data.input_file.parent.parent
