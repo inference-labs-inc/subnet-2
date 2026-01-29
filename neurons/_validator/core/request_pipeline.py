@@ -213,6 +213,8 @@ class RequestPipeline:
                 False,
             )
         elif circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
+            if request is None:
+                return None, False
             return (
                 DSliceProofGenerationDataModel(
                     circuit=circuit.id,
@@ -227,7 +229,7 @@ class RequestPipeline:
 
         return (
             ProofOfWeightsDataModel(
-                subnet_uid=circuit.metadata.netuid,
+                subnet_uid=circuit.metadata.netuid or 0,
                 verification_key_hash=circuit.id,
                 proof_system=circuit.proof_system,
                 inputs=inputs,
