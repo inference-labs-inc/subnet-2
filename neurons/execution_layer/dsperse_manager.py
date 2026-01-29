@@ -255,9 +255,6 @@ class DSperseManager:
                             f"Tile {tile_idx} of slice {slice_num} missing input/output files"
                         )
 
-                    DSperseManager._normalize_io_file(tile_input)
-                    DSperseManager._normalize_io_file(tile_output)
-
                     dslice_data_list.append(
                         DSliceData(
                             slice_num=f"{base_slice_num}_tile_{tile_idx}",
