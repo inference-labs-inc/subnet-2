@@ -41,12 +41,11 @@ class CircuitStore:
         self._load_from_filesystem(deployment_layer_path)
         self._load_from_cache()
 
-        if not self.circuits:
-            bt.logging.info("No local circuits found, fetching from API...")
-            try:
-                self._load_from_api()
-            except Exception as e:
-                bt.logging.warning(f"Failed to load circuits from API: {e}")
+        bt.logging.info("Fetching active circuits from API...")
+        try:
+            self._load_from_api()
+        except Exception as e:
+            bt.logging.warning(f"Failed to load circuits from API: {e}")
 
         bt.logging.info(f"Loaded {len(self.circuits)} circuits")
 
