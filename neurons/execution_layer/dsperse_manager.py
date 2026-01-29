@@ -335,8 +335,9 @@ class DSperseManager:
         slice_data.proof_file = proof_file_path
 
         verifier = Verifier()
+        run_path = slice_data.input_file.parent.parent
         result = verifier.verify(
-            run_path=slice_data.input_file.parent,
+            run_path=run_path,
             model_path=Path(circuit.paths.external_base_path)
             / f"slice_{base_slice_num}",
             backend=proof_system.value.lower() if proof_system else None,
