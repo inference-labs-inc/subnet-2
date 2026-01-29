@@ -425,7 +425,7 @@ class Circuit:
             if hasattr(self.metadata, "timeout") and self.metadata.timeout is not None
             else CIRCUIT_TIMEOUT_SECONDS
         )
-        if self.proof_system == ProofSystem.EZKL:
+        if self.proof_system not in (ProofSystem.JSTPROVE,):
             try:
                 with open(self.paths.settings, "r", encoding="utf-8") as f:
                     self.settings = json.load(f)
