@@ -150,10 +150,22 @@ class CircuitStore:
             json.dump(metadata, f, indent=2)
 
         files = circuit_data.get("files", {})
+        failed_downloads = []
         for filename, url in files.items():
             if filename == "metadata.json":
                 continue
-            self._download_file(url, os.path.join(cache_path, filename))
+            try:
+                self._download_file(url, os.path.join(cache_path, filename))
+            except Exception as e:
+                bt.logging.warning(
+                    f"Failed to download {filename} for circuit {circuit_id}: {e}"
+                )
+                failed_downloads.append(filename)
+
+        if failed_downloads:
+            bt.logging.warning(
+                f"Circuit {circuit_id}: {len(failed_downloads)}/{len(files)} files failed to download"
+            )
 
     def _download_file(self, url: str, dest_path: str):
         if os.path.exists(dest_path):
