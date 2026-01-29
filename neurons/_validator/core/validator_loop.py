@@ -76,7 +76,7 @@ class ValidatorLoop:
         Initialize the ValidatorLoop based on provided configuration.
 
         Args:
-            config (bt.config): Bittensor configuration object.
+            config (bt.Config): Bittensor configuration object.
         """
         self.config = config
         self.config.check_register()

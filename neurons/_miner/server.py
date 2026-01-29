@@ -21,7 +21,7 @@ class ZKRequestModel(BaseModel):
 
 class MinerServer:
 
-    def __init__(self, wallet: Wallet, config: bt.config, metagraph: bt.metagraph):
+    def __init__(self, wallet: Wallet, config: bt.Config, metagraph: bt.metagraph):
         self.wallet = wallet
         self.config = config
         self.metagraph = metagraph

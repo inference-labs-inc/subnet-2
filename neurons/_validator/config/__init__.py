@@ -13,7 +13,7 @@ class ValidatorConfig:
     This class initializes and manages the configuration settings for the validator.
 
     Attributes:
-        config (bt.config): The Bittensor configuration object.
+        config (bt.Config): The Bittensor configuration object.
         subnet_uid (int): The unique identifier for the subnet.
         wallet (bt.wallet): The Bittensor wallet object.
         subtensor (bt.subtensor): The Bittensor subtensor object.
@@ -22,12 +22,12 @@ class ValidatorConfig:
         api_enabled (bool): Whether the API is enabled.
     """
 
-    def __init__(self, config: bt.config):
+    def __init__(self, config: bt.Config):
         """
         Initialize the ValidatorConfig object.
 
         Args:
-            config (bt.config): The Bittensor configuration object.
+            config (bt.Config): The Bittensor configuration object.
         """
         for key, value in vars(config).items():
             setattr(self, key, value)

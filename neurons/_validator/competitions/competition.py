@@ -34,7 +34,7 @@ class CompetitionThread(threading.Thread):
     def __init__(
         self,
         competition: "Competition",
-        config: bt.config,
+        config: bt.Config,
     ):
         super().__init__()
         bt.logging.info("=== Competition Thread Constructor Start ===")
@@ -190,7 +190,7 @@ class Competition:
         competition_id: int,
         metagraph: bt.metagraph,
         wallet: bt.wallet,
-        config: bt.config,
+        config: bt.Config,
     ):
         bt.logging.info("=== Competition Module Initialization Start ===")
         bt.logging.info(f"Initializing competition module with ID {competition_id}...")

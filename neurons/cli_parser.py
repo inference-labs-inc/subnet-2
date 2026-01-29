@@ -26,7 +26,7 @@ elif "-h" in sys.argv:
 import bittensor as bt
 
 parser: Optional[argparse.ArgumentParser]
-config: Optional[bt.config]
+config: Optional[bt.Config]
 
 
 DESCRIPTION = {
@@ -123,7 +123,7 @@ def init_config(role: Optional[str] = None):
         bt.subtensor.add_args(parser)
         bt.logging.add_args(parser)
         bt.wallet.add_args(parser)
-        config = bt.config(parser, strict=True)
+        config = bt.Config(parser, strict=True)
 
     if SHOW_HELP:
         # --help or -h flag was passed, show the help message and exit
@@ -252,14 +252,14 @@ def _miner_config():
     bt.wallet.add_args(parser)
     bt.axon.add_args(parser)
 
-    config = bt.config(parser, strict=True)
+    config = bt.Config(parser, strict=True)
 
     if config.localnet:
         # quick localnet configuration set up for testing (specific params for miner)
         if config.wallet.name == "default":
             config.wallet.name = "miner"
         if not config.axon:
-            config.axon = bt.config()
+            config.axon = bt.Config()
             config.axon.ip = "127.0.0.1"
             config.axon.external_ip = "127.0.0.1"
         config.disable_blacklist = (
@@ -390,7 +390,7 @@ def _validator_config():
     bt.logging.add_args(parser)
     bt.wallet.add_args(parser)
 
-    config = bt.config(parser, strict=True)
+    config = bt.Config(parser, strict=True)
 
     if config.localnet:
         # quick localnet configuration set up for testing (specific params for validator)

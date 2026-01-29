@@ -15,7 +15,7 @@ class ApiConfig:
         serve_axon (bool): Whether to serve the axon displaying your API information.
     """
 
-    def __init__(self, config: bt.config):
+    def __init__(self, config: bt.Config):
         self.enabled = not config.ignore_external_requests
         self.host = config.external_api_host
         self.port = config.external_api_port

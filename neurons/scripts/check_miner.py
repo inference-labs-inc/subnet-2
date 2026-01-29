@@ -74,8 +74,8 @@ if __name__ == "__main__":
     )
 
     # Create config that doesn't require coldkey password
-    config = bt.config()
-    config.wallet = bt.config()
+    config = bt.Config()
+    config.wallet = bt.Config()
     config.wallet.name = args.wallet
     config.wallet.hotkey = args.hotkey
 
