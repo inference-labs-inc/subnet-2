@@ -38,18 +38,30 @@ class CircuitStore:
     def load_circuits(self, deployment_layer_path: Optional[str] = None):
         bt.logging.info("Loading circuits...")
 
-        self._load_from_filesystem(deployment_layer_path)
-        self._load_from_cache()
-
+        active_ids: set[str] | None = None
         bt.logging.info("Fetching active circuits from API...")
         try:
-            self._load_from_api()
+            active_ids = self._fetch_active_circuit_ids()
+            bt.logging.info(f"API reports {len(active_ids)} active circuits")
         except Exception as e:
-            bt.logging.warning(f"Failed to load circuits from API: {e}")
+            bt.logging.warning(f"Failed to fetch active circuits from API: {e}")
+
+        self._load_from_filesystem(deployment_layer_path, active_ids)
+        self._load_from_cache(active_ids)
+
+        if active_ids is not None:
+            self._load_from_api(active_ids)
 
         bt.logging.info(f"Loaded {len(self.circuits)} circuits")
 
-    def _load_from_cache(self):
+    def _fetch_active_circuit_ids(self) -> set[str]:
+        with httpx.Client(timeout=30) as client:
+            response = client.get(f"{self._api_url}/circuits")
+            response.raise_for_status()
+            data = response.json()
+        return {c["id"] for c in data.get("circuits", []) if c.get("id")}
+
+    def _load_from_cache(self, active_ids: set[str] | None = None):
         if not os.path.exists(self._cache_dir):
             return
 
@@ -65,6 +77,12 @@ class CircuitStore:
 
             if circuit_id in IGNORED_MODEL_HASHES:
                 bt.logging.debug(f"Ignoring cached circuit {circuit_id}")
+                continue
+
+            if active_ids is not None and circuit_id not in active_ids:
+                bt.logging.debug(
+                    f"Skipping cached circuit {circuit_id} - not in active list"
+                )
                 continue
 
             if circuit_id in self.circuits:
@@ -87,7 +105,7 @@ class CircuitStore:
                 bt.logging.error(f"Error loading cached circuit {circuit_id}: {e}")
                 traceback.print_exc()
 
-    def _load_from_api(self):
+    def _load_from_api(self, active_ids: set[str] | None = None):
         bt.logging.info(f"Fetching circuits from {self._api_url}")
 
         with httpx.Client(timeout=30) as client:
@@ -154,7 +172,11 @@ class CircuitStore:
                 os.remove(dest_path)
             raise
 
-    def _load_from_filesystem(self, deployment_layer_path: Optional[str] = None):
+    def _load_from_filesystem(
+        self,
+        deployment_layer_path: Optional[str] = None,
+        active_ids: set[str] | None = None,
+    ):
         if deployment_layer_path is None:
             deployment_layer_path = os.path.dirname(__file__)
 
@@ -171,6 +193,12 @@ class CircuitStore:
 
                 if circuit_id in IGNORED_MODEL_HASHES:
                     bt.logging.debug(f"Ignoring circuit {circuit_id}")
+                    continue
+
+                if active_ids is not None and circuit_id not in active_ids:
+                    bt.logging.debug(
+                        f"Skipping filesystem circuit {circuit_id} - not in active list"
+                    )
                     continue
 
                 if circuit_id in self.circuits:
@@ -191,7 +219,11 @@ class CircuitStore:
                     traceback.print_exc()
 
     def refresh_circuits(self):
-        self._load_from_api()
+        try:
+            active_ids = self._fetch_active_circuit_ids()
+            self._load_from_api(active_ids)
+        except Exception as e:
+            bt.logging.warning(f"Failed to refresh circuits from API: {e}")
 
     def ensure_circuit(self, circuit_id: str) -> Circuit:
         if circuit_id in self.circuits:
