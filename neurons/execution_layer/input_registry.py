@@ -16,6 +16,22 @@ def _validate_circuit_id(circuit_id: str) -> None:
         raise ValueError(f"Invalid circuit_id format: {circuit_id!r}")
 
 
+class GenericInputFactory:
+    def __init__(self, input_schema: dict):
+        self.input_schema = input_schema
+        from execution_layer.generic_input import create_schema_from_metadata
+
+        self.schema = create_schema_from_metadata(input_schema)
+
+    def __call__(self, request_type, data=None):
+        from execution_layer.generic_input import GenericInputHandler
+
+        return GenericInputHandler(request_type, data, input_schema=self.input_schema)
+
+    def __reduce__(self):
+        return (GenericInputFactory, (self.input_schema,))
+
+
 class InputRegistry:
     _handlers: dict[str, type[BaseInput]] = {}
 
@@ -39,11 +55,5 @@ class InputRegistry:
         raise ValueError(f"No input handler found for circuit {circuit_id}")
 
     @classmethod
-    def _create_generic_handler(cls, input_schema: dict) -> type[BaseInput]:
-        from execution_layer.generic_input import GenericInputHandler
-
-        class ConfiguredGenericHandler(GenericInputHandler):
-            def __init__(self, request_type, data=None):
-                super().__init__(request_type, data, input_schema=input_schema)
-
-        return ConfiguredGenericHandler
+    def _create_generic_handler(cls, input_schema: dict) -> GenericInputFactory:
+        return GenericInputFactory(input_schema)
