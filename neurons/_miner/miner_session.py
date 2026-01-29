@@ -197,8 +197,8 @@ class MinerSession:
             self.subnet_uid = subnet_uid
 
     def configure(self):
-        self.wallet = bt.wallet(config=cli_parser.config)
-        self.subtensor = bt.subtensor(config=cli_parser.config)
+        self.wallet = bt.Wallet(config=cli_parser.config)
+        self.subtensor = bt.Subtensor(config=cli_parser.config)
         self.metagraph = self.subtensor.metagraph(cli_parser.config.netuid)
         self.server = MinerServer(
             wallet=self.wallet, config=cli_parser.config, metagraph=self.metagraph

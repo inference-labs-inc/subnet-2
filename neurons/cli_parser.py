@@ -120,9 +120,9 @@ def init_config(role: Optional[str] = None):
         # CLI arguments specific to the miner
         _miner_config()
     else:
-        bt.subtensor.add_args(parser)
+        bt.Subtensor.add_args(parser)
         bt.logging.add_args(parser)
-        bt.wallet.add_args(parser)
+        bt.Wallet.add_args(parser)
         config = bt.Config(parser, strict=True)
 
     if SHOW_HELP:
@@ -247,10 +247,10 @@ def _miner_config():
         help="Whether to only run the competition. Disables regular mining when set.",
     )
 
-    bt.subtensor.add_args(parser)
+    bt.Subtensor.add_args(parser)
     bt.logging.add_args(parser)
-    bt.wallet.add_args(parser)
-    bt.axon.add_args(parser)
+    bt.Wallet.add_args(parser)
+    bt.Axon.add_args(parser)
 
     config = bt.Config(parser, strict=True)
 
@@ -386,9 +386,9 @@ def _validator_config():
         help="The port for the prometheus monitoring.",
     )
 
-    bt.subtensor.add_args(parser)
+    bt.Subtensor.add_args(parser)
     bt.logging.add_args(parser)
-    bt.wallet.add_args(parser)
+    bt.Wallet.add_args(parser)
 
     config = bt.Config(parser, strict=True)
 

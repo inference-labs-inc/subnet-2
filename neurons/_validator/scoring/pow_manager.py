@@ -14,7 +14,7 @@ from _validator.utils.logging import log_scores
 
 
 class ProofOfWeightsManager:
-    def __init__(self, metagraph: bt.metagraph, scores: torch.Tensor):
+    def __init__(self, metagraph: bt.Metagraph, scores: torch.Tensor):
         self.metagraph = metagraph
         self.scores = scores
         self.proof_of_weights_queue = []

@@ -14,7 +14,7 @@ def is_valid_ip(ip: str) -> bool:
         return False
 
 
-def get_queryable_uids(metagraph: bt.metagraph) -> Generator[int, None, None]:
+def get_queryable_uids(metagraph: bt.Metagraph) -> Generator[int, None, None]:
     """
     Returns the uids of the miners that are queryable
     """

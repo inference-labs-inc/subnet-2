@@ -12,7 +12,7 @@ import hashlib
 
 
 class CircuitManager:
-    def __init__(self, temp_dir: str, competition_id: int, dendrite: bt.dendrite):
+    def __init__(self, temp_dir: str, competition_id: int, dendrite: bt.Dendrite):
         self.temp_dir = temp_dir
         self.competition_id = competition_id
         self.dendrite = dendrite
@@ -88,7 +88,7 @@ class CircuitManager:
             return False
 
     async def download_files(
-        self, axon: bt.axon, expected_sha256: str, circuit_dir: str
+        self, axon: bt.Axon, expected_sha256: str, circuit_dir: str
     ) -> bool:
         try:
             bt.logging.info(

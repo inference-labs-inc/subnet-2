@@ -82,7 +82,7 @@ class CompetitionManager:
         self.config_file = os.path.join(config_dir, "competition_config.json")
         self.current_competition: Optional[CompetitionConfig] = None
         self.state = CompetitionState()
-        self.wallet = bt.wallet(config=cli_parser.config)
+        self.wallet = bt.Wallet(config=cli_parser.config)
 
         self._load_state()
         self._load_config()

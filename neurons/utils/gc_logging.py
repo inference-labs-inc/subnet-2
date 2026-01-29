@@ -33,7 +33,7 @@ session.mount("https://", HTTPAdapter(max_retries=retries))
 
 
 def log_responses(
-    metagraph: bt.metagraph,
+    metagraph: bt.Metagraph,
     hotkey: bt.Keypair,
     uid: int,
     responses: list["MinerResponse"],

@@ -18,7 +18,7 @@ def sign_timestamp(wallet_name: str, hotkey_name: str) -> tuple[str, str, str]:
     Returns:
         tuple containing (timestamp, ss58_address, base64_signature)
     """
-    wallet = bt.wallet(name=wallet_name, hotkey=hotkey_name)
+    wallet = bt.Wallet(name=wallet_name, hotkey=hotkey_name)
     timestamp = str(int(time.time()))
     signature = wallet.hotkey.sign(timestamp.encode())
     return timestamp, wallet.hotkey.ss58_address, base64.b64encode(signature).decode()

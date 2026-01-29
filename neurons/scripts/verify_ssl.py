@@ -14,7 +14,7 @@ async def verify_validator_cert(
     netuid: int, validator_ss58: str, network: str = "test"
 ):
 
-    subtensor = bt.subtensor(network=network)
+    subtensor = bt.Subtensor(network=network)
 
     try:
         metagraph = subtensor.metagraph(netuid)

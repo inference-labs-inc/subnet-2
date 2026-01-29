@@ -117,7 +117,7 @@ class MinerResponse:
             dsperse_run_uid=request.dsperse_run_uid,
         )
 
-    def to_log_dict(self, metagraph: bt.metagraph) -> dict:  # type: ignore
+    def to_log_dict(self, metagraph: bt.Metagraph) -> dict:  # type: ignore
         """
         Parse a MinerResponse object into a dictionary. Used for logging purposes.
         """

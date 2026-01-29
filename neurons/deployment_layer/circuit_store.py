@@ -96,6 +96,11 @@ class CircuitStore:
             try:
                 with open(metadata_path, "r", encoding="utf-8") as f:
                     metadata_dict = json.load(f)
+                if not metadata_dict.pop("complete", True):
+                    bt.logging.warning(
+                        f"Skipping incomplete cached circuit {circuit_id}"
+                    )
+                    continue
                 metadata_dict.setdefault("external_files", None)
                 metadata = CircuitMetadata(**metadata_dict)
                 circuit = Circuit(circuit_id, metadata=metadata)
@@ -145,9 +150,7 @@ class CircuitStore:
         os.makedirs(cache_path, exist_ok=True)
 
         metadata = circuit_data.get("metadata", {})
-        metadata_path = os.path.join(cache_path, "metadata.json")
-        with open(metadata_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2)
+        critical_files = set(metadata.get("critical_files", []))
 
         files = circuit_data.get("files", {})
         failed_downloads = []
@@ -162,9 +165,22 @@ class CircuitStore:
                 )
                 failed_downloads.append(filename)
 
+        failed_critical = critical_files & set(failed_downloads)
+        complete = len(failed_critical) == 0
+
+        metadata["complete"] = complete
+        metadata_path = os.path.join(cache_path, "metadata.json")
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+
         if failed_downloads:
             bt.logging.warning(
                 f"Circuit {circuit_id}: {len(failed_downloads)}/{len(files)} files failed to download"
+            )
+
+        if failed_critical:
+            raise RuntimeError(
+                f"Circuit {circuit_id} missing critical files: {', '.join(sorted(failed_critical))}"
             )
 
     def _download_file(self, url: str, dest_path: str):

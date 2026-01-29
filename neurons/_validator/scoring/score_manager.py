@@ -17,7 +17,7 @@ class ScoreManager:
 
     def __init__(
         self,
-        metagraph: bt.metagraph,
+        metagraph: bt.Metagraph,
         user_uid: int,
         score_path: str,
         competition: Competition | None = None,

@@ -13,7 +13,7 @@ from utils.signatures import Headers
 async def query_miner(
     httpx_client: httpx.AsyncClient,
     request: Request,
-    wallet: bt.wallet,
+    wallet: bt.Wallet,
 ) -> MinerResponse:
     # Use httpx.URL for safer URL construction
     url = httpx.URL(
@@ -41,7 +41,7 @@ async def query_miner(
     return MinerResponse.from_raw_response(request, response.json())
 
 
-def get_headers(request: Request, content: str, wallet: bt.wallet) -> dict:
+def get_headers(request: Request, content: str, wallet: bt.Wallet) -> dict:
     """
     Get headers for querying a miner.
     """

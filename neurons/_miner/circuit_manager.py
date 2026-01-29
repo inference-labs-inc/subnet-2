@@ -88,7 +88,7 @@ class CircuitManager:
         self.storage_config = storage_config
         self.bucket = storage_config["bucket"]
 
-        self.subtensor = bt.subtensor(config=cli_parser.config)
+        self.subtensor = bt.Subtensor(config=cli_parser.config)
         bt.logging.debug(
             "Created dedicated subtensor instance for circuit manager using cli config"
         )

@@ -10,7 +10,7 @@ from enum import Enum
 import torch
 
 # trunk-ignore(pylint/E0611)
-from bittensor import Wallet, logging, subtensor
+from bittensor import Wallet, logging, Subtensor
 from execution_layer.base_input import BaseInput
 from execution_layer.input_registry import InputRegistry
 
@@ -305,7 +305,7 @@ class CircuitEvaluationData:
                 if len(proof_sizes) > 0
                 else 0
             )
-            sub = subtensor(config=cli_parser.config)
+            sub = Subtensor(config=cli_parser.config)
             last_block = sub.get_current_block()
             wallet = Wallet(config=cli_parser.config)
 

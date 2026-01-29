@@ -79,7 +79,7 @@ if __name__ == "__main__":
     config.wallet.name = args.wallet
     config.wallet.hotkey = args.hotkey
 
-    wallet = bt.wallet(config=config)
+    wallet = bt.Wallet(config=config)
     circuit_store.load_circuits()
 
     request = Request(

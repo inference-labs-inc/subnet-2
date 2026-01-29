@@ -48,7 +48,7 @@ class CompetitionThread(threading.Thread):
         self._loop = None
         self._loop_lock = threading.Lock()
 
-        self.subtensor = bt.subtensor(config=config)
+        self.subtensor = bt.Subtensor(config=config)
 
         bt.logging.info("Competition thread initialized with:")
         bt.logging.info(f"- Competition ID: {self.competition.competition_id}")
@@ -188,8 +188,8 @@ class Competition:
     def __init__(
         self,
         competition_id: int,
-        metagraph: bt.metagraph,
-        wallet: bt.wallet,
+        metagraph: bt.Metagraph,
+        wallet: bt.Wallet,
         config: bt.Config,
     ):
         bt.logging.info("=== Competition Module Initialization Start ===")
@@ -197,7 +197,7 @@ class Competition:
         self.competition_id = competition_id
         self.metagraph = metagraph
         self.wallet = wallet
-        self.dendrite = bt.dendrite(wallet=wallet)
+        self.dendrite = bt.Dendrite(wallet=wallet)
         self.competition_directory = os.path.join(
             os.path.dirname(__file__), str(competition_id)
         )

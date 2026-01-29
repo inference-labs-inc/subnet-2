@@ -15,9 +15,9 @@ class ValidatorConfig:
     Attributes:
         config (bt.Config): The Bittensor configuration object.
         subnet_uid (int): The unique identifier for the subnet.
-        wallet (bt.wallet): The Bittensor wallet object.
-        subtensor (bt.subtensor): The Bittensor subtensor object.
-        metagraph (bt.metagraph): The Bittensor metagraph object.
+        wallet (bt.Wallet): The Bittensor wallet object.
+        subtensor (bt.Subtensor): The Bittensor subtensor object.
+        metagraph (bt.Metagraph): The Bittensor metagraph object.
         user_uid (int): The unique identifier for the validator within the subnet's metagraph.
         api_enabled (bool): Whether the API is enabled.
     """
@@ -36,8 +36,8 @@ class ValidatorConfig:
         self.subnet_uid = int(
             self.bt_config.netuid if self.bt_config.netuid else DEFAULT_NETUID
         )
-        self.wallet = bt.wallet(config=self.bt_config)
-        self.subtensor = bt.subtensor(config=self.bt_config)
+        self.wallet = bt.Wallet(config=self.bt_config)
+        self.subtensor = bt.Subtensor(config=self.bt_config)
         try:
             self.metagraph = self.subtensor.metagraph(self.subnet_uid)
         except Exception as e:

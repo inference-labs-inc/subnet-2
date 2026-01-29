@@ -22,9 +22,9 @@ class WeightsManager:
     Manages weight setting for the validator.
 
     Attributes:
-        subtensor (bt.subtensor): The Bittensor subtensor instance.
-        metagraph (bt.metagraph): The Bittensor metagraph instance.
-        wallet (bt.wallet): The Bittensor wallet instance.
+        subtensor (bt.Subtensor): The Bittensor subtensor instance.
+        metagraph (bt.Metagraph): The Bittensor metagraph instance.
+        wallet (bt.Wallet): The Bittensor wallet instance.
         user_uid (int): The unique identifier of the validator.
         weights (Optional[torch.Tensor]): The current weights tensor.
         last_update_weights_block (int): The last block number when weights were updated.
@@ -32,9 +32,9 @@ class WeightsManager:
         score_manager: Optional ScoreManager for accessing EMA manager and shuffled UIDs.
     """
 
-    subtensor: bt.subtensor
-    metagraph: bt.metagraph
-    wallet: bt.wallet
+    subtensor: bt.Subtensor
+    metagraph: bt.Metagraph
+    wallet: bt.Wallet
     user_uid: int
     last_update_weights_block: int = 0
     proof_of_weights_queue: list[ProofOfWeightsItem] = field(default_factory=list)

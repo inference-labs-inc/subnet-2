@@ -20,7 +20,7 @@ class ValidatorKeysCache:
         Fetch the validator keys for a given netuid and cache them.
         Thread-safe implementation using a lock.
         """
-        subtensor = bt.subtensor(config=self.config.bt_config)
+        subtensor = bt.Subtensor(config=self.config.bt_config)
         self.cached_keys[netuid] = [
             neuron.hotkey
             for neuron in subtensor.neurons_lite(netuid)

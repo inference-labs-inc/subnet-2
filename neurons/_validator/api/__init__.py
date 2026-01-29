@@ -100,7 +100,7 @@ class ValidatorAPI:
         if self.config.api.certificate_path:
             cert_manager = CertificateManager(self.config.api.certificate_path)
             cert_manager.ensure_valid_certificate(
-                bt.axon(self.config.wallet).external_ip
+                bt.Axon(self.config.wallet).external_ip
             )
             self.commit_cert_hash()
 
@@ -488,7 +488,7 @@ class ValidatorAPI:
             return
         try:
             bt.logging.info(f"Serving axon on port {self.config.api.port}")
-            axon = bt.axon(
+            axon = bt.Axon(
                 wallet=self.config.wallet, external_port=self.config.api.port
             )
             existing_axon = self.config.metagraph.axons[self.config.user_uid]
