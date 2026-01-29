@@ -290,7 +290,7 @@ class DSperseManager:
     ) -> dict:
         circuit = self._get_circuit_by_id(circuit_id)
         base_slice_num, tile_idx = self._parse_slice_num(slice_num)
-        model_dir = Path(circuit.paths.external_base_path) / f"slice_{base_slice_num}"
+        model_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
         result = {
             "circuit_id": circuit_id,
             "slice_num": slice_num,
@@ -407,9 +407,7 @@ class DSperseManager:
         slice_data.proof_file = proof_file_path
 
         if proof_system == ProofSystem.JSTPROVE:
-            slice_dir = (
-                Path(circuit.paths.external_base_path) / f"slice_{base_slice_num}"
-            )
+            slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
             circuit_path = (
                 slice_dir
                 / "payload"
@@ -433,8 +431,7 @@ class DSperseManager:
             run_path = slice_data.input_file.parent.parent
             result = verifier.verify(
                 run_path=run_path,
-                model_path=Path(circuit.paths.external_base_path)
-                / f"slice_{base_slice_num}",
+                model_path=Path(circuit.paths.base_path) / f"slice_{base_slice_num}",
                 backend=proof_system.value.lower() if proof_system else None,
             )
             _, verification_execution = self._parse_dsperse_result(
