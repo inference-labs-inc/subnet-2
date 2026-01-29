@@ -175,7 +175,7 @@ EMA_BOOST_FACTOR = 1.2
 # EMA enabled flag
 EMA_ENABLED = False
 
-CIRCUIT_API_URL = os.getenv("CIRCUIT_API_URL", "https://sn2-api.inferencelabs.com")
+CIRCUIT_API_URL = os.getenv("CIRCUIT_API_URL", "https://repository.inferencelabs.com")
 CIRCUIT_R2_BASE_URL = os.getenv(
     "CIRCUIT_R2_BASE_URL", "https://dsperse.inferencelabs.com"
 )
