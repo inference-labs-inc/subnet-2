@@ -150,25 +150,18 @@ class MinerSession:
                     self.check_register()
 
                 if step % 24 == 0 and self.subnet_uid is not None:
-                    info = self.subtensor.get_metagraph_info(
-                        netuid=cli_parser.config.netuid
-                    )
                     table = Table(title=f"Miner Status (UID: {self.subnet_uid})")
                     table.add_column("Block", justify="center", style="cyan")
                     table.add_column("Stake", justify="center", style="cyan")
-                    table.add_column("Rank", justify="center", style="cyan")
-                    table.add_column("Trust", justify="center", style="cyan")
                     table.add_column("Consensus", justify="center", style="cyan")
                     table.add_column("Incentive", justify="center", style="cyan")
                     table.add_column("Emission", justify="center", style="cyan")
                     table.add_row(
-                        str(info.block),
-                        str(info.total_stake[self.subnet_uid]),
-                        str(info.rank[self.subnet_uid]),
-                        str(info.trust[self.subnet_uid]),
-                        str(info.consensus[self.subnet_uid]),
-                        str(info.incentives[self.subnet_uid]),
-                        str(info.emission[self.subnet_uid]),
+                        str(self.metagraph.block.item()),
+                        str(self.metagraph.S[self.subnet_uid]),
+                        str(self.metagraph.C[self.subnet_uid]),
+                        str(self.metagraph.I[self.subnet_uid]),
+                        str(self.metagraph.E[self.subnet_uid]),
                     )
                     console = Console()
                     console.print(table)
