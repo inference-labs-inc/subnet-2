@@ -8,9 +8,8 @@ import numpy as np
 from pydantic import BaseModel
 
 from _validator.models.request_type import RequestType
+from constants import ONE_MINUTE
 from execution_layer.base_input import BaseInput
-
-ONE_MINUTE = 60
 
 
 class TensorInputSchema(BaseModel):
@@ -49,6 +48,18 @@ def create_schema_from_metadata(input_schema: dict) -> type[BaseModel]:
     raise ValueError(f"Unsupported input schema type: '{schema_type}'")
 
 
+_POW_CONSTANT_DEFAULTS = {
+    "rate_of_decay": 0.4,
+    "rate_of_recovery": 0.1,
+    "flattening_coefficient": 0.9,
+    "proof_size_threshold": 3648,
+    "proof_size_weight": 0,
+    "response_time_weight": 1,
+    "competition_weight": 0,
+    "maximum_response_time_decimal": 0.99,
+}
+
+
 class GenericInputHandler(BaseInput):
     schema = TensorInputSchema
 
@@ -62,6 +73,10 @@ class GenericInputHandler(BaseInput):
         if input_schema:
             self.schema = create_schema_from_metadata(input_schema)
         super().__init__(request_type, data)
+
+    def _get_pow_constants(self) -> dict[str, float]:
+        raw = self.input_schema.get("constants", {})
+        return {k: raw.get(k, v) for k, v in _POW_CONSTANT_DEFAULTS.items()}
 
     def generate(self) -> dict[str, object]:
         schema_type = self.input_schema.get("type", "tensor")
@@ -78,18 +93,7 @@ class GenericInputHandler(BaseInput):
     def _generate_pow_batch(self) -> dict[str, object]:
         batch_size = self.input_schema.get("batch_size", 256)
         scaling = self.input_schema.get("scaling", 100000000)
-        constants = self.input_schema.get("constants", {})
-
-        rate_of_decay = constants.get("rate_of_decay", 0.4)
-        rate_of_recovery = constants.get("rate_of_recovery", 0.1)
-        flattening_coefficient = constants.get("flattening_coefficient", 0.9)
-        proof_size_threshold = constants.get("proof_size_threshold", 3648)
-        proof_size_weight = constants.get("proof_size_weight", 0)
-        response_time_weight = constants.get("response_time_weight", 1)
-        competition_weight = constants.get("competition_weight", 0)
-        maximum_response_time_decimal = constants.get(
-            "maximum_response_time_decimal", 0.99
-        )
+        c = self._get_pow_constants()
 
         minimum_response_time = int(random.random() * ONE_MINUTE * scaling)
         maximum_response_time = minimum_response_time + int(
@@ -120,15 +124,15 @@ class GenericInputHandler(BaseInput):
             "response_time": [response_time for _ in range(batch_size)],
             "competition": [int(random.random() * scaling) for _ in range(batch_size)],
             "scaling": scaling,
-            "RATE_OF_DECAY": int(rate_of_decay * scaling),
-            "RATE_OF_RECOVERY": int(rate_of_recovery * scaling),
-            "FLATTENING_COEFFICIENT": int(flattening_coefficient * scaling),
-            "PROOF_SIZE_WEIGHT": int(proof_size_weight * scaling),
-            "PROOF_SIZE_THRESHOLD": int(proof_size_threshold * scaling),
-            "COMPETITION_WEIGHT": int(competition_weight * scaling),
-            "RESPONSE_TIME_WEIGHT": int(response_time_weight * scaling),
+            "RATE_OF_DECAY": int(c["rate_of_decay"] * scaling),
+            "RATE_OF_RECOVERY": int(c["rate_of_recovery"] * scaling),
+            "FLATTENING_COEFFICIENT": int(c["flattening_coefficient"] * scaling),
+            "PROOF_SIZE_WEIGHT": int(c["proof_size_weight"] * scaling),
+            "PROOF_SIZE_THRESHOLD": int(c["proof_size_threshold"] * scaling),
+            "COMPETITION_WEIGHT": int(c["competition_weight"] * scaling),
+            "RESPONSE_TIME_WEIGHT": int(c["response_time_weight"] * scaling),
             "MAXIMUM_RESPONSE_TIME_DECIMAL": int(
-                maximum_response_time_decimal * scaling
+                c["maximum_response_time_decimal"] * scaling
             ),
         }
 
@@ -191,7 +195,7 @@ class GenericInputHandler(BaseInput):
 
     def _process_pow_batch(self, data: dict[str, object]) -> dict[str, object]:
         scaling = self.input_schema.get("scaling", 100000000)
-        constants = self.input_schema.get("constants", {})
+        c = self._get_pow_constants()
 
         data["maximum_score"] = [int(v * scaling) for v in data["maximum_score"]]
         data["previous_score"] = [int(v * scaling) for v in data["previous_score"]]
@@ -210,35 +214,19 @@ class GenericInputHandler(BaseInput):
             if batch_size - 16 + i < len(data["validator_uid"]):
                 data["validator_uid"][batch_size - 16 + i] = secrets.randbits(16)
 
-        rate_of_decay = constants.get("rate_of_decay", 0.4)
-        rate_of_recovery = constants.get("rate_of_recovery", 0.1)
-        flattening_coefficient = constants.get("flattening_coefficient", 0.9)
-        proof_size_threshold = constants.get("proof_size_threshold", 3648)
-        proof_size_weight = constants.get("proof_size_weight", 0)
-        response_time_weight = constants.get("response_time_weight", 1)
-        competition_weight = constants.get("competition_weight", 0)
-        maximum_response_time_decimal = constants.get(
-            "maximum_response_time_decimal", 0.99
-        )
-
-        if "RATE_OF_DECAY" not in data:
-            data["RATE_OF_DECAY"] = int(rate_of_decay * scaling)
-        if "RATE_OF_RECOVERY" not in data:
-            data["RATE_OF_RECOVERY"] = int(rate_of_recovery * scaling)
-        if "FLATTENING_COEFFICIENT" not in data:
-            data["FLATTENING_COEFFICIENT"] = int(flattening_coefficient * scaling)
-        if "PROOF_SIZE_WEIGHT" not in data:
-            data["PROOF_SIZE_WEIGHT"] = int(proof_size_weight * scaling)
-        if "PROOF_SIZE_THRESHOLD" not in data:
-            data["PROOF_SIZE_THRESHOLD"] = int(proof_size_threshold * scaling)
-        if "COMPETITION_WEIGHT" not in data:
-            data["COMPETITION_WEIGHT"] = int(competition_weight * scaling)
-        if "RESPONSE_TIME_WEIGHT" not in data:
-            data["RESPONSE_TIME_WEIGHT"] = int(response_time_weight * scaling)
-        if "MAXIMUM_RESPONSE_TIME_DECIMAL" not in data:
-            data["MAXIMUM_RESPONSE_TIME_DECIMAL"] = int(
-                maximum_response_time_decimal * scaling
-            )
+        constant_keys = {
+            "RATE_OF_DECAY": "rate_of_decay",
+            "RATE_OF_RECOVERY": "rate_of_recovery",
+            "FLATTENING_COEFFICIENT": "flattening_coefficient",
+            "PROOF_SIZE_WEIGHT": "proof_size_weight",
+            "PROOF_SIZE_THRESHOLD": "proof_size_threshold",
+            "COMPETITION_WEIGHT": "competition_weight",
+            "RESPONSE_TIME_WEIGHT": "response_time_weight",
+            "MAXIMUM_RESPONSE_TIME_DECIMAL": "maximum_response_time_decimal",
+        }
+        for data_key, const_key in constant_keys.items():
+            if data_key not in data:
+                data[data_key] = int(c[const_key] * scaling)
         if "scaling" not in data:
             data["scaling"] = scaling
 

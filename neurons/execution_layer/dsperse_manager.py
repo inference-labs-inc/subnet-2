@@ -349,36 +349,21 @@ class DSperseManager:
             prove_start = time.time()
 
             if proof_system == ProofSystem.JSTPROVE:
-                jstprover = JSTprove()
                 jst_model_path = (
                     model_dir
                     / "payload"
                     / "jstprove"
                     / f"slice_{base_slice_num}_circuit.txt"
                 )
-                success, res = jstprover.generate_witness(
-                    input_file=input_file,
-                    model_path=jst_model_path,
-                    output_file=output_file,
+                success, proof_data = self._jstprove_witness_and_prove(
+                    jst_model_path,
+                    input_file,
+                    output_file,
+                    tmp_path,
+                    f"slice {slice_num}",
                 )
-                if not success:
-                    logging.error(
-                        f"Failed to generate witness for slice {slice_num} using JSTprove. Error: {res}"
-                    )
+                if not success and proof_data is None:
                     return result
-
-                witness_path = tmp_path / "output_witness.bin"
-                proof_path = tmp_path / "proof.bin"
-                success, proof_file = jstprover.prove(
-                    witness_path=str(witness_path),
-                    circuit_path=str(jst_model_path),
-                    proof_path=str(proof_path),
-                )
-
-                proof_data = None
-                if success and proof_path.exists():
-                    with open(proof_path, "rb") as pf:
-                        proof_data = pf.read().hex()
 
             elif proof_system == ProofSystem.EZKL:
                 slice_id = f"slice_{base_slice_num}"
@@ -428,6 +413,38 @@ class DSperseManager:
             result["proof"] = proof_data
             return result
 
+    @staticmethod
+    def _jstprove_witness_and_prove(
+        circuit_path: Path,
+        input_file: Path,
+        output_file: Path,
+        tmp_path: Path,
+        label: str,
+    ) -> tuple[bool, str | None]:
+        jstprover = JSTprove()
+        success, res = jstprover.generate_witness(
+            input_file=input_file,
+            model_path=circuit_path,
+            output_file=output_file,
+        )
+        if not success:
+            logging.error(f"Failed to generate witness for {label}: {res}")
+            return False, None
+
+        witness_path = tmp_path / "output_witness.bin"
+        proof_path = tmp_path / "proof.bin"
+        success, _ = jstprover.prove(
+            witness_path=str(witness_path),
+            circuit_path=str(circuit_path),
+            proof_path=str(proof_path),
+        )
+
+        proof_data = None
+        if success and proof_path.exists():
+            with open(proof_path, "rb") as pf:
+                proof_data = pf.read().hex()
+        return success, proof_data
+
     def _prove_tile(
         self,
         model_dir: Path,
@@ -443,33 +460,14 @@ class DSperseManager:
         slice_num = f"{base_slice_num}_tile_{tile_idx}"
 
         if proof_system == ProofSystem.JSTPROVE:
-            jstprover = JSTprove()
             jst_tile_circuit = model_dir / "jstprove" / "tiles" / "tile_circuit.txt"
             if not jst_tile_circuit.exists():
                 logging.error(f"Tile JSTprove circuit not found: {jst_tile_circuit}")
                 return result
 
-            success, res = jstprover.generate_witness(
-                input_file=input_file,
-                model_path=jst_tile_circuit,
-                output_file=output_file,
+            success, proof_data = self._jstprove_witness_and_prove(
+                jst_tile_circuit, input_file, output_file, tmp_path, f"tile {slice_num}"
             )
-            if not success:
-                logging.error(f"Failed to generate witness for tile {slice_num}: {res}")
-                return result
-
-            witness_path = tmp_path / "output_witness.bin"
-            proof_path = tmp_path / "proof.bin"
-            success, proof_file = jstprover.prove(
-                witness_path=str(witness_path),
-                circuit_path=str(jst_tile_circuit),
-                proof_path=str(proof_path),
-            )
-
-            proof_data = None
-            if success and proof_path.exists():
-                with open(proof_path, "rb") as pf:
-                    proof_data = pf.read().hex()
         else:
             logging.error(f"Proof system {proof_system} not supported for tiles")
             return result
@@ -596,21 +594,6 @@ class DSperseManager:
         execution = execution_result.get(f"{execution_type}_execution", {})
         if execution is None:
             execution = {}
-
-        if execution_type == "proof":
-            proof_file = execution.get("proof_file") or execution.get("proof_path")
-            if not proof_file:
-                tiles = (
-                    execution.get("tiles") or execution.get("tile_proofs_info") or []
-                )
-                if tiles and len(tiles) > 0:
-                    tile_0 = tiles[0]
-                    if isinstance(tile_0, dict):
-                        proof_file = tile_0.get("proof_path")
-                        if tile_0.get("success") is not None:
-                            execution["success"] = tile_0["success"]
-            if proof_file:
-                execution["proof_file"] = proof_file
 
         return slice_id, execution
 

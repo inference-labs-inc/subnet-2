@@ -44,7 +44,6 @@ from OpenSSL import crypto
 from deployment_layer.circuit_store import circuit_store
 from _validator.utils.pps import ProofPublishingService
 from constants import PPS_URL, TESTNET_PPS_URL
-from execution_layer.dsperse_manager import DsperseRun
 
 app = FastAPI()
 
@@ -83,7 +82,6 @@ class ValidatorAPI:
         self.pending_requests: dict[str, asyncio.Event] = {}
         self.request_results: dict[str, dict[str, any]] = {}
         self.is_testnet = config.bt_config.subtensor.network == "test"
-        self.active_runs: dict[str, DsperseRun] = {}
         self.dsperse_manager = None
         self._setup_api()
 
@@ -406,9 +404,6 @@ class ValidatorAPI:
                 lambda: self.dsperse_manager.start_run(circuit, inputs),
             )
 
-            if run_uid in self.dsperse_manager.runs:
-                self.active_runs[run_uid] = self.dsperse_manager.runs[run_uid]
-
             for request in requests:
                 self.stacked_requests_queue.append(request)
 
@@ -460,8 +455,6 @@ class ValidatorAPI:
             return Error(9, "Failed to get run status", str(e))
 
     def _cleanup_run(self, run_uid: str) -> None:
-        if run_uid in self.active_runs:
-            del self.active_runs[run_uid]
         if self.dsperse_manager:
             try:
                 self.dsperse_manager.cleanup_run(run_uid)

@@ -174,21 +174,15 @@ class CircuitMetadata:
     input_schema: dict | None = None
 
     @classmethod
-    def from_file(cls, metadata_path: str) -> CircuitMetadata:
-        """
-        Create a ModelMetadata instance from a JSON file.
-
-        Args:
-            metadata_path (str): Path to the metadata JSON file.
-
-        Returns:
-            ModelMetadata: An instance of ModelMetadata.
-        """
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
+    def from_dict(cls, d: dict) -> CircuitMetadata:
+        d.setdefault("external_files", None)
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        metadata = {k: v for k, v in metadata.items() if k in valid_fields}
-        return cls(**metadata)
+        return cls(**{k: v for k, v in d.items() if k in valid_fields})
+
+    @classmethod
+    def from_file(cls, metadata_path: str) -> CircuitMetadata:
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            return cls.from_dict(json.load(f))
 
 
 @dataclass
@@ -433,10 +427,11 @@ class Circuit:
             try:
                 with open(self.paths.settings, "r", encoding="utf-8") as f:
                     self.settings = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                logging.warning(
-                    f"Failed to load settings for model {self.id}. Using default settings."
-                )
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                raise RuntimeError(
+                    f"Failed to load required settings for circuit {self.id} "
+                    f"at {self.paths.settings}"
+                ) from e
         self.input_handler: BaseInput = InputRegistry.get_handler(
             self.id, metadata=self.metadata
         )

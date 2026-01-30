@@ -40,9 +40,11 @@ class CircuitStore:
         bt.logging.info("Loading circuits...")
 
         active_ids: set[str] | None = None
+        api_data: list[dict] | None = None
         bt.logging.info("Fetching active circuits from API...")
         try:
-            active_ids = self._fetch_active_circuit_ids()
+            api_data = self._fetch_circuits_from_api()
+            active_ids = {c["id"] for c in api_data if c.get("id")}
             bt.logging.info(f"API reports {len(active_ids)} active circuits")
         except Exception as e:
             bt.logging.warning(f"Failed to fetch active circuits from API: {e}")
@@ -50,17 +52,43 @@ class CircuitStore:
         self._load_from_filesystem(deployment_layer_path, active_ids)
         self._load_from_cache(active_ids)
 
-        if active_ids is not None:
-            self._load_from_api(active_ids)
+        if api_data is not None:
+            self._load_from_api(api_data)
 
         bt.logging.info(f"Loaded {len(self.circuits)} circuits")
 
-    def _fetch_active_circuit_ids(self) -> set[str]:
+    def _fetch_circuits_from_api(self) -> list[dict]:
         with httpx.Client(timeout=30) as client:
             response = client.get(f"{self._api_url}/circuits")
             response.raise_for_status()
             data = response.json()
-        return {c["id"] for c in data.get("circuits", []) if c.get("id")}
+        return data.get("circuits", [])
+
+    def _iter_circuit_dirs(
+        self, base_path: str, active_ids: set[str] | None, source: str
+    ):
+        for folder_name in os.listdir(base_path):
+            folder_path = os.path.join(base_path, folder_name)
+            if not os.path.isdir(folder_path) or not folder_name.startswith("model_"):
+                continue
+            circuit_id = folder_name[6:]
+            if circuit_id in IGNORED_MODEL_HASHES:
+                bt.logging.debug(f"Ignoring {source} circuit {circuit_id}")
+                continue
+            if active_ids is not None and circuit_id not in active_ids:
+                bt.logging.debug(
+                    f"Skipping {source} circuit {circuit_id} - not in active list"
+                )
+                continue
+            if circuit_id in self.circuits:
+                continue
+            metadata_path = os.path.join(folder_path, CIRCUIT_METADATA_FILENAME)
+            if not os.path.isfile(metadata_path):
+                bt.logging.debug(
+                    f"Skipping {folder_name} - no {CIRCUIT_METADATA_FILENAME}"
+                )
+                continue
+            yield circuit_id, folder_path, metadata_path
 
     def _load_from_cache(self, active_ids: set[str] | None = None):
         if not os.path.exists(self._cache_dir):
@@ -68,34 +96,9 @@ class CircuitStore:
 
         bt.logging.info(f"Loading circuits from cache: {self._cache_dir}")
 
-        for folder_name in os.listdir(self._cache_dir):
-            folder_path = os.path.join(self._cache_dir, folder_name)
-
-            if not os.path.isdir(folder_path) or not folder_name.startswith("model_"):
-                continue
-
-            circuit_id = folder_name[6:]
-
-            if circuit_id in IGNORED_MODEL_HASHES:
-                bt.logging.debug(f"Ignoring cached circuit {circuit_id}")
-                continue
-
-            if active_ids is not None and circuit_id not in active_ids:
-                bt.logging.debug(
-                    f"Skipping cached circuit {circuit_id} - not in active list"
-                )
-                continue
-
-            if circuit_id in self.circuits:
-                continue
-
-            metadata_path = os.path.join(folder_path, CIRCUIT_METADATA_FILENAME)
-            if not os.path.isfile(metadata_path):
-                bt.logging.debug(
-                    f"Skipping cached {folder_name} - no {CIRCUIT_METADATA_FILENAME}"
-                )
-                continue
-
+        for circuit_id, folder_path, metadata_path in self._iter_circuit_dirs(
+            self._cache_dir, active_ids, "cached"
+        ):
             try:
                 with open(metadata_path, "r", encoding="utf-8") as f:
                     metadata_dict = json.load(f)
@@ -104,14 +107,7 @@ class CircuitStore:
                         f"Skipping incomplete cached circuit {circuit_id}"
                     )
                     continue
-                metadata_dict.setdefault("external_files", None)
-                valid_fields = {
-                    f.name for f in CircuitMetadata.__dataclass_fields__.values()
-                }
-                metadata_dict = {
-                    k: v for k, v in metadata_dict.items() if k in valid_fields
-                }
-                metadata = CircuitMetadata(**metadata_dict)
+                metadata = CircuitMetadata.from_dict(metadata_dict)
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit
                 bt.logging.info(f"Loaded circuit {circuit_id} from cache")
@@ -119,15 +115,8 @@ class CircuitStore:
                 bt.logging.error(f"Error loading cached circuit {circuit_id}: {e}")
                 traceback.print_exc()
 
-    def _load_from_api(self, active_ids: set[str] | None = None):
+    def _load_from_api(self, circuits_data: list[dict]):
         bt.logging.info(f"Fetching circuits from {self._api_url}")
-
-        with httpx.Client(timeout=30) as client:
-            response = client.get(f"{self._api_url}/circuits")
-            response.raise_for_status()
-            data = response.json()
-
-        circuits_data = data.get("circuits", [])
         bt.logging.info(f"Found {len(circuits_data)} circuits from API")
 
         for circuit_data in circuits_data:
@@ -144,14 +133,7 @@ class CircuitStore:
 
             try:
                 self._cache_circuit(circuit_id, circuit_data)
-                metadata_dict = circuit_data.get("metadata", {})
-                metadata_dict.setdefault("external_files", None)
-                valid_fields = {
-                    f.name for f in CircuitMetadata.__dataclass_fields__.values()
-                }
-                metadata = CircuitMetadata(
-                    **{k: v for k, v in metadata_dict.items() if k in valid_fields}
-                )
+                metadata = CircuitMetadata.from_dict(circuit_data.get("metadata", {}))
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit
                 bt.logging.info(f"Loaded circuit {circuit_id} from API")
@@ -227,45 +209,21 @@ class CircuitStore:
         if not os.path.exists(deployment_layer_path):
             return
 
-        for folder_name in os.listdir(deployment_layer_path):
-            folder_path = os.path.join(deployment_layer_path, folder_name)
-
-            if os.path.isdir(folder_path) and folder_name.startswith("model_"):
-                circuit_id = folder_name.split("_")[1]
-
-                if circuit_id in IGNORED_MODEL_HASHES:
-                    bt.logging.debug(f"Ignoring circuit {circuit_id}")
-                    continue
-
-                if active_ids is not None and circuit_id not in active_ids:
-                    bt.logging.debug(
-                        f"Skipping filesystem circuit {circuit_id} - not in active list"
-                    )
-                    continue
-
-                if circuit_id in self.circuits:
-                    continue
-
-                metadata_path = os.path.join(folder_path, CIRCUIT_METADATA_FILENAME)
-                if not os.path.isfile(metadata_path):
-                    bt.logging.debug(
-                        f"Skipping {folder_name} - no {CIRCUIT_METADATA_FILENAME}"
-                    )
-                    continue
-
-                try:
-                    bt.logging.debug(f"Attempting to load circuit {circuit_id}")
-                    circuit = Circuit(circuit_id)
-                    self.circuits[circuit_id] = circuit
-                    bt.logging.info(f"Loaded circuit {circuit_id} from filesystem")
-                except Exception as e:
-                    bt.logging.error(f"Error loading circuit {circuit_id}: {e}")
-                    traceback.print_exc()
+        for circuit_id, _, _ in self._iter_circuit_dirs(
+            deployment_layer_path, active_ids, "filesystem"
+        ):
+            try:
+                circuit = Circuit(circuit_id)
+                self.circuits[circuit_id] = circuit
+                bt.logging.info(f"Loaded circuit {circuit_id} from filesystem")
+            except Exception as e:
+                bt.logging.error(f"Error loading circuit {circuit_id}: {e}")
+                traceback.print_exc()
 
     def refresh_circuits(self):
         try:
-            active_ids = self._fetch_active_circuit_ids()
-            self._load_from_api(active_ids)
+            circuits_data = self._fetch_circuits_from_api()
+            self._load_from_api(circuits_data)
         except Exception as e:
             bt.logging.warning(f"Failed to refresh circuits from API: {e}")
 
@@ -273,23 +231,21 @@ class CircuitStore:
         if circuit_id in self.circuits:
             return self.circuits[circuit_id]
 
+        if circuit_id in IGNORED_MODEL_HASHES:
+            raise ValueError(f"Circuit {circuit_id} is in the ignored list")
+
         bt.logging.info(f"Circuit {circuit_id} not loaded, fetching from API...")
         with httpx.Client(timeout=30) as client:
             response = client.get(f"{self._api_url}/circuits/{circuit_id}")
             response.raise_for_status()
             circuit_data = response.json()
 
-        cache_path = os.path.join(self._cache_dir, f"model_{circuit_id}")
         self._cache_circuit(circuit_id, circuit_data)
-        metadata_dict = circuit_data.get("metadata", {})
-        metadata_dict.setdefault("external_files", None)
-        valid_fields = {f.name for f in CircuitMetadata.__dataclass_fields__.values()}
-        metadata = CircuitMetadata(
-            **{k: v for k, v in metadata_dict.items() if k in valid_fields}
-        )
+        metadata = CircuitMetadata.from_dict(circuit_data.get("metadata", {}))
         if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
             from execution_layer.dsperse_manager import DSperseManager
 
+            cache_path = os.path.join(self._cache_dir, f"model_{circuit_id}")
             DSperseManager.extract_dslices(cache_path)
         circuit = Circuit(circuit_id, metadata=metadata)
         self.circuits[circuit_id] = circuit
