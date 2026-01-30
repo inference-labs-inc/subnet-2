@@ -373,12 +373,6 @@ class MinerSession:
         """
         This function run proof generation of the model (with its output as well)
         """
-        if cli_parser.config.competition_only:
-            bt.logging.info("Competition only mode enabled. Skipping proof generation.")
-            return JSONResponse(
-                content="Competition only mode enabled", status_code=422
-            )
-
         time_in = time.time()
         bt.logging.debug("Received request from validator")
         bt.logging.debug(f"Input data: {data.query_input} \n")
@@ -462,12 +456,6 @@ class MinerSession:
         """
         Handles a proof of weights request
         """
-        if cli_parser.config.competition_only:
-            bt.logging.info("Competition only mode enabled. Skipping proof generation.")
-            return JSONResponse(
-                content="Competition only mode enabled", status_code=422
-            )
-
         time_in = time.time()
         bt.logging.debug("Received proof of weights request from validator")
         bt.logging.debug(f"Input data: {data.inputs} \n")
@@ -479,9 +467,21 @@ class MinerSession:
             )
         circuit_timeout = CIRCUIT_TIMEOUT_SECONDS
         response = {}
+        model_id = str(data.verification_key_hash)
         try:
-            circuit = circuit_store.ensure_circuit(str(data.verification_key_hash))
-            circuit_timeout = circuit.timeout
+            circuit = circuit_store.ensure_circuit(model_id)
+        except (ValueError, KeyError) as e:
+            bt.logging.warning(f"Invalid circuit ID {model_id}: {e}")
+            return JSONResponse(
+                content=f"Invalid circuit ID: {model_id}", status_code=422
+            )
+        except Exception as e:
+            bt.logging.error(f"Server error loading circuit {model_id}: {e}")
+            traceback.print_exc()
+            return JSONResponse(content="Internal server error", status_code=500)
+
+        circuit_timeout = circuit.timeout
+        try:
             bt.logging.info(f"Running proof generation for {circuit}")
             model_session = VerifiedModelSession(
                 GenericInput(RequestType.RWR, data.inputs), circuit

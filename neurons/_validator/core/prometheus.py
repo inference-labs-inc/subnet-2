@@ -23,7 +23,6 @@ _network_errors: Optional[Counter] = None
 
 # Resource Usage
 _active_requests: Optional[Gauge] = None
-_processed_uids: Optional[Gauge] = None
 _memory_usage: Optional[Gauge] = None
 _cpu_usage: Optional[Gauge] = None
 _disk_usage: Optional[Gauge] = None
@@ -63,7 +62,7 @@ def start_prometheus_logging(port: int) -> None:
     global _timeout_counter
     global _network_errors
     global _active_requests
-    global _processed_uids
+
     global _memory_usage
     global _cpu_usage
     global _disk_usage
@@ -135,7 +134,6 @@ def start_prometheus_logging(port: int) -> None:
 
     # Resource Usage
     _active_requests = Gauge("active_requests", "Number of currently active requests")
-    _processed_uids = Gauge("processed_uids", "Number of processed UIDs")
     _memory_usage = Gauge("memory_usage_bytes", "Current memory usage in bytes")
     _cpu_usage = Gauge("cpu_usage_percent", "Current CPU usage percentage")
     _disk_usage = Gauge(
@@ -221,7 +219,7 @@ def stop_prometheus_logging() -> None:
     global _timeout_counter
     global _network_errors
     global _active_requests
-    global _processed_uids
+
     global _memory_usage
     global _cpu_usage
     global _disk_usage
@@ -251,7 +249,6 @@ def stop_prometheus_logging() -> None:
         _timeout_counter = None
         _network_errors = None
         _active_requests = None
-        _processed_uids = None
         _memory_usage = None
         _cpu_usage = None
         _disk_usage = None
@@ -331,19 +328,6 @@ def log_timeout(model_name: str) -> None:
 def log_network_error(error_type: str) -> None:
     if _network_errors:
         _network_errors.labels(error_type).inc()
-
-
-def log_request_metrics(
-    active_requests: int,
-    processed_uids: int,
-    memory_bytes: Optional[int] = None,
-) -> None:
-    if _active_requests:
-        _active_requests.set(active_requests)
-    if _processed_uids:
-        _processed_uids.set(processed_uids)
-    if _memory_usage and memory_bytes:
-        _memory_usage.set(memory_bytes)
 
 
 def log_system_metrics() -> None:

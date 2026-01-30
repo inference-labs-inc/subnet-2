@@ -16,6 +16,7 @@ from execution_layer.input_registry import InputRegistry
 
 import cli_parser
 from constants import (
+    CIRCUIT_CACHE_DIR,
     CIRCUIT_METADATA_FILENAME,
     CIRCUIT_TIMEOUT_SECONDS,
     DEFAULT_PROOF_SIZE,
@@ -40,7 +41,9 @@ class CircuitType(str, Enum):
     @classmethod
     def _missing_(cls, value):
         if isinstance(value, str):
-            return cls(value.upper())
+            upper = value.upper()
+            if upper != value and upper in cls._value2member_map_:
+                return cls._value2member_map_[upper]
         raise ValueError(f"Cannot convert {value} to {cls.__name__}")
 
 
@@ -62,7 +65,9 @@ class ProofSystem(str, Enum):
     @classmethod
     def _missing_(cls, value):
         if isinstance(value, str):
-            return cls(value.upper())
+            upper = value.upper()
+            if upper != value and upper in cls._value2member_map_:
+                return cls._value2member_map_[upper]
         raise ValueError(f"Cannot convert {value} to {cls.__name__}")
 
     def to_json(self):
@@ -89,8 +94,6 @@ class CircuitPaths:
     witness_executable: str = field(init=False)
 
     def __post_init__(self):
-        from constants import CIRCUIT_CACHE_DIR
-
         cache_path = os.path.join(CIRCUIT_CACHE_DIR, f"model_{self.model_id}")
         deployment_path = os.path.join(
             os.path.dirname(__file__),
@@ -393,8 +396,6 @@ class Circuit:
             raise ValueError(
                 "Circuit ID must be a valid SHA-256 hash (64 lowercase hex characters)"
             )
-
-        from constants import CIRCUIT_CACHE_DIR
 
         cache_folder = os.path.join(CIRCUIT_CACHE_DIR, f"model_{circuit_id}")
         deployment_folder = os.path.join(

@@ -104,11 +104,10 @@ class ValidatorLoop:
         )
 
         self.request_queue = asyncio.Queue()
-        self.active_tasks: dict[str, asyncio.Task] = {}
+        self.active_tasks: dict[str, asyncio.Task | None] = {}
         self.miner_active_count: dict[int, int] = {}
         self.miner_capacities: dict[int, int] = {}
         self.default_miner_capacity = 10
-        self.processed_uids: set[int] = set()
         self.queryable_uids: list[int] = []
         self.last_response_time = time.time()
         self.last_periodic_task_time = time.time()
@@ -212,7 +211,6 @@ class ValidatorLoop:
         bt.logging.info(
             f"In-flight requests: {len(self.active_tasks)} / {MAX_CONCURRENT_REQUESTS}"
         )
-        bt.logging.debug(f"Processed UIDs: {len(self.processed_uids)}")
         bt.logging.debug(f"Queryable UIDs: {len(self.queryable_uids)}")
 
         log_system_metrics()
@@ -223,10 +221,6 @@ class ValidatorLoop:
             else 0
         )
         log_queue_metrics(queue_size, est_latency)
-
-    def update_processed_uids(self):
-        if len(self.processed_uids) >= len(self.queryable_uids):
-            self.processed_uids.clear()
 
     @with_rate_limit(period=ONE_MINUTE)
     async def log_responses(self):
@@ -281,6 +275,18 @@ class ValidatorLoop:
                     ) in self.dsperse_manager.generate_dslice_requests():
                         self.api.stacked_requests_queue.insert(0, dslice_request)
 
+                pow_circuit = None
+                if (
+                    len(self.score_manager.pow_manager.proof_of_weights_queue)
+                    >= ProofOfWeightsHandler.BATCH_SIZE
+                ):
+                    loop = asyncio.get_event_loop()
+                    pow_circuit = await loop.run_in_executor(
+                        self.thread_pool,
+                        circuit_store.ensure_circuit,
+                        BATCHED_PROOF_OF_WEIGHTS_MODEL_ID,
+                    )
+
                 requests_sent = 0
                 for uid in self.queryable_uids:
                     if requests_sent >= slots_available:
@@ -300,15 +306,10 @@ class ValidatorLoop:
                     )
 
                     for _ in range(requests_for_miner):
-                        if (
-                            len(self.score_manager.pow_manager.proof_of_weights_queue)
-                            >= ProofOfWeightsHandler.BATCH_SIZE
-                        ):
+                        if pow_circuit is not None:
                             request = self.request_pipeline._prepare_benchmark_request(
                                 uid,
-                                circuit_store.ensure_circuit(
-                                    BATCHED_PROOF_OF_WEIGHTS_MODEL_ID
-                                ),
+                                pow_circuit,
                             )
                         elif self.api.stacked_requests_queue:
                             request = self.request_pipeline._prepare_queued_request(uid)
@@ -329,7 +330,7 @@ class ValidatorLoop:
                             bt.logging.debug(
                                 f"[SYNC MODE] Processing request {task_id} for UID {uid}"
                             )
-                            self.active_tasks[task_id] = "dummy_task_object"  # type: ignore
+                            self.active_tasks[task_id] = None
                             self.miner_active_count[uid] = (
                                 self.miner_active_count.get(uid, 0) + 1
                             )
@@ -384,7 +385,6 @@ class ValidatorLoop:
                         for uid in self.queryable_uids
                     }
                 )
-                self.update_processed_uids()
                 self.log_health()
                 await self.log_responses()
                 self.last_periodic_task_time = time.time()

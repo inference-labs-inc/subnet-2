@@ -434,6 +434,9 @@ class ValidatorAPI:
         if not run_uid:
             return InvalidParams("Missing run_uid")
 
+        if not self.dsperse_manager:
+            return Error(10, "DSperse manager not initialized")
+
         status = self.dsperse_manager.get_run_status(run_uid)
         if not status:
             return Error(11, "Run not found", f"No run with ID {run_uid}")

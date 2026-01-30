@@ -17,11 +17,6 @@ LOGGING_URL = os.getenv(
     "https://sn2-api.inferencelabs.com/statistics/log/",
 )
 
-COMPETITION_LOGGING_URL = os.getenv(
-    "COMPETITION_LOGGING_URL",
-    "https://sn2-api.inferencelabs.com/statistics/competition/log/",
-)
-
 EVAL_LOGGING_URL = os.getenv(
     "EVAL_LOGGING_URL",
     "https://sn2-api.inferencelabs.com/statistics/eval/log/",
@@ -72,45 +67,6 @@ def log_responses(
         )
     except requests.exceptions.RequestException as e:
         bt.logging.error(f"Failed to log responses: {e}")
-        return None
-
-
-def gc_log_competition_metrics(
-    summary_data: dict, hotkey: bt.Keypair
-) -> Optional[requests.Response]:
-    """
-    Logs a pre-formatted competition summary
-    """
-    try:
-
-        if "validator_key" not in summary_data:
-            bt.logging.warning(
-                "Validator key not found in competition summary data, adding it."
-            )
-            summary_data["validator_key"] = hotkey.ss58_address
-
-        input_bytes = json.dumps(summary_data).encode("utf-8")
-        signature = hotkey.sign(input_bytes)
-        signature_str = base64.b64encode(signature).decode("utf-8")
-
-        bt.logging.trace(f"Logging competition summary: {summary_data}")
-
-        return session.post(
-            COMPETITION_LOGGING_URL,
-            data=input_bytes,
-            headers={
-                "Content-Type": "application/json",
-                "X-Request-Signature": signature_str,
-            },
-            timeout=10,
-        )
-    except requests.exceptions.RequestException as e:
-        bt.logging.error(f"Failed to log competition summary: {e}")
-        return None
-    except Exception as e:
-        bt.logging.error(
-            f"Unexpected error logging competition summary: {e}", exc_info=True
-        )
         return None
 
 
