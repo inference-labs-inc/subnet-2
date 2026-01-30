@@ -10,9 +10,12 @@ from typing import Callable
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
 from dsperse.src.analyzers.schema import ExecutionInfo, ExecutionMethod, RunMetadata
+import time
+
+from dsperse.src.backends.ezkl import EZKL
 from dsperse.src.backends.jstprove import JSTprove
-from dsperse.src.prove.prover import Prover
 from dsperse.src.run.runner import Runner
+from dsperse.src.run.utils.runner_utils import RunnerUtils
 from dsperse.src.verify.verifier import Verifier
 from dsperse.src.slice.utils.converter import Converter
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
@@ -94,7 +97,7 @@ class DSperseManager:
         with open(input_json_path, "w") as f:
             json.dump(inputs, f)
 
-        runner = Runner(run_dir=run_dir)
+        runner = Runner(run_dir=run_dir, batch=True)
         results = runner.run(
             input_json_path=input_json_path,
             slice_path=circuit.paths.base_path,
@@ -313,7 +316,19 @@ class DSperseManager:
             with open(input_file, "w") as f:
                 json.dump(inputs, f)
 
-            runner = Runner(run_dir=tmp_path, threads=16)
+            if tile_idx is not None:
+                return self._prove_tile(
+                    model_dir,
+                    base_slice_num,
+                    tile_idx,
+                    input_file,
+                    output_file,
+                    tmp_path,
+                    proof_system,
+                    result,
+                )
+
+            runner = Runner(run_dir=tmp_path, threads=16, batch=True)
             runner.run(input_json_path=input_file, slice_path=model_dir)
             run_dir = runner.last_run_dir
             logging.info(f"Runner completed for slice_{slice_num}, run_dir: {run_dir}")
@@ -322,6 +337,8 @@ class DSperseManager:
                 metadata_path = run_dir / "metadata.json"
                 with open(metadata_path, "w") as f:
                     json.dump(runner.run_metadata.to_dict(), f)
+
+            prove_start = time.time()
 
             if proof_system == ProofSystem.JSTPROVE:
                 jstprover = JSTprove()
@@ -342,32 +359,118 @@ class DSperseManager:
                     )
                     return result
 
-            prover = Prover()
-            proving_result = prover.prove(
-                run_path=run_dir,
-                model_dir=model_dir,
-                output_path=tmp_path,
-                backend=proof_system.value.lower(),
-            )
-            logging.debug(f"Got proof generation result. Result: {proving_result}")
+                witness_path = tmp_path / "output_witness.bin"
+                proof_path = tmp_path / "proof.bin"
+                success, proof_file = jstprover.prove(
+                    witness_path=str(witness_path),
+                    circuit_path=str(jst_model_path),
+                    proof_path=str(proof_path),
+                )
 
-            _, proof_execution = self._parse_dsperse_result(proving_result, "proof")
+                proof_data = None
+                if success and proof_path.exists():
+                    with open(proof_path, "rb") as pf:
+                        proof_data = pf.read().hex()
 
-            success = proof_execution.get("success", False)
-            proof_generation_time = proof_execution.get("proof_generation_time", None)
-            proof_data = None
-            if proof_execution.get("proof_file", None):
-                if proof_system == ProofSystem.JSTPROVE:
-                    with open(proof_execution["proof_file"], "rb") as proof_file:
-                        proof_data = proof_file.read().hex()
-                else:
-                    with open(proof_execution["proof_file"], "r") as proof_file:
-                        proof_data = json.load(proof_file)
+            elif proof_system == ProofSystem.EZKL:
+                slice_id = f"slice_{base_slice_num}"
+                slice_meta = (
+                    runner.run_metadata.get_slice(slice_id)
+                    if runner.run_metadata
+                    else None
+                )
+                if not slice_meta:
+                    logging.error(
+                        f"No run metadata for {slice_id}, cannot prove with EZKL"
+                    )
+                    return result
 
+                ezkl_circuit = RunnerUtils.resolve_relative_path(
+                    slice_meta.ezkl_circuit_path or slice_meta.circuit_path, model_dir
+                )
+                ezkl_pk = RunnerUtils.resolve_relative_path(
+                    slice_meta.ezkl_pk_path or slice_meta.pk_path, model_dir
+                )
+                ezkl_settings = RunnerUtils.resolve_relative_path(
+                    slice_meta.ezkl_settings_path or slice_meta.settings_path, model_dir
+                )
+                witness_path = run_dir / slice_id / "output.json"
+                proof_path = tmp_path / "proof.json"
+
+                ezkl_runner = EZKL()
+                success, proof_file = ezkl_runner.prove(
+                    witness_path=str(witness_path),
+                    model_path=str(ezkl_circuit),
+                    proof_path=str(proof_path),
+                    pk_path=str(ezkl_pk),
+                    settings_path=ezkl_settings,
+                )
+
+                proof_data = None
+                if success and proof_path.exists():
+                    with open(proof_path, "r") as pf:
+                        proof_data = json.load(pf)
+            else:
+                logging.error(f"Unsupported proof system: {proof_system}")
+                return result
+
+            proof_generation_time = time.time() - prove_start
             result["success"] = success
             result["proof_generation_time"] = proof_generation_time
             result["proof"] = proof_data
             return result
+
+    def _prove_tile(
+        self,
+        model_dir: Path,
+        base_slice_num: str,
+        tile_idx: int,
+        input_file: Path,
+        output_file: Path,
+        tmp_path: Path,
+        proof_system: ProofSystem,
+        result: dict,
+    ) -> dict:
+        prove_start = time.time()
+        slice_num = f"{base_slice_num}_tile_{tile_idx}"
+
+        if proof_system == ProofSystem.JSTPROVE:
+            jstprover = JSTprove()
+            jst_tile_circuit = model_dir / "jstprove" / "tiles" / "tile_circuit.txt"
+            if not jst_tile_circuit.exists():
+                logging.error(f"Tile JSTprove circuit not found: {jst_tile_circuit}")
+                return result
+
+            success, res = jstprover.generate_witness(
+                input_file=input_file,
+                model_path=jst_tile_circuit,
+                output_file=output_file,
+            )
+            if not success:
+                logging.error(f"Failed to generate witness for tile {slice_num}: {res}")
+                return result
+
+            witness_path = tmp_path / "output_witness.bin"
+            proof_path = tmp_path / "proof.bin"
+            success, proof_file = jstprover.prove(
+                witness_path=str(witness_path),
+                circuit_path=str(jst_tile_circuit),
+                proof_path=str(proof_path),
+            )
+
+            proof_data = None
+            if success and proof_path.exists():
+                with open(proof_path, "rb") as pf:
+                    proof_data = pf.read().hex()
+        else:
+            logging.error(f"Proof system {proof_system} not supported for tiles")
+            return result
+
+        proof_generation_time = time.time() - prove_start
+        result["success"] = success
+        result["proof_generation_time"] = proof_generation_time
+        result["proof"] = proof_data
+        return result
 
     def _parse_slice_num(self, slice_num: str) -> tuple[str, int | None]:
         if "_tile_" in slice_num:
@@ -392,7 +495,7 @@ class DSperseManager:
             )
 
         circuit = self._get_circuit_by_id(slice_data.circuit_id)
-        base_slice_num, _ = self._parse_slice_num(slice_num)
+        base_slice_num, tile_idx = self._parse_slice_num(slice_num)
 
         proof_file_path = slice_data.input_file.parent / "proof.json"
         if proof_system == ProofSystem.JSTPROVE:
@@ -414,12 +517,15 @@ class DSperseManager:
 
         if proof_system == ProofSystem.JSTPROVE:
             slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
-            circuit_path = (
-                slice_dir
-                / "payload"
-                / "jstprove"
-                / f"slice_{base_slice_num}_circuit.txt"
-            )
+            if tile_idx is not None:
+                circuit_path = slice_dir / "jstprove" / "tiles" / "tile_circuit.txt"
+            else:
+                circuit_path = (
+                    slice_dir
+                    / "payload"
+                    / "jstprove"
+                    / f"slice_{base_slice_num}_circuit.txt"
+                )
             witness_path = slice_data.witness_file or (
                 slice_data.input_file.parent / "output_witness.bin"
             )
