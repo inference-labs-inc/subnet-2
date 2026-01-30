@@ -101,6 +101,7 @@ class DSperseManager:
         results = runner.run(
             input_json_path=input_json_path,
             slice_path=circuit.paths.base_path,
+            backend="onnx",
         )
         actual_run_dir = runner.last_run_dir
         logging.debug(f"DSperse run completed. Results at {actual_run_dir}")
@@ -230,10 +231,17 @@ class DSperseManager:
             slice_run_dir = run_dir / slice_num
 
             if exec_info.method == ExecutionMethod.TILED:
+                circuit_tiles = [
+                    (idx, t)
+                    for idx, t in enumerate(exec_info.tiles)
+                    if not str(t.method).startswith("onnx")
+                ]
+                if not circuit_tiles:
+                    continue
                 logging.info(
-                    f"Expanding tiled slice {slice_num} into {len(exec_info.tiles)} tile requests"
+                    f"Expanding tiled slice {slice_num} into {len(circuit_tiles)} tile requests"
                 )
-                for tile_idx, tile_result in enumerate(exec_info.tiles):
+                for tile_idx, tile_result in circuit_tiles:
                     tile_run_dir = slice_run_dir / f"tile_{tile_idx}"
                     tile_input = tile_run_dir / "input.json"
                     tile_output = tile_run_dir / "output.json"
