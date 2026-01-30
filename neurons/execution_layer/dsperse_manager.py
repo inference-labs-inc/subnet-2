@@ -1,4 +1,5 @@
 import json
+import os
 import random
 import shutil
 import tempfile
@@ -97,7 +98,7 @@ class DSperseManager:
         with open(input_json_path, "w") as f:
             json.dump(inputs, f)
 
-        runner = Runner(run_dir=run_dir, batch=True)
+        runner = Runner(run_dir=run_dir, threads=os.cpu_count() or 4, batch=True)
         results = runner.run(
             input_json_path=input_json_path,
             slice_path=circuit.paths.base_path,
@@ -336,7 +337,7 @@ class DSperseManager:
                     result,
                 )
 
-            runner = Runner(run_dir=tmp_path, threads=16, batch=True)
+            runner = Runner(run_dir=tmp_path, threads=os.cpu_count() or 4, batch=True)
             runner.run(input_json_path=input_file, slice_path=model_dir)
             run_dir = runner.last_run_dir
             logging.info(f"Runner completed for slice_{slice_num}, run_dir: {run_dir}")
