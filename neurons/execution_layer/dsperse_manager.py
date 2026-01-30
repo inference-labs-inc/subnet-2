@@ -9,7 +9,7 @@ from typing import Callable
 
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
-from dsperse.src.analyzers.schema import ExecutionInfo, ExecutionMethod
+from dsperse.src.analyzers.schema import ExecutionInfo, ExecutionMethod, RunMetadata
 from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.prove.prover import Prover
 from dsperse.src.run.runner import Runner
@@ -111,7 +111,7 @@ class DSperseManager:
             return run_uid, []
 
         slice_data_list = self._extract_dslice_data(
-            slice_results, actual_run_dir, circuit.id
+            slice_results, actual_run_dir, circuit.id, runner.run_metadata
         )
 
         dsperse_run = DsperseRun(
@@ -209,6 +209,7 @@ class DSperseManager:
         slice_results: dict[str, ExecutionInfo],
         run_dir: Path,
         circuit_id: str,
+        run_metadata: RunMetadata | None = None,
     ) -> list[DSliceData]:
         dslice_data_list = []
 
@@ -216,6 +217,11 @@ class DSperseManager:
             method = str(exec_info.method)
             if method.startswith("onnx"):
                 continue
+
+            if run_metadata:
+                node = run_metadata.execution_chain.nodes.get(slice_num)
+                if node and not node.use_circuit:
+                    continue
 
             base_slice_num = slice_num.split("_")[-1]
             slice_run_dir = run_dir / slice_num
