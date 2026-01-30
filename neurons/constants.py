@@ -192,3 +192,6 @@ SN2_RELAY_URL = os.getenv("SN2_RELAY_URL", "wss://sn2-relay.inferencelabs.com:84
 RELAY_RECONNECT_BASE_DELAY = 1  # seconds
 RELAY_RECONNECT_MAX_DELAY = 60  # seconds
 RELAY_AUTH_TIMEOUT = 10  # seconds
+RELAY_OPEN_TIMEOUT = 20  # seconds
+RELAY_PING_INTERVAL = 20  # seconds
+RELAY_PING_TIMEOUT = 20  # seconds

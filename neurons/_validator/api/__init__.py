@@ -25,6 +25,9 @@ from _validator.models.poc_rpc_request import ProofOfComputationRPCRequest
 from constants import (
     EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
     RELAY_AUTH_TIMEOUT,
+    RELAY_OPEN_TIMEOUT,
+    RELAY_PING_INTERVAL,
+    RELAY_PING_TIMEOUT,
     RELAY_RECONNECT_BASE_DELAY,
     RELAY_RECONNECT_MAX_DELAY,
 )
@@ -95,21 +98,31 @@ class RelayManager:
         """Connect, authenticate, and handle messages."""
         bt.logging.info(f"Connecting to SN2 Relay at {self.config.relay_url}...")
 
-        async with websockets.connect(self.config.relay_url) as ws:
-            self._ws = ws
-            await self._authenticate(ws)
-            bt.logging.success("Connected and authenticated to SN2 Relay")
-            self._connected.set()
-            self._reconnect_delay = RELAY_RECONNECT_BASE_DELAY
+        try:
+            async with websockets.connect(
+                self.config.relay_url,
+                open_timeout=RELAY_OPEN_TIMEOUT,
+                ping_interval=RELAY_PING_INTERVAL,
+                ping_timeout=RELAY_PING_TIMEOUT,
+            ) as ws:
+                bt.logging.debug("WebSocket handshake completed")
+                self._ws = ws
+                await self._authenticate(ws)
+                bt.logging.success("Connected and authenticated to SN2 Relay")
+                self._connected.set()
+                self._reconnect_delay = RELAY_RECONNECT_BASE_DELAY
 
-            # Send any queued notifications from previous disconnection
-            await self._flush_pending_notifications()
+                # Send any queued notifications from previous disconnection
+                await self._flush_pending_notifications()
 
-            # Run message loop and batch monitor concurrently
-            await asyncio.gather(
-                self._message_loop(ws),
-                self._batch_monitor_loop(),
-            )
+                # Run message loop and batch monitor concurrently
+                await asyncio.gather(
+                    self._message_loop(ws),
+                    self._batch_monitor_loop(),
+                )
+        except asyncio.TimeoutError as e:
+            bt.logging.error(f"WS Connection timeout: {e}")
+            raise
 
     async def _handle_reconnect(self) -> None:
         """Handle reconnection with exponential backoff."""
@@ -132,7 +145,14 @@ class RelayManager:
         4. Receive auth_success or connection close
         """
         # Receive challenge
-        raw_msg = await asyncio.wait_for(ws.recv(), timeout=RELAY_AUTH_TIMEOUT)
+        try:
+            bt.logging.info(
+                f"Authenticating with SN2 Relay (ss58:{self.config.wallet.hotkey.ss58_address})..."
+            )
+            raw_msg = await asyncio.wait_for(ws.recv(), timeout=RELAY_AUTH_TIMEOUT)
+        except asyncio.TimeoutError:
+            bt.logging.error("Timeout waiting for auth_challenge from relay")
+            raise AuthenticationError("Timeout waiting for auth_challenge")
         msg = json.loads(raw_msg)
 
         if msg.get("type") != "auth_challenge":
@@ -164,6 +184,7 @@ class RelayManager:
     async def _message_loop(self, ws: websockets.WebSocketClientProtocol) -> None:
         """Handle incoming JSON-RPC messages from relay."""
         async for message in ws:
+            bt.logging.debug(f"Received relay message: {message[:100]}...")
             try:
                 response = await async_dispatch(
                     message,
@@ -203,7 +224,7 @@ class RelayManager:
         """Check if all slices in a batch are complete (success or failed)."""
         if not self.dsperse_manager:
             return False
-        progress = self.dsperse_manager.get_run_status(batch_run)
+        progress = self.dsperse_manager.get_run_status(batch_run.run_uid)
         total = progress["total_slices"]
         done = progress["completed"] + progress["failed"]
         return total > 0 and done >= total
@@ -213,7 +234,7 @@ class RelayManager:
     ) -> None:
         """Send batch completion notification with proofs."""
         proofs = self._collect_batch_proofs(batch_run)
-        progress = self.dsperse_manager.get_run_status(batch_run)
+        progress = self.dsperse_manager.get_run_status(batch_run.run_uid)
 
         notification = {
             "jsonrpc": "2.0",
