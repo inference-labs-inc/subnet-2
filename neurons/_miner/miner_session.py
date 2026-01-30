@@ -26,7 +26,6 @@ from rich.table import Table
 
 from _validator.models.request_type import RequestType
 from constants import (
-    CIRCUIT_TIMEOUT_SECONDS,
     ONE_HOUR,
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
 )
@@ -382,7 +381,6 @@ class MinerSession:
             return JSONResponse(content="Empty query input", status_code=422)
 
         model_id = str(data.model_id or SINGLE_PROOF_OF_WEIGHTS_MODEL_ID)
-        circuit_timeout = CIRCUIT_TIMEOUT_SECONDS
 
         try:
             circuit = circuit_store.ensure_circuit(model_id)
@@ -465,7 +463,6 @@ class MinerSession:
             return JSONResponse(
                 content="Empty input for proof of weights", status_code=422
             )
-        circuit_timeout = CIRCUIT_TIMEOUT_SECONDS
         response = {}
         model_id = str(data.verification_key_hash)
         try:

@@ -129,20 +129,17 @@ def ensure_jstprove_installed():
     """
     jst_source = "jstprove @ git+https://github.com/inference-labs-inc/JSTprove.git@in-memory-batching"
     jst_path = os.path.join(os.path.expanduser("~"), ".local", "bin", "jst")
-    needs_install = not (os.path.exists(jst_path) and os.access(jst_path, os.X_OK))
-    if not needs_install:
+    if os.path.exists(jst_path) and os.access(jst_path, os.X_OK):
         try:
             result = subprocess.run(
                 [jst_path, "--help"], capture_output=True, text=True, check=True
             )
-            if "batch" not in result.stdout:
-                bt.logging.warning("JSTprove missing batch command, upgrading...")
-                needs_install = True
-            else:
+            if "batch" in result.stdout:
                 bt.logging.info(f"JSTprove is installed at {jst_path}")
                 return
+            bt.logging.warning("JSTprove missing batch command, upgrading...")
         except subprocess.CalledProcessError:
-            needs_install = True
+            pass
 
     bt.logging.warning("JSTprove not found or outdated. Installing via uv...")
     try:
