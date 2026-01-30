@@ -125,24 +125,47 @@ def ensure_mpi_installed():
 
 def ensure_jstprove_installed():
     """
-    Ensure JSTprove is installed via uv tool.
+    Ensure JSTprove is installed via uv tool from the in-memory-batching branch.
     """
+    jst_source = "jstprove @ git+https://github.com/inference-labs-inc/JSTprove.git@in-memory-batching"
     jst_path = os.path.join(os.path.expanduser("~"), ".local", "bin", "jst")
-    if os.path.exists(jst_path) and os.access(jst_path, os.X_OK):
-        bt.logging.info(f"JSTprove is installed at {jst_path}")
-        return
+    needs_install = not (os.path.exists(jst_path) and os.access(jst_path, os.X_OK))
+    if not needs_install:
+        try:
+            result = subprocess.run(
+                [jst_path, "--help"], capture_output=True, text=True, check=True
+            )
+            if "batch" not in result.stdout:
+                bt.logging.warning("JSTprove missing batch command, upgrading...")
+                needs_install = True
+            else:
+                bt.logging.info(f"JSTprove is installed at {jst_path}")
+                return
+        except subprocess.CalledProcessError:
+            needs_install = True
 
-    bt.logging.warning("JSTprove not found. Installing via uv...")
+    bt.logging.warning("JSTprove not found or outdated. Installing via uv...")
     try:
         subprocess.run(
-            ["uv", "tool", "install", "--python", "3.12", "JSTprove"],
+            [
+                "uv",
+                "tool",
+                "install",
+                "--python",
+                "3.13",
+                "--from",
+                jst_source,
+                "jstprove",
+                "--force",
+            ],
             check=True,
         )
         bt.logging.info("JSTprove installed successfully")
     except subprocess.CalledProcessError as e:
         bt.logging.error(f"Failed to install JSTprove: {e}")
         raise RuntimeError(
-            "JSTprove installation failed. Please install it manually with: uv tool install --python 3.12 JSTprove"
+            "JSTprove installation failed. Install manually with: "
+            f'uv tool install --python 3.13 --from "{jst_source}" jstprove'
         ) from e
 
 

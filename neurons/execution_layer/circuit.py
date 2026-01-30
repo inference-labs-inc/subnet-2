@@ -183,6 +183,8 @@ class CircuitMetadata:
         """
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata = json.load(f)
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        metadata = {k: v for k, v in metadata.items() if k in valid_fields}
         return cls(**metadata)
 
 

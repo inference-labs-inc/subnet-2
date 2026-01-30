@@ -6,8 +6,6 @@ import os
 import sys
 import time
 import traceback
-from multiprocessing import Queue as MPQueue
-from queue import Empty
 from typing import NoReturn
 
 import bittensor as bt
@@ -19,7 +17,6 @@ from execution_layer.dsperse_manager import DSperseManager
 
 from _validator.api import ValidatorAPI
 from _validator.api.client import query_miner
-from _validator.competitions.competition import Competition
 from _validator.config import ValidatorConfig
 from _validator.core.capacity_manager import CapacityManager
 from _validator.core.exceptions import EmptyProofException, IncorrectProofException
@@ -37,7 +34,7 @@ from _validator.core.request_pipeline import RequestPipeline
 from _validator.core.response_processor import ResponseProcessor
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.miner_response import MinerResponse
-from _validator.models.request_type import RequestType, ValidatorMessage
+from _validator.models.request_type import RequestType
 from _validator.pow.proof_of_weights_handler import ProofOfWeightsHandler
 from _validator.scoring.score_manager import ScoreManager
 from _validator.scoring.weights import WeightsManager
@@ -55,7 +52,6 @@ from constants import (
     ONE_MINUTE,
 )
 from utils import AutoUpdate, clean_temp_files, with_rate_limit
-from utils.gc_logging import gc_log_competition_metrics
 from utils.gc_logging import log_responses as gc_log_responses
 
 # Set to True for synchronous request processing (easier debugging)
@@ -83,37 +79,14 @@ class ValidatorLoop:
         self.auto_update = AutoUpdate()
         self.httpx_client = httpx.AsyncClient()
 
-        self.validator_to_competition_queue = MPQueue()  # Messages TO competition
-        self.competition_to_validator_queue = MPQueue()  # Messages FROM competition
         self.current_concurrency = MAX_CONCURRENT_REQUESTS
         self.capacity_manager = CapacityManager(self.config, self.httpx_client)
         self.dsperse_manager = DSperseManager()
-        try:
-            competition_id = 1
-            bt.logging.info("Initializing competition module...")
-            self.competition = Competition(
-                competition_id,
-                self.config.metagraph,
-                self.config.wallet,
-                self.config.bt_config,
-            )
-            self.competition.set_validator_message_queues(
-                self.validator_to_competition_queue, self.competition_to_validator_queue
-            )
-            bt.logging.success("Competition module initialized successfully")
-            # self.clear_sota_state()
-        except Exception as e:
-            bt.logging.warning(
-                f"Failed to initialize competition, continuing without competition support: {e}"
-            )
-            traceback.print_exc()
-            self.competition = None
 
         self.score_manager = ScoreManager(
             self.config.metagraph,
             self.config.user_uid,
             self.config.full_path_score,
-            self.competition,
         )
         self.response_processor = ResponseProcessor(self.dsperse_manager)
         self.weights_manager = WeightsManager(
@@ -147,25 +120,10 @@ class ValidatorLoop:
         self.response_thread_pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=16
         )
-        self.last_competition_sync = 0
-        self.is_syncing_competition = False
-        self.competition_commitments = []
-
         self.recent_responses: list[MinerResponse] = []
 
         if self.config.bt_config.prometheus_monitoring:
             start_prometheus_logging(self.config.bt_config.prometheus_port)
-
-    def clear_sota_state(self):
-        try:
-            os.remove(
-                os.path.join(
-                    self.competition.competition_directory, "sota", "sota_state.json"
-                )
-            )
-        except Exception as e:
-            bt.logging.error(f"Error clearing sota state: {e}")
-            traceback.print_exc()
 
     @with_rate_limit(period=ONE_MINUTE)
     async def update_weights(self):
@@ -270,80 +228,6 @@ class ValidatorLoop:
         if len(self.processed_uids) >= len(self.queryable_uids):
             self.processed_uids.clear()
 
-    @with_rate_limit(period=ONE_HOUR)
-    async def sync_competition(self):
-        if not self.competition:
-            bt.logging.debug("Competition module not initialized, skipping sync")
-            return
-        if self.is_syncing_competition:
-            bt.logging.debug("Competition sync already in progress, skipping")
-            return
-        if not self.competition.is_active:
-            bt.logging.debug("Competition is not active, skipping sync")
-            return
-        try:
-            self.is_syncing_competition = True
-            bt.logging.info("Starting competition sync...")
-            bt.logging.debug("Fetching commitments...")
-            commitments = self.competition.fetch_commitments()
-            bt.logging.debug(f"Found {len(commitments)} commitments")
-            if commitments:
-                bt.logging.success(f"Found {len(commitments)} new circuits to evaluate")
-                for uid, hotkey, hash in commitments:
-                    if hash not in {
-                        state.hash for state in self.competition.miner_states.values()
-                    }:
-                        bt.logging.debug(
-                            f"Queueing download for circuit {hash[:8]}... from {hotkey[:8]}..."
-                        )
-                        self.competition.queue_download(uid, hotkey, hash)
-                bt.logging.debug(
-                    f"Queue size after adding: {len(self.competition.download_queue)}"
-                )
-            else:
-                bt.logging.debug("No new circuits found during sync")
-        except Exception as e:
-            bt.logging.error(f"Error in competition sync: {e}")
-            traceback.print_exc()
-        finally:
-            self.is_syncing_competition = False
-            bt.logging.debug("Competition sync complete")
-
-    @with_rate_limit(period=ONE_HOUR)
-    def update_competition_metrics(self):
-        bt.logging.debug("Updating competition metrics...")
-        if self.competition and getattr(self.competition, "is_active", False):
-            try:
-                metrics_to_log = self.competition.get_summary_for_logging()
-
-                if metrics_to_log and not cli_parser.config.disable_metric_logging:
-                    metrics_to_log["validator_key"] = (
-                        self.config.wallet.hotkey.ss58_address
-                    )
-
-                    bt.logging.debug("Logging competition metrics summary...")
-                    response = gc_log_competition_metrics(
-                        metrics_to_log, self.config.wallet.hotkey
-                    )
-
-                    if response and response.status_code == 200:
-                        bt.logging.success(
-                            "Successfully logged competition metrics summary."
-                        )
-                    else:
-                        status_code = response.status_code if response else "N/A"
-                        response_text = response.text if response else "N/A"
-                        bt.logging.error(
-                            "Failed to log competition metrics summary."
-                            f" Status: {status_code}, Response: {response_text}"
-                        )
-
-            except Exception as e:
-                bt.logging.error(
-                    f"Error during competition metric summary logging: {e}",
-                    exc_info=True,
-                )
-
     @with_rate_limit(period=ONE_MINUTE)
     async def log_responses(self):
         if self.recent_responses:
@@ -378,38 +262,12 @@ class ValidatorLoop:
             self.last_response_time = time.time()
             self.recent_responses = []
 
-    async def maintain_competitions(self):
-        """
-        Maintain competition message handling.
-        """
-        try:
-            message = await asyncio.get_event_loop().run_in_executor(
-                self.thread_pool,
-                lambda: self.competition_to_validator_queue.get(timeout=0.1),
-            )
-            if message == ValidatorMessage.WINDDOWN:
-                bt.logging.info(
-                    "Received winddown message, reducing concurrency to zero"
-                )
-                self.current_concurrency = 0
-            elif message == ValidatorMessage.COMPETITION_COMPLETE:
-                bt.logging.info(
-                    "Received competition complete message, restoring concurrency"
-                )
-                self.current_concurrency = MAX_CONCURRENT_REQUESTS
-        except Empty:
-            bt.logging.trace("No messages in competition queue")
-        except Exception as e:
-            bt.logging.error(f"Error in competition message handling: {e}")
-            traceback.print_exc()
-
     async def maintain_request_pool(self):
         """
         Maintain the pool of active requests to miners.
         Supports multiple concurrent requests per miner based on their capacity.
         """
         while self._should_run:
-            await self.maintain_competitions()
             try:
                 slots_available = self.current_concurrency - len(self.active_tasks)
 
@@ -511,12 +369,6 @@ class ValidatorLoop:
         if uid in self.miner_active_count:
             self.miner_active_count[uid] = max(0, self.miner_active_count[uid] - 1)
 
-        if self.current_concurrency == 0 and not self.active_tasks and self.competition:
-            bt.logging.info(
-                "All tasks completed during winddown, sending winddown complete message"
-            )
-            self.validator_to_competition_queue.put(ValidatorMessage.WINDDOWN_COMPLETE)
-
     async def run_periodic_tasks(self):
         while self._should_run:
             try:
@@ -525,7 +377,6 @@ class ValidatorLoop:
                 await self.sync_metagraph()
                 await self.sync_scores_uids()
                 await self.update_weights()
-                self.update_competition_metrics()
                 self.update_queryable_uids()
                 await self.sync_capacities(
                     {
@@ -536,8 +387,6 @@ class ValidatorLoop:
                 self.update_processed_uids()
                 self.log_health()
                 await self.log_responses()
-                if self.current_concurrency:
-                    await self.sync_competition()
                 self.last_periodic_task_time = time.time()
                 await asyncio.sleep(LOOP_DELAY_SECONDS)
             except Exception as e:
@@ -823,8 +672,4 @@ class ValidatorLoop:
         stop_prometheus_logging()
         clean_temp_files()
         self.dsperse_manager.total_cleanup()
-        if self.competition:
-            self.competition.competition_thread.stop()
-            if hasattr(self.competition.circuit_manager, "close"):
-                await self.competition.circuit_manager.close()
         sys.exit(0)

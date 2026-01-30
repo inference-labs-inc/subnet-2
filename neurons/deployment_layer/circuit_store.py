@@ -105,6 +105,12 @@ class CircuitStore:
                     )
                     continue
                 metadata_dict.setdefault("external_files", None)
+                valid_fields = {
+                    f.name for f in CircuitMetadata.__dataclass_fields__.values()
+                }
+                metadata_dict = {
+                    k: v for k, v in metadata_dict.items() if k in valid_fields
+                }
                 metadata = CircuitMetadata(**metadata_dict)
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit

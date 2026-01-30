@@ -8,7 +8,6 @@ from _validator.utils.proof_of_weights import ProofOfWeightsItem
 from _validator.utils.uid import get_queryable_uids
 from constants import SINGLE_PROOF_OF_WEIGHTS_MODEL_ID
 from execution_layer.circuit import CircuitEvaluationItem
-from _validator.competitions.competition import Competition
 from _validator.scoring.pow_manager import ProofOfWeightsManager
 
 
@@ -20,20 +19,11 @@ class ScoreManager:
         metagraph: bt.Metagraph,
         user_uid: int,
         score_path: str,
-        competition: Competition | None = None,
     ):
-        """
-        Initialize the ScoreManager.
-
-        Args:
-            metagraph: The metagraph of the subnet.
-            user_uid: The UID of the current user.
-        """
         self.metagraph = metagraph
         self.user_uid = user_uid
         self.score_path = score_path
         self.scores = self.init_scores()
-        self.competition = competition
 
         self.pow_manager = ProofOfWeightsManager(self.metagraph, self.scores)
 
@@ -93,25 +83,9 @@ class ScoreManager:
             bt.logging.error(f"Error storing scores: {e}")
 
     def process_non_queryable_scores(self, queryable_uids: set[int], max_score: float):
-        """
-        Decay scores for non-queryable UIDs.
-        """
         for uid in range(len(self.scores)):
             if uid not in queryable_uids:
-                hotkey = self.metagraph.hotkeys[uid]
-                if not (self.competition and hotkey in self.competition.miner_states):
-                    self.scores[uid] = 0
-                elif self.competition and hotkey in self.competition.miner_states:
-                    pow_item = ProofOfWeightsItem.for_competition(
-                        uid=uid,
-                        maximum_score=max_score,
-                        competition_score=self.competition.miner_states[
-                            hotkey
-                        ].sota_relative_score,
-                        block_number=self.metagraph.block.item(),
-                        validator_uid=self.user_uid,
-                    )
-                    self.pow_manager.update_pow_queue([pow_item])
+                self.scores[uid] = 0
 
     def update_single_score(
         self,

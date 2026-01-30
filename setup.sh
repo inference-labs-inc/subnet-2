@@ -87,7 +87,7 @@ pipx install uv
 
 echo "Installing btcli..."
 "$HOME/.local/bin/uv" tool install --python 3.12 bittensor-cli
-"$HOME/.local/bin/uv" tool install --python 3.12 JSTprove
+"$HOME/.local/bin/uv" tool install --python 3.13 --from "jstprove @ git+https://github.com/inference-labs-inc/JSTprove.git@in-memory-batching" jstprove
 
 if [[ ! -d ${INSTALL_PATH} ]]; then
     echo "Cloning subnet-2 repository..."

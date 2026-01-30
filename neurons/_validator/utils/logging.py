@@ -6,7 +6,6 @@ from rich.table import Table
 
 from utils import wandb_logger
 from _validator.models.miner_response import MinerResponse
-from _validator.competitions.models.neuron import NeuronState
 
 
 def create_and_print_table(
@@ -136,33 +135,3 @@ def log_responses(responses: list[MinerResponse]):
         }
     }
     wandb_logger.safe_log(wandb_log)
-
-
-def log_sota_scores(
-    performance_scores: list[tuple[str, float]],
-    miner_states: dict[str, NeuronState],
-    decay_rate: float = 3.0,
-):
-    table = Table(title="SOTA Scores")
-    table.add_column("Hotkey", style="cyan")
-    table.add_column("Score", justify="right", style="green")
-    table.add_column("Raw Accuracy", justify="right", style="yellow")
-    table.add_column("Proof Size", justify="right", style="blue")
-    table.add_column("Response Time", justify="right", style="magenta")
-
-    for rank, (hotkey, _) in enumerate(performance_scores):
-        rank_score = torch.exp(torch.tensor(-decay_rate * rank)).item()
-        miner_states[hotkey].sota_relative_score = rank_score
-
-        state = miner_states[hotkey]
-        table.add_row(
-            hotkey[:8] + "...",
-            f"{rank_score:.6f}",
-            f"{state.raw_accuracy:.4f}",
-            f"{state.proof_size:.0f}",
-            f"{state.response_time:.4f}",
-        )
-
-    console = Console(color_system="truecolor")
-    console.width = 120
-    console.print(table)
