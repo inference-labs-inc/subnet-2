@@ -64,7 +64,6 @@ def run_shared_preflight_checks(role: Optional[Roles] = None):
             "Checking SnarkJS installation": ensure_snarkjs_installed,
             "Checking EZKL installation": ensure_ezkl_installed,
             "Checking MPI installation": ensure_mpi_installed,
-            "Checking JSTprove installation": ensure_jstprove_installed,
             "Syncing model files": partial(sync_models, role=role),
         }
     )
@@ -121,49 +120,6 @@ def ensure_mpi_installed():
                 "MPI is required but not installed. Please install OpenMPI manually."
             )
         bt.logging.info("MPI installed successfully")
-
-
-def ensure_jstprove_installed():
-    """
-    Ensure JSTprove is installed via uv tool from the in-memory-batching branch.
-    """
-    jst_source = "jstprove @ git+https://github.com/inference-labs-inc/JSTprove.git@in-memory-batching"
-    jst_path = os.path.join(os.path.expanduser("~"), ".local", "bin", "jst")
-    if os.path.exists(jst_path) and os.access(jst_path, os.X_OK):
-        try:
-            result = subprocess.run(
-                [jst_path, "--help"], capture_output=True, text=True, check=True
-            )
-            if "batch" in result.stdout:
-                bt.logging.info(f"JSTprove is installed at {jst_path}")
-                return
-            bt.logging.warning("JSTprove missing batch command, upgrading...")
-        except subprocess.CalledProcessError:
-            pass
-
-    bt.logging.warning("JSTprove not found or outdated. Installing via uv...")
-    try:
-        subprocess.run(
-            [
-                "uv",
-                "tool",
-                "install",
-                "--python",
-                "3.13",
-                "--from",
-                jst_source,
-                "jstprove",
-                "--force",
-            ],
-            check=True,
-        )
-        bt.logging.info("JSTprove installed successfully")
-    except subprocess.CalledProcessError as e:
-        bt.logging.error(f"Failed to install JSTprove: {e}")
-        raise RuntimeError(
-            "JSTprove installation failed. Install manually with: "
-            f'uv tool install --python 3.13 --from "{jst_source}" jstprove'
-        ) from e
 
 
 def ensure_ezkl_installed():
