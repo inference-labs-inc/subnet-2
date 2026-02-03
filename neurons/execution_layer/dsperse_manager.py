@@ -98,10 +98,12 @@ class DSperseManager:
         with open(input_json_path, "w") as f:
             json.dump(inputs, f)
 
+        slice_copy = run_dir / "slices"
+        shutil.copytree(circuit.paths.base_path, slice_copy)
         runner = Runner(run_dir=run_dir, threads=os.cpu_count() or 4, batch=True)
         results = runner.run(
             input_json_path=input_json_path,
-            slice_path=circuit.paths.base_path,
+            slice_path=str(slice_copy),
         )
         actual_run_dir = runner.last_run_dir
         logging.debug(f"DSperse run completed. Results at {actual_run_dir}")
@@ -336,8 +338,10 @@ class DSperseManager:
                     result,
                 )
 
+            slice_copy = tmp_path / "slices"
+            shutil.copytree(model_dir, slice_copy)
             runner = Runner(run_dir=tmp_path, threads=os.cpu_count() or 4, batch=True)
-            runner.run(input_json_path=input_file, slice_path=model_dir)
+            runner.run(input_json_path=input_file, slice_path=str(slice_copy))
             run_dir = runner.last_run_dir
             logging.info(f"Runner completed for slice_{slice_num}, run_dir: {run_dir}")
 
