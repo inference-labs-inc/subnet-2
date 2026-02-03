@@ -134,6 +134,11 @@ class CircuitStore:
             try:
                 self._cache_circuit(circuit_id, circuit_data)
                 metadata = CircuitMetadata.from_dict(circuit_data.get("metadata", {}))
+                if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
+                    from execution_layer.dsperse_manager import DSperseManager
+
+                    cache_path = os.path.join(self._cache_dir, f"model_{circuit_id}")
+                    DSperseManager.extract_dslices(cache_path)
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit
                 bt.logging.info(f"Loaded circuit {circuit_id} from API")
