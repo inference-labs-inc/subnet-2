@@ -102,7 +102,6 @@ class DSperseManager:
         results = runner.run(
             input_json_path=input_json_path,
             slice_path=circuit.paths.base_path,
-            backend="onnx",
         )
         actual_run_dir = runner.last_run_dir
         logging.debug(f"DSperse run completed. Results at {actual_run_dir}")
