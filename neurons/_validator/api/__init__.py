@@ -293,35 +293,7 @@ class ValidatorAPI:
             except ValueError as e:
                 return InvalidParams(str(e))
 
-            self.pending_requests[external_request.hash] = asyncio.Event()
-            self.stacked_requests_queue.insert(0, external_request)
-            bt.logging.success(
-                f"External request with hash {external_request.hash} added to queue"
-            )
-            try:
-                await asyncio.wait_for(
-                    self.pending_requests[external_request.hash].wait(),
-                    timeout=external_request.circuit.timeout
-                    + EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
-                )
-                result = self.request_results.pop(external_request.hash, None)
-
-                if result["success"]:
-                    bt.logging.success(
-                        f"External request with hash {external_request.hash} processed successfully"
-                    )
-                    return Success(result)
-                bt.logging.error(
-                    f"External request with hash {external_request.hash} failed to process"
-                )
-                return Error(9, "Request processing failed")
-            except asyncio.TimeoutError:
-                bt.logging.error(
-                    f"External request with hash {external_request.hash} timed out"
-                )
-                return Error(9, "Request processing failed", "Request timed out")
-            finally:
-                self.pending_requests.pop(external_request.hash, None)
+            return await self._enqueue_and_await(external_request)
 
         except Exception as e:
             bt.logging.error(f"Error processing request: {str(e)}")
@@ -352,40 +324,43 @@ class ValidatorAPI:
                 )
                 return InvalidParams(str(e))
 
-            self.pending_requests[external_request.hash] = asyncio.Event()
-            self.stacked_requests_queue.insert(0, external_request)
-            bt.logging.success(
-                f"External request with hash {external_request.hash} added to queue"
-            )
-            try:
-                await asyncio.wait_for(
-                    self.pending_requests[external_request.hash].wait(),
-                    timeout=external_request.circuit.timeout
-                    + EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
-                )
-                result = self.request_results.pop(external_request.hash, None)
-
-                if result["success"]:
-                    bt.logging.success(
-                        f"External request with hash {external_request.hash} processed successfully"
-                    )
-                    return Success(result)
-                bt.logging.error(
-                    f"External request with hash {external_request.hash} failed to process"
-                )
-                return Error(9, "Request processing failed")
-            except asyncio.TimeoutError:
-                bt.logging.error(
-                    f"External request with hash {external_request.hash} timed out"
-                )
-                return Error(9, "Request processing failed", "Request timed out")
-            finally:
-                self.pending_requests.pop(external_request.hash, None)
+            return await self._enqueue_and_await(external_request)
 
         except Exception as e:
             bt.logging.error(f"Error processing request: {str(e)}")
             traceback.print_exc()
             return Error(9, "Request processing failed", str(e))
+
+    async def _enqueue_and_await(self, external_request: QueuedRequestDataModel):
+        self.pending_requests[external_request.hash] = asyncio.Event()
+        self.stacked_requests_queue.insert(0, external_request)
+        bt.logging.success(
+            f"External request with hash {external_request.hash} added to queue"
+        )
+        try:
+            await asyncio.wait_for(
+                self.pending_requests[external_request.hash].wait(),
+                timeout=external_request.circuit.timeout
+                + EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
+            )
+            result = self.request_results.pop(external_request.hash, None)
+
+            if result["success"]:
+                bt.logging.success(
+                    f"External request with hash {external_request.hash} processed successfully"
+                )
+                return Success(result)
+            bt.logging.error(
+                f"External request with hash {external_request.hash} failed to process"
+            )
+            return Error(9, "Request processing failed")
+        except asyncio.TimeoutError:
+            bt.logging.error(
+                f"External request with hash {external_request.hash} timed out"
+            )
+            return Error(9, "Request processing failed", "Request timed out")
+        finally:
+            self.pending_requests.pop(external_request.hash, None)
 
     async def handle_dsperse_submit(
         self, websocket: WebSocket, **params: dict[str, object]

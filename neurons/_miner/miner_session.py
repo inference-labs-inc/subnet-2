@@ -65,20 +65,20 @@ class MinerSession:
         )
 
         self.server.register_route(
-            path=f"/{QueryZkProof.name}", endpoint=self.queryZkProof
+            path=f"/{QueryZkProof.name}", endpoint=self.query_zk_proof
         )
         self.server.register_route(
             path=f"/{ProofOfWeightsDataModel.name}", endpoint=self.handle_pow_request
         )
         self.server.register_route(
-            path=f"/{Competition.name}", endpoint=self.handleCompetitionRequest
+            path=f"/{Competition.name}", endpoint=self.handle_competition_request
         )
         self.server.register_route(
-            path=f"/{QueryForCapacities.name}", endpoint=self.handleCapacityRequest
+            path=f"/{QueryForCapacities.name}", endpoint=self.handle_capacity_request
         )
         self.server.register_route(
             path=f"/{DSliceProofGenerationDataModel.name}",
-            endpoint=self.handleDSliceRequest,
+            endpoint=self.handle_dslice_request,
         )
         self.server.start()
 
@@ -256,13 +256,13 @@ class MinerSession:
             bt.logging.warning(f"Failed to sync metagraph: {e}")
             return False
 
-    def handleCapacityRequest(self) -> JSONResponse:
+    def handle_capacity_request(self) -> JSONResponse:
         """
         Handle capacity request from validators.
         """
         return JSONResponse(content=QueryForCapacities.from_config())
 
-    def handleCompetitionRequest(self, data: Competition) -> JSONResponse:
+    def handle_competition_request(self, data: Competition) -> JSONResponse:
         """
         Handle competition circuit requests from validators.
 
@@ -357,7 +357,9 @@ class MinerSession:
                 status_code=500,
             )
 
-    def handleDSliceRequest(self, data: DSliceProofGenerationDataModel) -> JSONResponse:
+    def handle_dslice_request(
+        self, data: DSliceProofGenerationDataModel
+    ) -> JSONResponse:
         """
         Handle DSlice proof generation requests from validators.
         """
@@ -382,53 +384,39 @@ class MinerSession:
                 content={"error": "An internal error occurred."}, status_code=500
             )
 
-    def queryZkProof(self, data: QueryZkProof) -> JSONResponse:
-        """
-        This function run proof generation of the model (with its output as well)
-        """
-        time_in = time.time()
-        bt.logging.debug("Received request from validator")
-        bt.logging.debug(f"Input data: {data.query_input} \n")
-
-        if not data.query_input:
-            bt.logging.error("Received empty query input")
-            return JSONResponse(content="Empty query input", status_code=422)
-
-        model_id = str(data.model_id or SINGLE_PROOF_OF_WEIGHTS_MODEL_ID)
-
+    def _generate_proof(
+        self, model_id: str, inputs: dict
+    ) -> tuple[JSONResponse | None, dict | None]:
         circuit, error = self._load_circuit(model_id)
         if error:
-            return error
-
-        circuit_timeout = circuit.timeout
+            return error, None
 
         try:
             bt.logging.info(f"Running proof generation for {circuit}")
             model_session = VerifiedModelSession(
-                BaseInput(RequestType.RWR, data.query_input), circuit
+                BaseInput(RequestType.RWR, inputs), circuit
             )
-            bt.logging.debug("Model session created successfully")
             proof, public, proof_time = model_session.gen_proof()
             if isinstance(proof, bytes):
                 proof = proof.hex()
-
-            output = {
-                "proof": proof,
-                "public_signals": public,
-            }
-            bt.logging.trace(f"Proof: {output}, Time: {proof_time}")
             model_session.end()
-            try:
-                bt.logging.info(f"✅ Proof completed for {circuit}\n")
-            except UnicodeEncodeError:
-                bt.logging.info(f"Proof completed for {circuit}\n")
+            bt.logging.info(f"Proof completed for {circuit}")
         except Exception as e:
-            bt.logging.error(f"An error occurred while generating proven output\n{e}")
+            bt.logging.error(f"An error occurred while generating proof\n{e}")
             traceback.print_exc()
-            return JSONResponse(content="An error occurred", status_code=500)
+            return JSONResponse(content="An error occurred", status_code=500), None
 
-        time_out = time.time()
-        delta_t = time_out - time_in
+        return None, {
+            "proof": proof,
+            "public_signals": public,
+            "proof_time": proof_time,
+            "circuit_timeout": circuit.timeout,
+        }
+
+    def _log_proof_timing(
+        self, model_id: str, time_in: float, proof_time: float, circuit_timeout: float
+    ):
+        delta_t = time.time() - time_in
         bt.logging.info(
             f"Total response time {delta_t}s. Proof time: {proof_time}s. "
             f"Overhead time: {delta_t - proof_time}s."
@@ -442,74 +430,51 @@ class MinerSession:
                 }
             }
         )
-
         if delta_t > circuit_timeout:
             bt.logging.error(
                 "Response time is greater than circuit timeout. "
                 "This indicates your hardware is not processing the requests in time."
             )
-        return JSONResponse(content=output)
 
-    def handle_pow_request(self, data: ProofOfWeightsDataModel) -> JSONResponse:
-        """
-        Handles a proof of weights request
-        """
+    def query_zk_proof(self, data: QueryZkProof) -> JSONResponse:
         time_in = time.time()
-        bt.logging.debug("Received proof of weights request from validator")
-        bt.logging.debug(f"Input data: {data.inputs} \n")
+        if not data.query_input:
+            return JSONResponse(content="Empty query input", status_code=422)
 
-        if not data.inputs:
-            bt.logging.error("Received empty input for proof of weights")
-            return JSONResponse(
-                content="Empty input for proof of weights", status_code=422
-            )
-        response = {}
-        model_id = str(data.verification_key_hash)
-        circuit, error = self._load_circuit(model_id)
+        model_id = str(data.model_id or SINGLE_PROOF_OF_WEIGHTS_MODEL_ID)
+        error, result = self._generate_proof(model_id, data.query_input)
         if error:
             return error
 
-        circuit_timeout = circuit.timeout
-        try:
-            bt.logging.info(f"Running proof generation for {circuit}")
-            model_session = VerifiedModelSession(
-                BaseInput(RequestType.RWR, data.inputs), circuit
-            )
-
-            bt.logging.debug("Model session created successfully")
-            proof, public, proof_time = model_session.gen_proof()
-            model_session.end()
-
-            bt.logging.info(f"✅ Proof of weights completed for {circuit}\n")
-            response["inputs"] = data.inputs
-            response["proof"] = proof.hex() if isinstance(proof, bytes) else proof
-            response["public_signals"] = public
-        except Exception as e:
-            bt.logging.error(
-                f"An error occurred while generating proof of weights\n{e}"
-            )
-            traceback.print_exc()
-            return JSONResponse(content="An error occurred", status_code=500)
-
-        time_out = time.time()
-        delta_t = time_out - time_in
-        bt.logging.info(
-            f"Total response time {delta_t}s. Proof time: {proof_time}s. "
-            f"Overhead time: {delta_t - proof_time}s."
+        self._log_proof_timing(
+            model_id, time_in, result["proof_time"], result["circuit_timeout"]
         )
-        self.log_batch.append(
-            {
-                str(data.verification_key_hash): {
-                    "proof_time": proof_time,
-                    "overhead_time": delta_t - proof_time,
-                    "total_response_time": delta_t,
-                }
+        return JSONResponse(
+            content={
+                "proof": result["proof"],
+                "public_signals": result["public_signals"],
             }
         )
 
-        if delta_t > circuit_timeout:
-            bt.logging.error(
-                "Response time is greater than circuit timeout. "
-                "This indicates your hardware is not processing the requests in time."
+    def handle_pow_request(self, data: ProofOfWeightsDataModel) -> JSONResponse:
+        time_in = time.time()
+        if not data.inputs:
+            return JSONResponse(
+                content="Empty input for proof of weights", status_code=422
             )
-        return JSONResponse(content=response)
+
+        model_id = str(data.verification_key_hash)
+        error, result = self._generate_proof(model_id, data.inputs)
+        if error:
+            return error
+
+        self._log_proof_timing(
+            model_id, time_in, result["proof_time"], result["circuit_timeout"]
+        )
+        return JSONResponse(
+            content={
+                "inputs": data.inputs,
+                "proof": result["proof"],
+                "public_signals": result["public_signals"],
+            }
+        )

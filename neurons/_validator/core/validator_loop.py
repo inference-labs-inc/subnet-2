@@ -103,7 +103,6 @@ class ValidatorLoop:
             self.config, self.score_manager, self.api
         )
 
-        self.request_queue = asyncio.Queue()
         self.active_tasks: dict[str, asyncio.Task | None] = {}
         self.miner_active_count: dict[int, int] = {}
         self.miner_capacities: dict[int, int] = {}
@@ -210,13 +209,7 @@ class ValidatorLoop:
         bt.logging.debug(f"Queryable UIDs: {len(self.queryable_uids)}")
 
         log_system_metrics()
-        queue_size = self.request_queue.qsize()
-        est_latency = (
-            queue_size * (LOOP_DELAY_SECONDS / MAX_CONCURRENT_REQUESTS)
-            if queue_size > 0
-            else 0
-        )
-        log_queue_metrics(queue_size, est_latency)
+        log_queue_metrics(len(self.api.stacked_requests_queue), 0)
 
     @with_rate_limit(period=ONE_MINUTE)
     async def log_responses(self):
@@ -438,7 +431,7 @@ class ValidatorLoop:
                         pass  # Thread pool internals may not be accessible
                     bt.logging.warning(
                         f"Active tasks: {len(self.active_tasks)}/{MAX_CONCURRENT_REQUESTS}, "
-                        f"Queue size: {self.request_queue.qsize()}, "
+                        f"Queued requests: {len(self.api.stacked_requests_queue)}, "
                         f"Queryable UIDs: {len(self.queryable_uids)}, "
                         f"Current concurrency: {self.current_concurrency}"
                     )

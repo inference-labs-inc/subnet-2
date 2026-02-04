@@ -1,32 +1,27 @@
-from execution_layer.base_input import BaseInput
+from collections import OrderedDict
 import json
 import hashlib
-from collections import deque
+
+from execution_layer.base_input import BaseInput
 
 
 class HashGuard:
     """
     A safety checker to ensure input data is never repeated.
     Uses SHA-256 for consistent hashing across sessions and sorted keys for deterministic JSON.
-    Uses a set for O(1) lookups and a deque for FIFO order.
+    Uses an OrderedDict for O(1) lookup, insertion-order eviction, and O(1) removal.
     """
 
     MAX_HASHES = 32768
 
     def __init__(self):
-        self.hash_set = set()
-        self.hash_queue = deque(maxlen=self.MAX_HASHES)
+        self._hashes: OrderedDict[str, None] = OrderedDict()
 
     def remove_hash(self, hash_value: str) -> None:
-        """
-        Remove a hash from the guard.
-        """
-        if hash_value and hash_value in self.hash_set:
-            self.hash_set.remove(hash_value)
-            self.hash_queue.remove(hash_value)
+        if hash_value:
+            self._hashes.pop(hash_value, None)
 
     def check_hash(self, input: BaseInput) -> str:
-
         if isinstance(input, BaseInput):
             input = input.to_json()
 
@@ -41,14 +36,11 @@ class HashGuard:
         json_str = json.dumps(sorted_input, sort_keys=True)
         hash_value = hashlib.sha256(json_str.encode()).hexdigest()
 
-        if hash_value in self.hash_set:
+        if hash_value in self._hashes:
             raise ValueError("Hash already exists")
 
-        if len(self.hash_queue) == self.MAX_HASHES:
-            old_hash = self.hash_queue.popleft()
-            self.hash_set.remove(old_hash)
+        if len(self._hashes) >= self.MAX_HASHES:
+            self._hashes.popitem(last=False)
 
-        self.hash_set.add(hash_value)
-        self.hash_queue.append(hash_value)
-
+        self._hashes[hash_value] = None
         return hash_value

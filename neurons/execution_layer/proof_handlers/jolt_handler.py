@@ -18,15 +18,6 @@ if not os.path.exists(JOLT_HOME):
 
 
 class JoltHandler(ProofSystemHandler):
-    def gen_input_file(self, session):
-        bt.logging.trace("Generating input file")
-        data = session.inputs.to_json()
-        dir_name = os.path.dirname(session.session_storage.input_path)
-        os.makedirs(dir_name, exist_ok=True)
-        with open(session.session_storage.input_path, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        bt.logging.trace(f"Generated input.json with data: {data}")
-
     def generate_witness(
         self, session: "VerifiedModelSession", return_content: bool = False
     ) -> None:

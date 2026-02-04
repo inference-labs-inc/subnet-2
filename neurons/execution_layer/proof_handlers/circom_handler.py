@@ -16,19 +16,6 @@ if TYPE_CHECKING:
 
 
 class CircomHandler(ProofSystemHandler):
-    def gen_input_file(self, session):
-        bt.logging.trace("Generating input file")
-
-        data = session.inputs.to_json()
-
-        dir_name = os.path.dirname(session.session_storage.input_path)
-        os.makedirs(dir_name, exist_ok=True)
-
-        with open(session.session_storage.input_path, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-
-        bt.logging.trace(f"Generated input.json with data: {data}")
-
     def gen_proof(self, session):
         try:
             bt.logging.debug(

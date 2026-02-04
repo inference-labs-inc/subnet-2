@@ -1,7 +1,10 @@
 from __future__ import annotations
+import json
+import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+import bittensor as bt
 from execution_layer.base_input import BaseInput
 
 if TYPE_CHECKING:
@@ -13,14 +16,13 @@ class ProofSystemHandler(ABC):
     An abstract base class for proof system handlers.
     """
 
-    @abstractmethod
     def gen_input_file(self, session: VerifiedModelSession):
-        """
-        Generate an input file for the proof system.
-
-        Args:
-            session (VerifiedModelSession): The current handler session.
-        """
+        bt.logging.trace("Generating input file")
+        data = session.inputs.to_json()
+        os.makedirs(os.path.dirname(session.session_storage.input_path), exist_ok=True)
+        with open(session.session_storage.input_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        bt.logging.trace(f"Generated input.json with data: {data}")
 
     @abstractmethod
     def gen_proof(self, session: VerifiedModelSession) -> tuple[str, str]:

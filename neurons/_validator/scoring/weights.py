@@ -40,16 +40,6 @@ class WeightsManager:
     proof_of_weights_queue: list[ProofOfWeightsItem] = field(default_factory=list)
     score_manager: "ScoreManager" = None
 
-    def set_weights(self, netuid, wallet, uids, weights, version_key):
-        return self.subtensor.set_weights(
-            netuid=netuid,
-            wallet=wallet,
-            uids=uids,
-            weights=weights,
-            wait_for_inclusion=False,  # Don't block waiting for blockchain confirmation
-            version_key=version_key,
-        )
-
     def should_update_weights(self) -> tuple[bool, str]:
         """Check if weights should be updated based on rate limiting and epoch timing."""
         blocks_since_last_update = self.subtensor.blocks_since_last_update(
@@ -90,11 +80,12 @@ class WeightsManager:
             weights[owner_uid] = 0.8
 
         try:
-            success, message = self.set_weights(
+            success, message = self.subtensor.set_weights(
                 netuid=self.metagraph.netuid,
                 wallet=self.wallet,
                 uids=self.metagraph.uids.tolist(),
                 weights=weights.tolist(),
+                wait_for_inclusion=False,
                 version_key=WEIGHTS_VERSION,
             )
 
