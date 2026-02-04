@@ -51,10 +51,11 @@ class ProofOfWeightsManager:
         except Exception as e:
             bt.logging.error(f"Error generating witness: {e}")
             return
+        finally:
+            session.end()
 
         witness_list = witness if isinstance(witness, list) else list(witness.values())
         self._process_witness_results(witness_list, pow_circuit.settings["scaling"])
-        session.end()
 
     def _process_witness_results(self, witness: list, scaling: int):
         """Process the results from the witness."""
@@ -113,10 +114,6 @@ class ProofOfWeightsManager:
         self.last_processed_queue_step = current_step
 
         return True
-
-    def clear_proof_of_weights_queue(self):
-        """Clear the proof of weights queue."""
-        self.proof_of_weights_queue = []
 
     def get_pow_queue(self) -> list[ProofOfWeightsItem]:
         """Get the current proof of weights queue."""

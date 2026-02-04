@@ -13,7 +13,7 @@ POW_BATCH_SIZE = 1024
 def prepare_pow_request(
     circuit: Circuit, score_manager
 ) -> tuple[ProofOfWeightsDataModel | QueryZkProof | None, bool]:
-    pow_manager = score_manager.get_pow_manager()
+    pow_manager = score_manager.pow_manager
     queue = pow_manager.get_pow_queue()
 
     if circuit.id != BATCHED_PROOF_OF_WEIGHTS_MODEL_ID:

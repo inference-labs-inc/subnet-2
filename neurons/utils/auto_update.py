@@ -71,7 +71,7 @@ class AutoUpdate:
 
     def attempt_packages_update(self):
         """
-        Attempt to update the packages by installing the requirements from the requirements.txt file
+        Attempt to update packages via uv sync.
         """
         logging.info("Attempting to update packages...")
 

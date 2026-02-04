@@ -218,13 +218,6 @@ class CircuitStore:
                 bt.logging.error(f"Error loading circuit {circuit_id}: {e}")
                 traceback.print_exc()
 
-    def refresh_circuits(self):
-        try:
-            circuits_data = self._fetch_circuits_from_api()
-            self._load_from_api(circuits_data)
-        except Exception as e:
-            bt.logging.warning(f"Failed to refresh circuits from API: {e}")
-
     def ensure_circuit(self, circuit_id: str) -> Circuit:
         if circuit_id in self.circuits:
             return self.circuits[circuit_id]
@@ -273,29 +266,6 @@ class CircuitStore:
             )
             return None
         return matching_circuits[0]
-
-    def get_latest_circuit_by_name(self, circuit_name: str) -> Circuit | None:
-        matching_circuits = [
-            c for c in self.circuits.values() if c.metadata.name == circuit_name
-        ]
-        if not matching_circuits:
-            return None
-        return max(matching_circuits, key=lambda c: version.parse(c.metadata.version))
-
-    def get_circuit_by_name_and_version(
-        self, circuit_name: str, version: int
-    ) -> Circuit | None:
-        matching_circuits = [
-            c
-            for c in self.circuits.values()
-            if c.metadata.name == circuit_name and c.metadata.version == version
-        ]
-        return matching_circuits[0] if matching_circuits else None
-
-    def list_circuits(self) -> list[str]:
-        circuit_list = list(self.circuits.keys())
-        bt.logging.debug(f"Listed {len(circuit_list)} circuits")
-        return circuit_list
 
     def list_circuit_metadata(self) -> list[dict]:
         data: list[dict] = []

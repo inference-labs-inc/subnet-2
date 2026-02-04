@@ -1,5 +1,4 @@
 from __future__ import annotations
-import asyncio
 import multiprocessing
 
 import os
@@ -92,27 +91,6 @@ class VerifiedModelSession:
 
     @staticmethod
     def _proof_worker(session: VerifiedModelSession) -> tuple[str, str]:
-        """
-        Handle the proof generation process in a separate process.
-        """
-        bt.logging.debug("Starting proof_worker")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(VerifiedModelSession._proof_task(session))
-            bt.logging.debug("proof_task completed successfully")
-            return result
-        except Exception as e:
-            bt.logging.error(f"Error in proof_worker: {str(e)}")
-            raise
-        finally:
-            loop.close()
-
-    @staticmethod
-    async def _proof_task(session: VerifiedModelSession) -> tuple[str, str]:
-        """
-        Asynchronous task for generating a proof.
-        """
         return session.proof_handler.gen_proof(session)
 
     def verify_proof(self, validator_inputs: BaseInput, proof: dict | str) -> bool:
@@ -169,4 +147,4 @@ class VerifiedModelSession:
                 os.remove(path)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        return None
+        self.end()

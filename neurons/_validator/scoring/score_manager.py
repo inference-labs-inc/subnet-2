@@ -82,7 +82,7 @@ class ScoreManager:
         except Exception as e:
             bt.logging.error(f"Error storing scores: {e}")
 
-    def process_non_queryable_scores(self, queryable_uids: set[int], max_score: float):
+    def process_non_queryable_scores(self, queryable_uids: set[int]):
         for uid in range(len(self.scores)):
             if uid not in queryable_uids:
                 self.scores[uid] = 0
@@ -116,7 +116,7 @@ class ScoreManager:
         circuit.evaluation_data.update(evaluation_data)
 
         max_score = 1 / len(self.scores)
-        self.process_non_queryable_scores(queryable_uids, max_score)
+        self.process_non_queryable_scores(queryable_uids)
 
         pow_item = ProofOfWeightsItem.from_miner_response(
             response,
@@ -134,7 +134,3 @@ class ScoreManager:
         if self.pow_manager.process_pow_queue(SINGLE_PROOF_OF_WEIGHTS_MODEL_ID):
             self._try_store_scores()
             log_scores(self.scores)
-
-    def get_pow_manager(self) -> ProofOfWeightsManager:
-        """Get the proof of weights manager."""
-        return self.pow_manager

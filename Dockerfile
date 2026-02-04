@@ -9,13 +9,10 @@ RUN apt update && \
     python3.13-nogil \
     python3.13-nogil-dev \
     python3.13-nogil-venv \
-    pipx \
     build-essential \
     jq \
     git \
-    aria2 \
     curl \
-    make \
     clang \
     pkg-config \
     libssl-dev \
@@ -57,7 +54,7 @@ ENV PATH="/home/ubuntu/.local/bin:${PATH}"
 COPY --chown=ubuntu:ubuntu --chmod=775 neurons /opt/subnet-2/neurons
 COPY --chown=ubuntu:ubuntu --chmod=775 pyproject.toml /opt/subnet-2/pyproject.toml
 COPY --chown=ubuntu:ubuntu --chmod=775 uv.lock /opt/subnet-2/uv.lock
-RUN pipx install uv && \
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     cd /opt/subnet-2 && \
     ~/.local/bin/uv sync --frozen --no-dev --compile-bytecode --python 3.13t && \
     ~/.local/bin/uv cache clean && \
