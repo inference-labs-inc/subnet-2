@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 import json
@@ -8,7 +10,6 @@ from matplotlib.colors import LinearSegmentedColormap
 from pathlib import Path
 from collections import defaultdict
 from constants import CIRCUIT_METADATA_FILENAME
-from typing import Dict, List, Optional, Union
 from rich.console import Console
 from rich.table import Table
 import argparse
@@ -16,8 +17,8 @@ import argparse
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def load_circuit_names(deployment_layer_path: str) -> Dict[str, str]:
-    circuits: Dict[str, str] = {}
+def load_circuit_names(deployment_layer_path: str) -> dict[str, str]:
+    circuits: dict[str, str] = {}
     for folder_name in os.listdir(deployment_layer_path):
         folder_path = os.path.join(deployment_layer_path, folder_name)
         if os.path.isdir(folder_path) and folder_name.startswith("model_"):
@@ -33,7 +34,7 @@ def load_circuit_names(deployment_layer_path: str) -> Dict[str, str]:
     return circuits
 
 
-def load_scores(scores_path: Path) -> Union[List, Dict]:
+def load_scores(scores_path: Path) -> list | dict:
     if not scores_path.exists():
         return {}
     try:
@@ -60,9 +61,9 @@ def parse_args():
 def process_evaluation_data(
     eval_file: Path,
     model_id: str,
-    scores: Union[List, Dict],
-    circuit_name: Optional[str] = None,
-) -> Optional[Dict]:
+    scores: list | dict,
+    circuit_name: str | None = None,
+) -> dict | None:
     if not eval_file.exists():
         return None
 
@@ -105,7 +106,7 @@ def process_evaluation_data(
         return None
 
 
-def load_evaluation_data(models_path: Path, scores_path: Path) -> Dict:
+def load_evaluation_data(models_path: Path, scores_path: Path) -> dict:
 
     scores = load_scores(scores_path)
 
@@ -131,7 +132,7 @@ def load_evaluation_data(models_path: Path, scores_path: Path) -> Dict:
 
 def create_scatter_plot(
     ax: plt.Axes,
-    data: Dict,
+    data: dict,
     title: str = None,
     score_plot: bool = False,
     score_range: tuple = None,
@@ -230,7 +231,7 @@ def create_scatter_plot(
         spine.set_linewidth(1.5)
 
 
-def calculate_average_times(model_stats: Dict, scores: List) -> Dict:
+def calculate_average_times(model_stats: dict, scores: list) -> dict:
     uid_times = defaultdict(list)
     uid_scores = {}
 

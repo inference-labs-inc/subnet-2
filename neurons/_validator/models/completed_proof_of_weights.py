@@ -1,8 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
-from attrs import field
-
 
 @dataclass
 class CompletedProofOfWeightsItem:
@@ -10,10 +8,10 @@ class CompletedProofOfWeightsItem:
     A completed proof of weights item, to be logged to the chain.
     """
 
-    signals: list[str] | None = field(default=None)
-    proof: dict | str | None = field(default=None)
-    model_id: str | None = field(default=None)
-    netuid: int | None = field(default=None)
+    signals: list[str] | None = None
+    proof: dict | str | None = None
+    model_id: str | None = None
+    netuid: int | None = None
 
     def to_remark(self) -> dict:
         return {

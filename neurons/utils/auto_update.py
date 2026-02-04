@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 import subprocess
 import git
 import time
 import requests
-from typing import Optional
 from constants import REPO_URL, ONE_MINUTE
 from .wandb_logger import safe_log
 
@@ -37,21 +38,21 @@ class AutoUpdate:
         try:
             if not cli_parser.config.no_auto_update:
                 self.repo = git.Repo(search_parent_directories=True)
-        except Exception as e:
-            logging.exception("Failed to initialize the repository", e)
+        except Exception:
+            logging.exception("Failed to initialize the repository")
 
-    def get_local_latest_tag(self) -> Optional[git.Tag]:
+    def get_local_latest_tag(self) -> git.Tag | None:
         """
         Get the latest tag from the local git repository
         """
         try:
             tags = sorted(self.repo.tags, key=lambda t: t.commit.committed_datetime)
-            current_tag: Optional[git.Tag] = tags[-1] if tags else None
+            current_tag: git.Tag | None = tags[-1] if tags else None
             if current_tag:
                 logging.info(f"Current tag: {current_tag.name}")
             return current_tag
-        except Exception as e:
-            logging.exception("Failed to get the current tag", e)
+        except Exception:
+            logging.exception("Failed to get the current tag")
             return None
 
     def get_latest_release_tag(self):
@@ -65,8 +66,8 @@ class AutoUpdate:
             response.raise_for_status()
             latest_release = response.json()
             return latest_release["tag_name"]
-        except requests.RequestException as e:
-            logging.exception("Failed to fetch the latest release from GitHub.", e)
+        except requests.RequestException:
+            logging.exception("Failed to fetch the latest release from GitHub.")
             return None
 
     def attempt_packages_update(self):
@@ -84,8 +85,8 @@ class AutoUpdate:
                 timeout=ONE_MINUTE,
             )
             logging.success("Successfully updated packages.")
-        except Exception as e:
-            logging.exception("Failed to update requirements", e)
+        except Exception:
+            logging.exception("Failed to update requirements")
 
     def update_to_latest_release(self) -> bool:
         """
@@ -137,10 +138,9 @@ class AutoUpdate:
             )
             return True
 
-        except Exception as e:
+        except Exception:
             logging.exception(
-                "Automatic update failed. Manually pull the latest changes and update.",
-                e,
+                "Automatic update failed. Manually pull the latest changes and update."
             )
 
         return False

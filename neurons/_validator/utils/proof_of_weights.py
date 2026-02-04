@@ -1,11 +1,13 @@
+from __future__ import annotations
+
 import json
 import os
 import traceback
 from dataclasses import dataclass
+
 import bittensor as bt
 import torch
 import time
-from typing import Optional
 from _validator.utils.pps import ProofPublishingService
 
 from substrateinterface import ExtrinsicReceipt, Keypair
@@ -207,7 +209,7 @@ def save_proof_of_weights(
     metadata: dict,
     hotkey: Keypair,
     is_testnet: bool = False,
-    proof_filename: Optional[str] = None,
+    proof_filename: str | None = None,
 ):
     """
     Save the proof of weights to a JSON file.
@@ -217,7 +219,7 @@ def save_proof_of_weights(
         proof (str): The proof.
         metadata (dict): Additional metadata for the proof.
         hotkey (Keypair): The hotkey used to sign the proof.
-        proof_filename (Optional[str]): Custom filename for the proof file.
+        proof_filename (str | None): Custom filename for the proof file.
     """
     try:
         if proof_filename is None:

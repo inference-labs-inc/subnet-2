@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar
 
 import bittensor as bt
 import toml
@@ -17,11 +17,11 @@ class QueryZkProof(BaseModel):
     name: ClassVar = "query-zk-proof"
 
     # Required request input, filled by caller.
-    model_id: Optional[str] = None
-    query_input: Optional[Any] = None
+    model_id: str | None = None
+    query_input: Any | None = None
 
     # Optional request output, filled by receiving miner.
-    query_output: Optional[str] = None
+    query_output: str | None = None
 
     def deserialize(self: QueryZkProof) -> str | None:
         """
@@ -63,9 +63,9 @@ class Competition(BaseModel):
     id: int  # Competition ID
     hash: str  # Circuit hash
     file_name: str  # Name of file being requested
-    file_content: Optional[str] = None  # Hex encoded file content
-    commitment: Optional[str] = None  # Circuit commitment data from miner
-    error: Optional[str] = None  # Error message if something goes wrong
+    file_content: str | None = None  # Hex encoded file content
+    commitment: str | None = None  # Circuit commitment data from miner
+    error: str | None = None  # Error message if something goes wrong
 
     def deserialize(self) -> dict:
         """Return all fields including required ones"""
@@ -86,9 +86,9 @@ class QueryForCapacities(BaseModel):
     """
 
     name: ClassVar = "capacities"
-    capacities: Optional[dict[str, int]] = None
+    capacities: dict[str, int] | None = None
 
-    def deserialize(self) -> Optional[dict[str, int]]:
+    def deserialize(self) -> dict[str, int] | None:
         """
         Return the capacities
         """
@@ -119,9 +119,9 @@ class DSliceProofGenerationDataModel(BaseModel):
     """
 
     name: ClassVar = "dsperse-proof-generation"
-    circuit: Optional[str] = None
+    circuit: str | None = None
     proof_system: ProofSystem = ProofSystem.JSTPROVE
-    inputs: Optional[Any] = None
-    outputs: Optional[Any] = None
-    slice_num: Optional[str] = None
-    run_uid: Optional[str] = None
+    inputs: Any | None = None
+    outputs: Any | None = None
+    slice_num: str | None = None
+    run_uid: str | None = None

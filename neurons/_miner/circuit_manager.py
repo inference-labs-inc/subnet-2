@@ -5,7 +5,6 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Dict, Optional
 
 import bittensor as bt
 import boto3
@@ -23,14 +22,14 @@ class CircuitCommitment(BaseModel):
 
     Attributes:
         vk_hash (str): SHA256 hash of model.compiled - this is committed on-chain
-        file_urls (Dict[str, str]): Map of filenames to signed URLs for validator download
+        file_urls (dict[str, str]): Map of filenames to signed URLs for validator download
         expiry (int): Unix timestamp when URLs expire
         signature (str): Hotkey signature of commitment data
         last_modified (int): Unix timestamp of when circuit files were last modified
     """
 
     vk_hash: str
-    file_urls: Dict[str, str]
+    file_urls: dict[str, str]
     expiry: int
     signature: str
     last_modified: int
@@ -63,7 +62,7 @@ class CircuitManager:
         circuit_dir: str,
         storage_config: dict,
         check_interval: int = 60,
-        existing_vk_hash: Optional[str] = None,
+        existing_vk_hash: str | None = None,
     ):
         """
         Initialize the CircuitManager.
@@ -123,8 +122,8 @@ class CircuitManager:
             )
 
         self.current_vk_hash = existing_vk_hash
-        self.last_upload_time: Optional[int] = None
-        self._current_object_keys: Optional[Dict[str, str]] = None
+        self.last_upload_time: int | None = None
+        self._current_object_keys: dict[str, str] | None = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
 
@@ -151,7 +150,7 @@ class CircuitManager:
         self._stop_event.set()
         self._monitor_thread.join()
 
-    def _calculate_vk_hash(self) -> Optional[str]:
+    def _calculate_vk_hash(self) -> str | None:
         """
         Calculate SHA256 hash of model.compiled.
 
@@ -165,12 +164,12 @@ class CircuitManager:
         with open(vk_path, "rb") as f:
             return hashlib.sha256(f.read()).hexdigest()
 
-    def _upload_circuit_files(self) -> Dict[str, str]:
+    def _upload_circuit_files(self) -> dict[str, str]:
         """
         Upload all circuit files to storage (R2 or S3).
 
         Returns:
-            Dict[str, str]: Map of filenames to object keys
+            dict[str, str]: Map of filenames to object keys
         """
         required_files = [
             "model.compiled",
@@ -190,7 +189,7 @@ class CircuitManager:
 
         return uploaded
 
-    def _get_signed_urls(self, object_keys: Dict[str, str]) -> Dict[str, str]:
+    def _get_signed_urls(self, object_keys: dict[str, str]) -> dict[str, str]:
         """
         Generate signed URLs for all uploaded files.
 
@@ -198,7 +197,7 @@ class CircuitManager:
             object_keys: Map of filenames to storage object keys
 
         Returns:
-            Dict[str, str]: Map of filenames to signed URLs
+            dict[str, str]: Map of filenames to signed URLs
         """
         urls = {}
         for fname, key in object_keys.items():
@@ -296,7 +295,7 @@ class CircuitManager:
                 traceback.print_exc()
             time.sleep(self.check_interval)
 
-    def get_current_commitment(self) -> Optional[CircuitCommitment]:
+    def get_current_commitment(self) -> CircuitCommitment | None:
         """
         Get current circuit commitment with signed URLs.
 

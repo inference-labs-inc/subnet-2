@@ -1,54 +1,55 @@
+from __future__ import annotations
+
 import statistics
 import threading
 import psutil
-from typing import Optional
 from wsgiref.simple_server import WSGIServer
 
 from prometheus_client import Histogram, Gauge, Counter, start_http_server
 
 
-_server: Optional[WSGIServer] = None
-_thread: Optional[threading.Thread] = None
+_server: WSGIServer | None = None
+_thread: threading.Thread | None = None
 
 # Performance Metrics
-_validation_times: Optional[Histogram] = None
-_response_times: Optional[Histogram] = None
-_proof_sizes: Optional[Histogram] = None
+_validation_times: Histogram | None = None
+_response_times: Histogram | None = None
+_proof_sizes: Histogram | None = None
 
 # Success/Failure Metrics
-_verification_ratio: Optional[Histogram] = None
-_verification_failures: Optional[Counter] = None
-_timeout_counter: Optional[Counter] = None
-_network_errors: Optional[Counter] = None
+_verification_ratio: Histogram | None = None
+_verification_failures: Counter | None = None
+_timeout_counter: Counter | None = None
+_network_errors: Counter | None = None
 
 # Resource Usage
-_active_requests: Optional[Gauge] = None
-_memory_usage: Optional[Gauge] = None
-_cpu_usage: Optional[Gauge] = None
-_disk_usage: Optional[Gauge] = None
-_network_io: Optional[Gauge] = None
+_active_requests: Gauge | None = None
+_memory_usage: Gauge | None = None
+_cpu_usage: Gauge | None = None
+_disk_usage: Gauge | None = None
+_network_io: Gauge | None = None
 
 # Queue Metrics
-_request_queue_size: Optional[Gauge] = None
-_request_queue_latency: Optional[Histogram] = None
+_request_queue_size: Gauge | None = None
+_request_queue_latency: Histogram | None = None
 
 # Weight Update Metrics
-_weight_update_duration: Optional[Histogram] = None
-_weight_update_failures: Optional[Counter] = None
-_last_weight_update: Optional[Gauge] = None
+_weight_update_duration: Histogram | None = None
+_weight_update_failures: Counter | None = None
+_last_weight_update: Gauge | None = None
 
 # Score Metrics
-_score_changes: Optional[Histogram] = None
-_score_distribution: Optional[Histogram] = None
+_score_changes: Histogram | None = None
+_score_distribution: Histogram | None = None
 
 # Business Metrics
-_total_proofs_verified: Optional[Counter] = None
-_total_requests_processed: Optional[Counter] = None
-_avg_response_time: Optional[Gauge] = None
+_total_proofs_verified: Counter | None = None
+_total_requests_processed: Counter | None = None
+_avg_response_time: Gauge | None = None
 
 # Error Tracking
-_error_counter: Optional[Counter] = None
-_last_error_timestamp: Optional[Gauge] = None
+_error_counter: Counter | None = None
+_last_error_timestamp: Gauge | None = None
 
 
 def start_prometheus_logging(port: int) -> None:

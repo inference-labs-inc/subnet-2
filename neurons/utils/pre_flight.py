@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -7,7 +9,6 @@ import traceback
 from collections import OrderedDict
 from functools import partial
 from pathlib import Path
-from typing import Optional
 
 # trunk-ignore(pylint/E0611)
 import bittensor as bt
@@ -45,7 +46,7 @@ async def download_srs(logrows):
     await ezkl.get_srs(logrows=logrows, commitment=ezkl.PyCommitments.KZG)
 
 
-def run_shared_preflight_checks(role: Optional[Roles] = None):
+def run_shared_preflight_checks(role: Roles | None = None):
     """
     This function executes a series of checks to ensure the environment is properly
     set up for both validator and miner operations.
@@ -207,7 +208,7 @@ def ensure_snarkjs_installed():
             ) from e
 
 
-def sync_models(role: Optional[Roles] = None):
+def sync_models(role: Roles | None = None):
     """
     Download SRS files and sync external files for all models in the deployment layer.
     """
@@ -290,7 +291,7 @@ def sync_models(role: Optional[Roles] = None):
 
 
 def download_external_files(
-    target_dir: Path, external_files: dict, role: Optional[Roles] = None
+    target_dir: Path, external_files: dict, role: Roles | None = None
 ):
     """
     Sync external files for a model based on its metadata.

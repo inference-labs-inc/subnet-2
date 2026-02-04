@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import base64
 import json
 import os
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import bittensor as bt
 import requests
@@ -35,7 +37,7 @@ def log_responses(
     overhead_time: float,
     block: int,
     scores: torch.Tensor,
-) -> Optional[requests.Response]:
+) -> requests.Response | None:
     """
     Log miner responses to the centralized logging server.
     """
@@ -89,7 +91,7 @@ def gc_log_eval_metrics(
     last_block: int,
     verification_ratio: float,
     hotkey: bt.Keypair,
-) -> Optional[requests.Response]:
+) -> requests.Response | None:
     """
     Log circuit evaluation metrics to the centralized logging server.
     """

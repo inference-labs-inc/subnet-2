@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import traceback
-from typing import Optional
 
 import bittensor as bt
 import httpx
@@ -25,7 +24,7 @@ class CircuitStore:
         self._api_url = CIRCUIT_API_URL
         self._cache_dir = CIRCUIT_CACHE_DIR
 
-    def load_circuits(self, deployment_layer_path: Optional[str] = None):
+    def load_circuits(self, deployment_layer_path: str | None = None):
         bt.logging.info("Loading circuits...")
 
         active_ids: set[str] | None = None
@@ -196,7 +195,7 @@ class CircuitStore:
 
     def _load_from_filesystem(
         self,
-        deployment_layer_path: Optional[str] = None,
+        deployment_layer_path: str | None = None,
         active_ids: set[str] | None = None,
     ):
         if deployment_layer_path is None:

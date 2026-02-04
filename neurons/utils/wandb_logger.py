@@ -2,6 +2,8 @@
 Safe methods for WandB logging
 """
 
+from __future__ import annotations
+
 import bittensor as bt
 import psutil
 import torch
@@ -9,7 +11,7 @@ import wandb
 import os
 import threading
 from queue import Queue
-from typing import Dict, Any
+from typing import Any
 
 ENTITY_NAME = "inferencelabs"
 PROJECT_NAME = "subnet-2"
@@ -108,7 +110,7 @@ def safe_init(name=None, wallet=None, metagraph=None, config=None):
         WANDB_ENABLED = False
 
 
-def safe_log(data: Dict[str, Any]):
+def safe_log(data: dict[str, Any]):
     """
     Safely log data to WandB
     - Ignores request to log if WandB isn't configured

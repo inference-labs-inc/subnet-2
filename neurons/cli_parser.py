@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import argparse
 import os
 import sys
-from typing import Optional
 
 from constants import (
     ONCHAIN_PROOF_OF_WEIGHTS_ENABLED,
@@ -25,8 +26,8 @@ elif "-h" in sys.argv:
 # flake8: noqa
 import bittensor as bt
 
-parser: Optional[argparse.ArgumentParser]
-config: Optional[bt.Config]
+parser: argparse.ArgumentParser | None
+config: bt.Config | None
 
 
 DESCRIPTION = {
@@ -35,7 +36,7 @@ DESCRIPTION = {
 }
 
 
-def init_config(role: Optional[str] = None):
+def init_config(role: str | None = None):
     """
     Initialize the configuration for the node.
     Config is based on CLI arguments, some of which are common to both miner and validator,
