@@ -218,12 +218,14 @@ class RelayManager:
             except Exception as e:
                 bt.logging.error(f"Error processing relay message: {e}")
                 traceback.print_exc()
-                # Send error response
+                request_id = None
+                with contextlib.suppress(Exception):
+                    request_id = json.loads(message).get("id")
                 error_response = json.dumps(
                     {
                         "jsonrpc": "2.0",
                         "error": {"code": -32603, "message": str(e)},
-                        "id": None,
+                        "id": request_id,
                     }
                 )
                 await ws.send(error_response)
