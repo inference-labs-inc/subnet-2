@@ -66,7 +66,7 @@ class AutoUpdate:
             response.raise_for_status()
             latest_release = response.json()
             return latest_release["tag_name"]
-        except requests.RequestException:
+        except (requests.RequestException, KeyError, ValueError):
             logging.exception("Failed to fetch the latest release from GitHub.")
             return None
 

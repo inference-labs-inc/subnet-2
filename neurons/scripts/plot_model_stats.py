@@ -64,7 +64,6 @@ def parse_args():
 def process_evaluation_data(
     eval_file: Path,
     model_id: str,
-    scores: list,
     circuit_name: str | None = None,
 ) -> dict | None:
     if not eval_file.exists():
@@ -109,12 +108,10 @@ def process_evaluation_data(
         return None
 
 
-def load_evaluation_data(models_path: Path, scores_path: Path) -> dict:
-
-    scores = load_scores(scores_path)
-
+def load_evaluation_data(models_path: Path) -> dict:
     model_stats = {}
-    circuit_names = load_circuit_names(os.path.join("neurons", "deployment_layer"))
+    neurons_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    circuit_names = load_circuit_names(os.path.join(neurons_dir, "deployment_layer"))
 
     for model_dir in models_path.glob("model_*"):
         model_id = model_dir.name.replace("model_", "")
@@ -124,7 +121,7 @@ def load_evaluation_data(models_path: Path, scores_path: Path) -> dict:
             print(f"Warning: No circuit found for model {model_id}")
             continue
 
-        stats = process_evaluation_data(eval_file, model_id, scores, circuit_name)
+        stats = process_evaluation_data(eval_file, model_id, circuit_name)
         if stats:
             model_stats[model_id] = stats
 
@@ -136,9 +133,9 @@ def load_evaluation_data(models_path: Path, scores_path: Path) -> dict:
 def create_scatter_plot(
     ax: plt.Axes,
     data: dict,
-    title: str = None,
+    title: str | None = None,
     score_plot: bool = False,
-    score_range: tuple = None,
+    score_range: tuple | None = None,
 ) -> None:
     if title == "Average Response Time Across All Models":
         ax.set_title(title, fontsize=14, pad=15, weight="bold")
@@ -289,7 +286,7 @@ def calculate_average_times(model_stats: dict, scores: list) -> dict:
 def plot_stats(models_path: Path, scores_path: Path) -> None:
     print(f"\nLoading model stats from {models_path}")
     scores = load_scores(scores_path)
-    model_stats = load_evaluation_data(models_path, scores_path)
+    model_stats = load_evaluation_data(models_path)
 
     if not model_stats:
         print("No evaluation data found")
