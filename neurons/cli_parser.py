@@ -338,4 +338,5 @@ def _validator_config():
             config.wallet.name = "validator"
         config.disable_statistic_logging = True
         # Use local relay URL for localnet
-        config.relay_url = "ws://localhost:8080"
+        if config.relay_url == SN2_RELAY_URL:
+            config.relay_url = "ws://localhost:8080"

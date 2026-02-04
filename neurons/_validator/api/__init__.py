@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import traceback
 from pathlib import Path
@@ -65,6 +66,7 @@ class RelayManager:
 
         # Queue for notifications to send when reconnected
         self._pending_notifications: list[dict] = []
+        self._task: asyncio.Task | None = None
 
     def start(self) -> None:
         """Start the WebSocket client connection (called from ValidatorLoop)."""
@@ -75,7 +77,15 @@ class RelayManager:
             return
 
         bt.logging.info("Starting SN2 Relay client...")
-        asyncio.create_task(self._run())
+        self._task = asyncio.create_task(self._run())
+        self._task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            bt.logging.error(f"Relay task failed with exception: {exc}")
 
     async def _run(self) -> None:
         """Main run loop with reconnection."""
@@ -111,13 +121,17 @@ class RelayManager:
                 self._connected.set()
                 self._reconnect_delay = RELAY_RECONNECT_BASE_DELAY
 
-                # Send any queued notifications from previous disconnection
-                await self._flush_pending_notifications()
+                await self._flush_pending_notifications(ws)
 
-                await asyncio.gather(
-                    self._message_loop(ws),
-                    self._notification_sender_loop(),
+                message_task = asyncio.create_task(self._message_loop(ws))
+                notify_task = asyncio.create_task(self._notification_sender_loop(ws))
+                done, pending = await asyncio.wait(
+                    {message_task, notify_task},
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
         except asyncio.TimeoutError as e:
             bt.logging.error(f"WS Connection timeout: {e}")
             raise
@@ -156,7 +170,15 @@ class RelayManager:
         if msg.get("type") != "auth_challenge":
             raise AuthenticationError(f"Expected auth_challenge, got {msg.get('type')}")
 
-        challenge_bytes = base64.b64decode(msg["challenge"])
+        try:
+            challenge_bytes = base64.b64decode(msg["challenge"], validate=True)
+        except Exception as e:
+            raise AuthenticationError("Invalid auth_challenge payload") from e
+
+        if len(challenge_bytes) != 40:
+            raise AuthenticationError(
+                f"Invalid auth_challenge length: {len(challenge_bytes)}"
+            )
 
         # Sign with validator's sr25519 keypair
         signature = self.config.wallet.hotkey.sign(challenge_bytes)
@@ -206,18 +228,22 @@ class RelayManager:
                 )
                 await ws.send(error_response)
 
-    async def _notification_sender_loop(self) -> None:
+    async def _notification_sender_loop(
+        self, ws: websockets.WebSocketClientProtocol
+    ) -> None:
         """Periodically flush queued notifications while connected."""
-        while self._should_run and self._ws:
-            await self._flush_pending_notifications()
+        while self._should_run and not ws.closed:
+            await self._flush_pending_notifications(ws)
             await asyncio.sleep(1)
 
-    async def _flush_pending_notifications(self) -> None:
+    async def _flush_pending_notifications(
+        self, ws: websockets.WebSocketClientProtocol
+    ) -> None:
         """Send any queued notifications after reconnecting."""
-        while self._pending_notifications and self._ws:
+        while self._pending_notifications and not ws.closed:
             notification = self._pending_notifications.pop(0)
             try:
-                await self._ws.send(json.dumps(notification))
+                await ws.send(json.dumps(notification))
                 bt.logging.info(
                     f"Sent queued notification: {notification.get('method')}"
                 )
@@ -338,9 +364,7 @@ class RelayManager:
             traceback.print_exc()
             return Error(9, "Request processing failed", str(e))
 
-    async def handle_dsperse_submit(
-        self, **params: dict[str, object]
-    ) -> dict[str, object]:
+    async def handle_dsperse_submit(self, **params: object) -> dict[str, object]:
         circuit_id = params.get("circuit_id")
         inputs = params.get("inputs")
 
@@ -356,12 +380,11 @@ class RelayManager:
 
             bt.logging.info(f"Starting DSperse run for circuit {circuit_id}")
 
-            loop = asyncio.get_event_loop()
-            run_uid, requests = await loop.run_in_executor(
-                None,
-                lambda: self.dsperse_manager.start_run(
-                    circuit, inputs, callback=self._on_run_complete
-                ),
+            run_uid, requests = await asyncio.to_thread(
+                self.dsperse_manager.start_run,
+                circuit,
+                inputs,
+                callback=self._on_run_complete,
             )
 
             for request in requests:
@@ -381,7 +404,7 @@ class RelayManager:
             traceback.print_exc()
             return Error(9, "DSperse submission failed", str(e))
 
-    async def handle_run_status(self, **params: dict[str, object]) -> dict[str, object]:
+    async def handle_run_status(self, **params: object) -> dict[str, object]:
         run_uid = params.get("run_uid")
 
         if not run_uid:
@@ -425,6 +448,10 @@ class RelayManager:
         bt.logging.info("Stopping SN2 Relay client...")
         self._should_run = False
         self._connected.clear()
+        if self._task:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
         if self._ws:
             try:
                 await self._ws.close()

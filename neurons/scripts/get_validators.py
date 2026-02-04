@@ -81,7 +81,7 @@ def get_validators(
             {
                 "ss58": neuron.hotkey,
                 "name": name,
-                "enabled": neuron.is_null is False and neuron.active,
+                "enabled": not neuron.is_null and neuron.active,
                 "url": url,
                 "github": github,
                 "image": image,
