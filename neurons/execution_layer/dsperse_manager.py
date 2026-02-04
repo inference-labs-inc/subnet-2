@@ -43,6 +43,7 @@ class DSliceData:
 class DsperseRun:
     run_uid: str
     circuit_id: str
+    run_dir: Path
     slices: dict[str, DSliceData] = field(default_factory=dict)
     pending: set[str] = field(default_factory=set)
     completed: set[str] = field(default_factory=set)
@@ -66,6 +67,25 @@ class DSperseManager:
             if circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION
         ]
         self.runs: dict[str, DsperseRun] = {}
+        self._purge_old_runs()
+
+    @staticmethod
+    def _purge_old_runs():
+        run_dir = Path(cli_parser.config.dsperse_run_dir)
+        if not run_dir.exists():
+            return
+        entries = list(run_dir.iterdir())
+        if not entries:
+            return
+        logging.info(f"Purging {len(entries)} old dsperse runs from {run_dir}")
+        for entry in entries:
+            try:
+                if entry.is_dir():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+            except Exception as e:
+                logging.warning(f"Failed to remove {entry}: {e}")
 
     def _get_circuit_by_id(self, circuit_id: str) -> Circuit:
         circuit = next((c for c in self.circuits if c.id == circuit_id), None)
@@ -89,8 +109,7 @@ class DSperseManager:
             f"Starting DSperse run for circuit {circuit.metadata.name}. Run UID: {run_uid}"
         )
 
-        run_dir = Path(cli_parser.config.dsperse_run_dir) / f"run_{run_uid}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = Path(tempfile.mkdtemp(prefix=f"dsperse_run_{run_uid}_"))
 
         input_json_path = run_dir / "input.json"
         if inputs is None:
@@ -98,12 +117,10 @@ class DSperseManager:
         with open(input_json_path, "w") as f:
             json.dump(inputs, f)
 
-        slice_copy = run_dir / "slices"
-        shutil.copytree(circuit.paths.base_path, slice_copy)
         runner = Runner(run_dir=run_dir, threads=os.cpu_count() or 4, batch=True)
         results = runner.run(
             input_json_path=input_json_path,
-            slice_path=str(slice_copy),
+            slice_path=str(circuit.paths.base_path),
         )
         actual_run_dir = runner.last_run_dir
         logging.debug(f"DSperse run completed. Results at {actual_run_dir}")
@@ -112,8 +129,7 @@ class DSperseManager:
         if not all(info.success for info in slice_results.values()):
             failed = [k for k, v in slice_results.items() if not v.success]
             logging.error(f"DSperse witness generation failed for slices: {failed}")
-            if actual_run_dir.exists():
-                shutil.rmtree(actual_run_dir)
+            shutil.rmtree(run_dir, ignore_errors=True)
             return run_uid, []
 
         slice_data_list = self._extract_dslice_data(
@@ -123,6 +139,7 @@ class DSperseManager:
         dsperse_run = DsperseRun(
             run_uid=run_uid,
             circuit_id=circuit.id,
+            run_dir=run_dir,
             slices={s.slice_num: s for s in slice_data_list},
             pending={s.slice_num for s in slice_data_list},
             callback=callback,
@@ -188,6 +205,7 @@ class DSperseManager:
                     run.callback(run)
                 except Exception as e:
                     logging.error(f"Run callback failed: {e}")
+            self.cleanup_run(run_uid)
 
         return run.is_complete
 
@@ -568,11 +586,8 @@ class DSperseManager:
         if run_uid not in self.runs:
             raise ValueError(f"Run {run_uid} not found.")
         run = self.runs[run_uid]
-        if run.slices:
-            first_slice = next(iter(run.slices.values()))
-            run_path = first_slice.input_file.parent.parent
-            if run_path.exists() and run_path.is_dir():
-                shutil.rmtree(run_path)
+        if run.run_dir.exists():
+            shutil.rmtree(run.run_dir)
         del self.runs[run_uid]
         logging.info(f"Cleaned up run {run_uid}")
 
