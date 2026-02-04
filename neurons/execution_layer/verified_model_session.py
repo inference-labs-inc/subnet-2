@@ -14,7 +14,6 @@ from execution_layer.proof_handlers.base_handler import ProofSystemHandler
 from execution_layer.proof_handlers.factory import ProofSystemFactory
 from execution_layer.session_storage import SessionStorage
 from execution_layer.base_input import BaseInput
-from execution_layer.generic_input import GenericInput
 
 # Ensure new processes do not copy the main process
 multiprocessing.set_start_method("fork", force=True)
@@ -116,7 +115,7 @@ class VerifiedModelSession:
         """
         return session.proof_handler.gen_proof(session)
 
-    def verify_proof(self, validator_inputs: GenericInput, proof: dict | str) -> bool:
+    def verify_proof(self, validator_inputs: BaseInput, proof: dict | str) -> bool:
         """
         Verify a proven inference.
         """
@@ -137,7 +136,7 @@ class VerifiedModelSession:
     @staticmethod
     def _verify_worker(
         session: VerifiedModelSession,
-        validator_inputs: GenericInput,
+        validator_inputs: BaseInput,
         proof: dict | str,
     ) -> bool:
         """

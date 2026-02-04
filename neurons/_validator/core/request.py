@@ -4,7 +4,7 @@ from typing import Any
 from _validator.models.base_rpc_request import QueuedRequestDataModel
 from _validator.models.request_type import RequestType
 from execution_layer.circuit import Circuit
-from execution_layer.generic_input import GenericInput
+from execution_layer.base_input import BaseInput
 
 
 @dataclass
@@ -22,7 +22,7 @@ class Request:
     request_type: RequestType
     circuit: Circuit | None = None
     data: dict[str, Any] | None = None
-    inputs: GenericInput | None = None
+    inputs: BaseInput | None = None
     dsperse_slice_num: int | None = None
     dsperse_run_uid: str | None = None
     # next one is used only for rescheduling DSlice and RWR requests in case of failure

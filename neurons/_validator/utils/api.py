@@ -1,8 +1,8 @@
 import hashlib
-from execution_layer.generic_input import GenericInput
+from execution_layer.base_input import BaseInput
 
 
-def hash_inputs(inputs: GenericInput | dict) -> str:
+def hash_inputs(inputs: BaseInput | dict) -> str:
     """
     Hashes inputs to proof of weights, excluding dynamic fields.
 
@@ -12,7 +12,7 @@ def hash_inputs(inputs: GenericInput | dict) -> str:
     Returns:
         str: The hashed inputs.
     """
-    if isinstance(inputs, GenericInput):
+    if isinstance(inputs, BaseInput):
         inputs = inputs.to_json()
     filtered_inputs = {
         k: v

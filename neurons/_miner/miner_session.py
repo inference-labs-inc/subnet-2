@@ -10,7 +10,7 @@ from _miner.server import MinerServer
 from bittensor.core.extrinsics.serving import serve_extrinsic
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.dsperse_manager import DSperseManager
-from execution_layer.generic_input import GenericInput
+from execution_layer.base_input import BaseInput
 from execution_layer.verified_model_session import VerifiedModelSession
 from fastapi.responses import JSONResponse
 from protocol import (
@@ -411,7 +411,7 @@ class MinerSession:
         try:
             bt.logging.info(f"Running proof generation for {circuit}")
             model_session = VerifiedModelSession(
-                GenericInput(RequestType.RWR, data.query_input), circuit
+                BaseInput(RequestType.RWR, data.query_input), circuit
             )
             bt.logging.debug("Model session created successfully")
             proof, public, proof_time = model_session.gen_proof()
@@ -479,7 +479,7 @@ class MinerSession:
         try:
             bt.logging.info(f"Running proof generation for {circuit}")
             model_session = VerifiedModelSession(
-                GenericInput(RequestType.RWR, data.inputs), circuit
+                BaseInput(RequestType.RWR, data.inputs), circuit
             )
 
             bt.logging.debug("Model session created successfully")

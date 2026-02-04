@@ -9,7 +9,7 @@ import bittensor as bt
 from constants import FIELD_MODULUS
 from utils.pre_flight import LOCAL_SNARKJS_PATH
 from execution_layer.proof_handlers.base_handler import ProofSystemHandler
-from execution_layer.generic_input import GenericInput
+from execution_layer.base_input import BaseInput
 
 if TYPE_CHECKING:
     from execution_layer.verified_model_session import VerifiedModelSession
@@ -105,7 +105,7 @@ class CircomHandler(ProofSystemHandler):
     def verify_proof(
         self,
         session: "VerifiedModelSession",
-        validator_inputs: GenericInput,
+        validator_inputs: BaseInput,
         proof: dict,
     ) -> bool:
         try:

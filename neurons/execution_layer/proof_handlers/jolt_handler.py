@@ -5,7 +5,7 @@ import traceback
 from typing import TYPE_CHECKING
 import bittensor as bt
 from execution_layer.proof_handlers.base_handler import ProofSystemHandler
-from execution_layer.generic_input import GenericInput
+from execution_layer.base_input import BaseInput
 
 if TYPE_CHECKING:
     from execution_layer.verified_model_session import VerifiedModelSession
@@ -53,7 +53,7 @@ class JoltHandler(ProofSystemHandler):
     def verify_proof(
         self,
         session: "VerifiedModelSession",
-        public_data: GenericInput,
+        public_data: BaseInput,
         proof: str,
     ) -> bool:
         try:

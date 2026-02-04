@@ -2,7 +2,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from execution_layer.generic_input import GenericInput
+from execution_layer.base_input import BaseInput
 
 if TYPE_CHECKING:
     from execution_layer.verified_model_session import VerifiedModelSession
@@ -39,7 +39,7 @@ class ProofSystemHandler(ABC):
     def verify_proof(
         self,
         session: VerifiedModelSession,
-        validator_inputs: GenericInput,
+        validator_inputs: BaseInput,
         proof: dict | str,
     ) -> bool:
         """
@@ -47,7 +47,7 @@ class ProofSystemHandler(ABC):
 
         Args:
             session (VerifiedModelSession): The current handler session.
-            validator_inputs (GenericInput): The validator inputs to verify the proof against.
+            validator_inputs (BaseInput): The validator inputs to verify the proof against.
             proof (dict | str): The proof to verify.
         """
 

@@ -4,7 +4,7 @@ import time
 
 import bittensor as bt
 from execution_layer.dsperse_manager import DSperseManager
-from execution_layer.generic_input import GenericInput
+from execution_layer.base_input import BaseInput
 from execution_layer.verified_model_session import VerifiedModelSession
 
 from _validator.core.exceptions import EmptyProofException, IncorrectProofException
@@ -86,7 +86,7 @@ class ResponseProcessor:
                 raise ValueError(f"Public signals not found for UID: {response.uid}")
             inference_session = VerifiedModelSession(
                 # hardcoded request type as RWR because we don't want to regenerate inputs
-                GenericInput(RequestType.RWR, response.public_json),
+                BaseInput(RequestType.RWR, response.public_json),
                 response.circuit,
             )
             res: bool = inference_session.verify_proof(

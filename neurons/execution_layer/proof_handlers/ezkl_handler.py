@@ -9,7 +9,7 @@ import ezkl
 from enum import Enum
 
 from execution_layer.proof_handlers.base_handler import ProofSystemHandler
-from execution_layer.generic_input import GenericInput
+from execution_layer.base_input import BaseInput
 
 if TYPE_CHECKING:
     from execution_layer.verified_model_session import VerifiedModelSession
@@ -86,7 +86,7 @@ class EZKLHandler(ProofSystemHandler):
     def verify_proof(
         self,
         session: VerifiedModelSession,
-        validator_inputs: GenericInput,
+        validator_inputs: BaseInput,
         proof: str | dict,
     ) -> bool:
         if not proof:
@@ -163,7 +163,7 @@ class EZKLHandler(ProofSystemHandler):
         return result.stdout
 
     def translate_inputs_to_instances(
-        self, session: VerifiedModelSession, validator_inputs: GenericInput
+        self, session: VerifiedModelSession, validator_inputs: BaseInput
     ) -> list[int]:
         scale_map = session.model.settings.get("model_input_scales", [])
         type_map = session.model.settings.get("input_types", [])

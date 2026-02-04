@@ -8,7 +8,7 @@ import bittensor as bt
 from bittensor.core.chain_data import AxonInfo
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.circuit import Circuit, CircuitType
-from execution_layer.generic_input import GenericInput
+from execution_layer.base_input import BaseInput
 from protocol import (
     DSliceProofGenerationDataModel,
     ProofOfWeightsDataModel,
@@ -83,7 +83,7 @@ class RequestPipeline:
             request_type=request_type,
             # 'inputs' are used for verification later on validator side:
             #   I suppose `RWR` passed here to prevent new data generation
-            inputs=GenericInput(RequestType.RWR, input_data),
+            inputs=BaseInput(RequestType.RWR, input_data),
             external_request_hash=external_request_hash,
             guard_hash=guard_hash,
             save=save,
