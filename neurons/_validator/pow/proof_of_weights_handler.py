@@ -32,11 +32,9 @@ def prepare_pow_request(
     )
 
     logging.info(f"Preparing PoW request for {str(circuit)}")
+    request = _create_request_from_items(circuit, pow_items)
     pow_manager.remove_processed_items(POW_BATCH_SIZE)
-    return (
-        _create_request_from_items(circuit, pow_items),
-        True,
-    )
+    return request, True
 
 
 def _create_request_from_items(
