@@ -18,7 +18,7 @@ class MinerResponse:
     uid: int
     verification_result: bool
     # hash of the original request from external API user
-    # we use it to report back results to `ValidatorAPI`` class. It sends the results to the user.
+    # we use it to report back results to `RelayManager` class. It sends the results to the user.
     external_request_hash: str
     response_time: float
     proof_size: int

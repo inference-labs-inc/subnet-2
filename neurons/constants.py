@@ -161,6 +161,7 @@ CIRCUIT_API_URL = os.getenv("CIRCUIT_API_URL", "https://repository.inferencelabs
 CIRCUIT_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".bittensor", "subnet-2", "circuit_cache"
 )
+
 CIRCUIT_METADATA_FILENAME = "circuit_metadata.json"
 
 INPUT_SCHEMA_TENSOR = "tensor"
@@ -174,3 +175,12 @@ HEADER_NETUID = "x-netuid"
 RUN_STATUS_PROCESSING = "processing"
 RUN_STATUS_COMPLETED = "completed"
 RUN_STATUS_COMPLETED_WITH_ERRORS = "completed_with_errors"
+
+SN2_RELAY_URL = os.getenv("SN2_RELAY_URL", "wss://sn2-relay.inferencelabs.com:8443")
+
+RELAY_RECONNECT_BASE_DELAY = 1
+RELAY_RECONNECT_MAX_DELAY = 60
+RELAY_AUTH_TIMEOUT = 10
+RELAY_OPEN_TIMEOUT = 20
+RELAY_PING_INTERVAL = 20
+RELAY_PING_TIMEOUT = 20
