@@ -55,7 +55,6 @@ class RelayManager:
         self.pending_requests: dict[str, asyncio.Event] = {}
         self.request_results: dict[str, dict] = {}
         self.is_testnet = config.bt_config.subtensor.network == "test"
-        self.active_runs: dict[str, DsperseRun] = {}
         self.dsperse_manager: DSperseManager | None = None
 
         # WebSocket client state
@@ -115,10 +114,9 @@ class RelayManager:
                 # Send any queued notifications from previous disconnection
                 await self._flush_pending_notifications()
 
-                # Run message loop and batch monitor concurrently
                 await asyncio.gather(
                     self._message_loop(ws),
-                    self._batch_monitor_loop(),
+                    self._notification_sender_loop(),
                 )
         except asyncio.TimeoutError as e:
             bt.logging.error(f"WS Connection timeout: {e}")
@@ -208,60 +206,11 @@ class RelayManager:
                 )
                 await ws.send(error_response)
 
-    async def _batch_monitor_loop(self) -> None:
-        """Monitor batches and send completion notifications."""
+    async def _notification_sender_loop(self) -> None:
+        """Periodically flush queued notifications while connected."""
         while self._should_run and self._ws:
-            try:
-                for batch_id, batch_run in list(self.active_runs.items()):
-                    if self._is_batch_complete(batch_run):
-                        await self._send_batch_completion(batch_id, batch_run)
-            except Exception as e:
-                bt.logging.error(f"Error in batch monitor: {e}")
-                traceback.print_exc()
+            await self._flush_pending_notifications()
             await asyncio.sleep(1)
-
-    def _is_batch_complete(self, batch_run: DsperseRun) -> bool:
-        """Check if all slices in a batch are complete (success or failed)."""
-        if not self.dsperse_manager:
-            return False
-        progress = self.dsperse_manager.get_run_status(batch_run.run_uid)
-        total = progress["total_slices"]
-        done = progress["completed"] + progress["failed"]
-        return total > 0 and done >= total
-
-    async def _send_batch_completion(
-        self, batch_id: str, batch_run: DsperseRun
-    ) -> None:
-        """Send batch completion notification with proofs."""
-        proofs = self._collect_batch_proofs(batch_run)
-        progress = self.dsperse_manager.get_run_status(batch_run.run_uid)
-
-        notification = {
-            "jsonrpc": "2.0",
-            "method": "subnet-2.batch_completed",
-            "params": {
-                "batch_id": batch_id,
-                "status": (
-                    "completed" if not batch_run.failed else "completed_with_errors"
-                ),
-                "proofs": proofs,
-                "progress": progress,
-            },
-        }
-
-        if self._ws and self._connected.is_set():
-            try:
-                await self._ws.send(json.dumps(notification))
-                bt.logging.success(f"Sent batch completion for {batch_id}")
-            except Exception as e:
-                bt.logging.warning(f"Failed to send completion, queueing: {e}")
-                self._pending_notifications.append(notification)
-        else:
-            # Queue for when we reconnect
-            bt.logging.info(f"Queueing batch completion for {batch_id} (disconnected)")
-            self._pending_notifications.append(notification)
-
-        self._cleanup_batch(batch_id, batch_run)
 
     async def _flush_pending_notifications(self) -> None:
         """Send any queued notifications after reconnecting."""
@@ -277,27 +226,39 @@ class RelayManager:
                 self._pending_notifications.insert(0, notification)
                 break
 
-    def _collect_batch_proofs(self, batch_run: DsperseRun) -> list[dict]:
-        """Collect all generated proofs from a completed batch."""
+    def _on_run_complete(self, run: DsperseRun) -> None:
+        """Callback invoked by DSperseManager when all slices finish (before cleanup)."""
         proofs = []
-        for frame_idx, frame_result in batch_run.frame_results.items():
-            if not frame_result.success:
+        for slice_num, slice_data in run.slices.items():
+            if not slice_data.success:
                 continue
-            for slice_data in frame_result.slices:
-                if slice_data.proof_file and slice_data.proof_file.exists():
-                    proof_content = self._read_proof_file(
-                        slice_data.proof_file, slice_data.proof_system
+            if slice_data.proof_file and slice_data.proof_file.exists():
+                proof_content = self._read_proof_file(
+                    slice_data.proof_file, slice_data.proof_system
+                )
+                if proof_content is not None:
+                    proofs.append(
+                        {
+                            "slice_num": slice_data.slice_num,
+                            "proof_system": slice_data.proof_system.value,
+                            "proof": proof_content,
+                        }
                     )
-                    if proof_content is not None:
-                        proofs.append(
-                            {
-                                "frame_idx": frame_idx,
-                                "slice_num": slice_data.slice_num,
-                                "proof_system": slice_data.proof_system.value,
-                                "proof": proof_content,
-                            }
-                        )
-        return proofs
+
+        notification = {
+            "jsonrpc": "2.0",
+            "method": "subnet-2.batch_completed",
+            "params": {
+                "run_uid": run.run_uid,
+                "circuit_id": run.circuit_id,
+                "status": "completed" if not run.failed else "completed_with_errors",
+                "proofs": proofs,
+                "completed": len(run.completed),
+                "failed": len(run.failed),
+                "total": len(run.slices),
+            },
+        }
+        self._pending_notifications.append(notification)
 
     def _read_proof_file(
         self, proof_file: Path, proof_system: ProofSystem
@@ -313,19 +274,6 @@ class RelayManager:
         except Exception as e:
             bt.logging.error(f"Error reading proof file {proof_file}: {e}")
             return None
-
-    def _cleanup_batch(self, batch_id: str, batch_run: DsperseRun) -> None:
-        """Clean up a completed batch."""
-        del self.active_runs[batch_id]
-        if self.dsperse_manager:
-            for frame_result in batch_run.frame_results.values():
-                try:
-                    self.dsperse_manager.cleanup_run(frame_result.run_uid)
-                except ValueError:
-                    bt.logging.debug(
-                        f"Run {frame_result.run_uid} already cleaned up or not found"
-                    )
-        bt.logging.info(f"Batch {batch_id} completed and cleaned up")
 
     async def handle_proof_of_computation(self, **params: dict) -> dict:
         """
@@ -411,7 +359,9 @@ class RelayManager:
             loop = asyncio.get_event_loop()
             run_uid, requests = await loop.run_in_executor(
                 None,
-                lambda: self.dsperse_manager.start_run(circuit, inputs),
+                lambda: self.dsperse_manager.start_run(
+                    circuit, inputs, callback=self._on_run_complete
+                ),
             )
 
             for request in requests:

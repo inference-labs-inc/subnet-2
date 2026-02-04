@@ -52,7 +52,7 @@ class DsperseRun:
 
     @property
     def is_complete(self) -> bool:
-        return len(self.pending) == 0 and len(self.completed) + len(self.failed) > 0
+        return len(self.pending) == 0
 
     @property
     def all_successful(self) -> bool:
