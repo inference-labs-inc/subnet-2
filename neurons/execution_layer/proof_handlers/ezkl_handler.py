@@ -172,8 +172,3 @@ class EZKLHandler(ProofSystemHandler):
             for i, arr in enumerate(validator_inputs.to_array())
             for x in arr
         ]
-
-    def aggregate_proofs(
-        self, session: VerifiedModelSession, proofs: list[str]
-    ) -> tuple[str, float]:
-        raise NotImplementedError("Proof aggregation not supported at this time.")

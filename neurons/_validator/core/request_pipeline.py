@@ -19,7 +19,7 @@ from _validator.api import ValidatorAPI
 from _validator.config import ValidatorConfig
 from _validator.core.request import Request
 from _validator.models.request_type import RequestType
-from _validator.pow.proof_of_weights_handler import ProofOfWeightsHandler
+from _validator.pow.proof_of_weights_handler import prepare_pow_request
 from _validator.scoring.score_manager import ScoreManager
 from _validator.utils.hash_guard import HashGuard
 from constants import (
@@ -201,9 +201,7 @@ class RequestPipeline:
             SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
             BATCHED_PROOF_OF_WEIGHTS_MODEL_ID,
         ]:
-            request_data, save = ProofOfWeightsHandler.prepare_pow_request(
-                circuit, self.score_manager
-            )
+            request_data, save = prepare_pow_request(circuit, self.score_manager)
             if request_data:
                 return request_data, save
         if circuit.metadata.type == CircuitType.PROOF_OF_COMPUTATION:

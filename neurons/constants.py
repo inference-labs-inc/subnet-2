@@ -48,8 +48,6 @@ MAX_CONCURRENT_REQUESTS = 128
 DEFAULT_PROOF_SIZE = 5000
 # Size in percent of the sample to be used for the maximum score median
 MAXIMUM_SCORE_MEDIAN_SAMPLE = 0.05
-# Shift in seconds to apply to the minimum response time for vertical asymptote adjustment
-MINIMUM_SCORE_SHIFT = 0.0
 # Weights version hyperparameter
 WEIGHTS_VERSION = 11002
 # Rate limit for weight updates
@@ -70,25 +68,16 @@ STEAK = "🥩"
 FIELD_MODULUS = (
     21888242871839275222246405745257275088548364400416034343698204186575808495617
 )
-# Subnet tempo for epochs
-EPOCH_TEMPO = 360
 # Whether on-chain proof of weights is enabled by default
 ONCHAIN_PROOF_OF_WEIGHTS_ENABLED = False
 # Frequency in terms of blocks at which proof of weights are posted
 PROOF_OF_WEIGHTS_INTERVAL = 1000
-# Maximum number of proofs to log at once
-MAX_PROOFS_TO_LOG = 0
-# Era period for proof of weights (mortality of the pow log)
-PROOF_OF_WEIGHTS_LIFESPAN = 2
 # Active competition
 ACTIVE_COMPETITION = 0
 # Frequency in terms of seconds at which the competition is synced and evaluated
 COMPETITION_SYNC_INTERVAL = 60 * 60 * 24
 # Maximum signature lifespan for WebSocket requests
 MAX_SIGNATURE_LIFESPAN = 300
-# Whitelisted public keys (ss58 addresses) we accept external requests from by default
-# (even if an address is not in the metagraph)
-WHITELISTED_PUBLIC_KEYS = []
 # Mainnet <> Testnet UID mapping
 MAINNET_TESTNET_UIDS = [
     (1, 61),  # apex
@@ -164,21 +153,11 @@ ONE_YEAR = ONE_DAY * 365
 # Temporary folder for storing proof files
 TEMP_FOLDER = "/tmp/subnet-2"
 
-# Queue size limits
-MAX_POW_QUEUE_SIZE = 1024
 MAX_EVALUATION_ITEMS = 1024
 
 # Maximum circuit size in GB for competitions
 MAX_CIRCUIT_SIZE_GB = 50
-# EMA boost factor
-EMA_BOOST_FACTOR = 1.2
-# EMA enabled flag
-EMA_ENABLED = False
-
 CIRCUIT_API_URL = os.getenv("CIRCUIT_API_URL", "https://repository.inferencelabs.com")
-CIRCUIT_R2_BASE_URL = os.getenv(
-    "CIRCUIT_R2_BASE_URL", "https://dsperse.inferencelabs.com"
-)
 CIRCUIT_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".bittensor", "subnet-2", "circuit_cache"
 )

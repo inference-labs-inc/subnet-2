@@ -62,15 +62,3 @@ class ProofSystemHandler(ABC):
             session (VerifiedModelSession): The current handler session.
             return_content (bool): Whether to return the witness content.
         """
-
-    @abstractmethod
-    def aggregate_proofs(
-        self, session: VerifiedModelSession, proofs: list[str]
-    ) -> tuple[str, float]:
-        """
-        Aggregate multiple proofs into a single proof for the given session.
-
-        Returns:
-            tuple[str, float]: A tuple containing the aggregated proof content (str)
-            and the time taken to aggregate the proofs (float).
-        """

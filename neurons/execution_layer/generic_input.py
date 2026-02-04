@@ -12,6 +12,18 @@ from constants import ONE_MINUTE
 from execution_layer.base_input import BaseInput
 
 
+class GenericInputFactory:
+    def __init__(self, input_schema: dict):
+        self.input_schema = input_schema
+        self.schema = create_schema_from_metadata(input_schema)
+
+    def __call__(self, request_type, data=None):
+        return GenericInputHandler(request_type, data, input_schema=self.input_schema)
+
+    def __reduce__(self):
+        return (GenericInputFactory, (self.input_schema,))
+
+
 class TensorInputSchema(BaseModel):
     input_data: list
 

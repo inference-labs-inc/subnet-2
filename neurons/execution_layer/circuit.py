@@ -11,8 +11,7 @@ import torch
 
 # trunk-ignore(pylint/E0611)
 from bittensor import Wallet, logging, Subtensor
-from execution_layer.base_input import BaseInput
-from execution_layer.input_registry import InputRegistry
+from execution_layer.generic_input import GenericInputFactory
 
 import cli_parser
 from constants import (
@@ -432,9 +431,9 @@ class Circuit:
                     f"Failed to load required settings for circuit {self.id} "
                     f"at {self.paths.settings}"
                 ) from e
-        self.input_handler: BaseInput = InputRegistry.get_handler(
-            self.id, metadata=self.metadata
-        )
+        if not self.metadata.input_schema:
+            raise ValueError(f"No input schema found for circuit {self.id}")
+        self.input_handler = GenericInputFactory(self.metadata.input_schema)
 
     def __str__(self):
         return (

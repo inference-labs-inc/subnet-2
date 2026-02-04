@@ -92,7 +92,7 @@ class JoltHandler(ProofSystemHandler):
             return False
         except Exception as e:
             bt.logging.error(f"Unexpected error during proof verification: {e}")
-            bt.logging.error(f"Error traceback: {traceback.format_exc()}")
+            traceback.print_exc()
             return False
 
     @staticmethod
@@ -129,11 +129,3 @@ class JoltHandler(ProofSystemHandler):
             bt.logging.error(f"Proof generation stdout: {e.stdout}")
             bt.logging.error(f"Proof generation stderr: {e.stderr}")
             raise
-
-    @staticmethod
-    def aggregate_proofs(
-        session: "VerifiedModelSession", proofs: list[str]
-    ) -> tuple[str, float]:
-        raise NotImplementedError(
-            "Aggregation of proofs is not implemented for JoltHandler"
-        )

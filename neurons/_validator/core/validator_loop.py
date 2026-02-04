@@ -35,7 +35,7 @@ from _validator.core.response_processor import ResponseProcessor
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.miner_response import MinerResponse
 from _validator.models.request_type import RequestType
-from _validator.pow.proof_of_weights_handler import ProofOfWeightsHandler
+from _validator.pow.proof_of_weights_handler import POW_BATCH_SIZE
 from _validator.scoring.score_manager import ScoreManager
 from _validator.scoring.weights import WeightsManager
 from _validator.utils.logging import log_responses as console_log_responses
@@ -124,18 +124,19 @@ class ValidatorLoop:
         if self.config.bt_config.prometheus_monitoring:
             start_prometheus_logging(self.config.bt_config.prometheus_port)
 
+    async def _run_in_thread(self, fn, *, timeout: float):
+        return await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(self.thread_pool, fn),
+            timeout=timeout,
+        )
+
     @with_rate_limit(period=ONE_MINUTE)
     async def update_weights(self):
         start_time = time.time()
         try:
-            # Run blocking blockchain call in thread pool with timeout
-            await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    self.thread_pool,
-                    self.weights_manager.update_weights,
-                    self.score_manager.scores,
-                ),
-                timeout=120.0,  # 2 minute timeout
+            await self._run_in_thread(
+                lambda: self.weights_manager.update_weights(self.score_manager.scores),
+                timeout=120.0,
             )
             duration = time.time() - start_time
             log_weight_update(duration, success=True)
@@ -150,13 +151,11 @@ class ValidatorLoop:
     @with_rate_limit(period=ONE_HOUR)
     async def sync_scores_uids(self):
         try:
-            await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    self.thread_pool,
-                    self.score_manager.sync_scores_uids,
-                    self.config.metagraph.uids.tolist(),
+            await self._run_in_thread(
+                lambda: self.score_manager.sync_scores_uids(
+                    self.config.metagraph.uids.tolist()
                 ),
-                timeout=60.0,  # 1 minute timeout
+                timeout=60.0,
             )
         except asyncio.TimeoutError:
             bt.logging.error("sync_scores_uids timed out after 60 seconds")
@@ -166,12 +165,9 @@ class ValidatorLoop:
     @with_rate_limit(period=ONE_HOUR)
     async def sync_metagraph(self):
         try:
-            await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    self.thread_pool,
-                    lambda: self.config.metagraph.sync(subtensor=self.config.subtensor),
-                ),
-                timeout=120.0,  # 2 minute timeout
+            await self._run_in_thread(
+                lambda: self.config.metagraph.sync(subtensor=self.config.subtensor),
+                timeout=120.0,
             )
         except asyncio.TimeoutError:
             bt.logging.error("sync_metagraph timed out after 120 seconds")
@@ -278,7 +274,7 @@ class ValidatorLoop:
                 pow_circuit = None
                 if (
                     len(self.score_manager.pow_manager.proof_of_weights_queue)
-                    >= ProofOfWeightsHandler.BATCH_SIZE
+                    >= POW_BATCH_SIZE
                 ):
                     loop = asyncio.get_event_loop()
                     pow_circuit = await loop.run_in_executor(

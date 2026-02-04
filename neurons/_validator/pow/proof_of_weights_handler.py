@@ -7,64 +7,56 @@ from constants import (
 from protocol import ProofOfWeightsDataModel, QueryZkProof
 from _validator.models.request_type import RequestType
 
+POW_BATCH_SIZE = 1024
 
-class ProofOfWeightsHandler:
-    """
-    Handles internal proof of weights
-    This covers the case where the origin validator is a validator on Subnet 2;
-    no external requests are needed as this internal mechanism is used to generate the proof of weights.
-    """
 
-    BATCH_SIZE = 1024
+def prepare_pow_request(
+    circuit: Circuit, score_manager
+) -> tuple[ProofOfWeightsDataModel | QueryZkProof | None, bool]:
+    pow_manager = score_manager.get_pow_manager()
+    queue = pow_manager.get_pow_queue()
 
-    @staticmethod
-    def prepare_pow_request(
-        circuit: Circuit, score_manager
-    ) -> tuple[ProofOfWeightsDataModel | QueryZkProof | None, bool]:
-        pow_manager = score_manager.get_pow_manager()
-        queue = pow_manager.get_pow_queue()
+    if circuit.id != BATCHED_PROOF_OF_WEIGHTS_MODEL_ID:
+        logging.debug("Not a batched PoW model. Defaulting to benchmark.")
+        return None, False
 
-        if circuit.id != BATCHED_PROOF_OF_WEIGHTS_MODEL_ID:
-            logging.debug("Not a batched PoW model. Defaulting to benchmark.")
-            return None, False
-
-        if len(queue) < ProofOfWeightsHandler.BATCH_SIZE:
-            logging.debug(
-                f"Queue is less than {ProofOfWeightsHandler.BATCH_SIZE} items. Defaulting to benchmark."
-            )
-            return None, False
-
-        pow_items = ProofOfWeightsItem.pad_items(
-            queue[: ProofOfWeightsHandler.BATCH_SIZE],
-            target_item_count=ProofOfWeightsHandler.BATCH_SIZE,
+    if len(queue) < POW_BATCH_SIZE:
+        logging.debug(
+            f"Queue is less than {POW_BATCH_SIZE} items. Defaulting to benchmark."
         )
+        return None, False
 
-        logging.info(f"Preparing PoW request for {str(circuit)}")
-        pow_manager.remove_processed_items(ProofOfWeightsHandler.BATCH_SIZE)
-        return (
-            ProofOfWeightsHandler._create_request_from_items(circuit, pow_items),
-            True,
+    pow_items = ProofOfWeightsItem.pad_items(
+        queue[:POW_BATCH_SIZE],
+        target_item_count=POW_BATCH_SIZE,
+    )
+
+    logging.info(f"Preparing PoW request for {str(circuit)}")
+    pow_manager.remove_processed_items(POW_BATCH_SIZE)
+    return (
+        _create_request_from_items(circuit, pow_items),
+        True,
+    )
+
+
+def _create_request_from_items(
+    circuit: Circuit, pow_items: list[ProofOfWeightsItem]
+) -> ProofOfWeightsDataModel | QueryZkProof:
+    inputs = circuit.input_handler(
+        RequestType.RWR, ProofOfWeightsItem.to_dict_list(pow_items)
+    ).to_json()
+
+    if circuit.metadata.type == CircuitType.PROOF_OF_WEIGHTS:
+        return ProofOfWeightsDataModel(
+            subnet_uid=circuit.metadata.netuid,
+            verification_key_hash=circuit.id,
+            proof_system=circuit.proof_system,
+            inputs=inputs,
+            proof="",
+            public_signals="",
         )
-
-    @staticmethod
-    def _create_request_from_items(
-        circuit: Circuit, pow_items: list[ProofOfWeightsItem]
-    ) -> ProofOfWeightsDataModel | QueryZkProof:
-        inputs = circuit.input_handler(
-            RequestType.RWR, ProofOfWeightsItem.to_dict_list(pow_items)
-        ).to_json()
-
-        if circuit.metadata.type == CircuitType.PROOF_OF_WEIGHTS:
-            return ProofOfWeightsDataModel(
-                subnet_uid=circuit.metadata.netuid,
-                verification_key_hash=circuit.id,
-                proof_system=circuit.proof_system,
-                inputs=inputs,
-                proof="",
-                public_signals="",
-            )
-        return QueryZkProof(
-            query_input=inputs,
-            model_id=circuit.id,
-            query_output="",
-        )
+    return QueryZkProof(
+        query_input=inputs,
+        model_id=circuit.id,
+        query_output="",
+    )

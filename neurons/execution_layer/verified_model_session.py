@@ -91,12 +91,6 @@ class VerifiedModelSession:
             traceback.print_exc()
             raise
 
-    def aggregate_proofs(self, proofs: list[str]) -> tuple[str, float]:
-        """
-        Aggregate multiple proofs into a single proof.
-        """
-        return self.proof_handler.aggregate_proofs(self, proofs)
-
     @staticmethod
     def _proof_worker(session: VerifiedModelSession) -> tuple[str, str]:
         """

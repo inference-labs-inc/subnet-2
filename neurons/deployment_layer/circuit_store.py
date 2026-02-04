@@ -20,21 +20,10 @@ from execution_layer.circuit import Circuit, CircuitMetadata, CircuitType
 
 
 class CircuitStore:
-    _instance = None
-
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
-            cls._instance = super(CircuitStore, cls).__new__(cls, *args, **kwargs)
-            cls._instance._initialized = False
-        return cls._instance
-
     def __init__(self):
-        if self._initialized:
-            return
         self.circuits: dict[str, Circuit] = {}
         self._api_url = CIRCUIT_API_URL
         self._cache_dir = CIRCUIT_CACHE_DIR
-        self._initialized = True
 
     def load_circuits(self, deployment_layer_path: Optional[str] = None):
         bt.logging.info("Loading circuits...")

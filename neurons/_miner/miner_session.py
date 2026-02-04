@@ -1,4 +1,3 @@
-# from __future__ import annotations
 import json
 import os
 import time
@@ -174,8 +173,9 @@ class MinerSession:
                     self.server.stop()
                 clean_temp_files()
                 break
-            except Exception:
-                bt.logging.error(traceback.format_exc())
+            except Exception as e:
+                bt.logging.error(f"Error in main loop: {e}")
+                traceback.print_exc()
                 continue
 
     def check_register(self, should_exit=False):
@@ -232,6 +232,20 @@ class MinerSession:
             traceback.print_exc()
             bt.logging.error(f"Error initializing circuit manager: {e}")
             self.circuit_manager = None
+
+    def _load_circuit(self, model_id: str):
+        try:
+            circuit = circuit_store.ensure_circuit(model_id)
+        except (ValueError, KeyError) as e:
+            bt.logging.warning(f"Invalid circuit ID {model_id}: {e}")
+            return None, JSONResponse(
+                content=f"Invalid circuit ID: {model_id}", status_code=422
+            )
+        except Exception as e:
+            bt.logging.error(f"Server error loading circuit {model_id}: {e}")
+            traceback.print_exc()
+            return None, JSONResponse(content="Internal server error", status_code=500)
+        return circuit, None
 
     @with_rate_limit(period=ONE_HOUR)
     def sync_metagraph(self):
@@ -382,17 +396,9 @@ class MinerSession:
 
         model_id = str(data.model_id or SINGLE_PROOF_OF_WEIGHTS_MODEL_ID)
 
-        try:
-            circuit = circuit_store.ensure_circuit(model_id)
-        except (ValueError, KeyError) as e:
-            bt.logging.warning(f"Invalid circuit ID {model_id}: {e}")
-            return JSONResponse(
-                content=f"Invalid circuit ID: {model_id}", status_code=422
-            )
-        except Exception as e:
-            bt.logging.error(f"Server error loading circuit {model_id}: {e}")
-            traceback.print_exc()
-            return JSONResponse(content="Internal server error", status_code=500)
+        circuit, error = self._load_circuit(model_id)
+        if error:
+            return error
 
         if not circuit:
             bt.logging.warning(f"Circuit not found: {model_id}")
@@ -465,17 +471,9 @@ class MinerSession:
             )
         response = {}
         model_id = str(data.verification_key_hash)
-        try:
-            circuit = circuit_store.ensure_circuit(model_id)
-        except (ValueError, KeyError) as e:
-            bt.logging.warning(f"Invalid circuit ID {model_id}: {e}")
-            return JSONResponse(
-                content=f"Invalid circuit ID: {model_id}", status_code=422
-            )
-        except Exception as e:
-            bt.logging.error(f"Server error loading circuit {model_id}: {e}")
-            traceback.print_exc()
-            return JSONResponse(content="Internal server error", status_code=500)
+        circuit, error = self._load_circuit(model_id)
+        if error:
+            return error
 
         circuit_timeout = circuit.timeout
         try:

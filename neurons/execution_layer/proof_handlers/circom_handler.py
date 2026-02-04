@@ -201,11 +201,3 @@ class CircomHandler(ProofSystemHandler):
             bt.logging.error(f"Proof generation stdout: {e.stdout}")
             bt.logging.error(f"Proof generation stderr: {e.stderr}")
             raise
-
-    @staticmethod
-    def aggregate_proofs(
-        session: "VerifiedModelSession", proofs: list[str]
-    ) -> tuple[str, float]:
-        raise NotImplementedError(
-            "Aggregation of proofs is not implemented for CircomHandler"
-        )

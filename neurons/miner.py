@@ -26,7 +26,6 @@ if __name__ == "__main__":
         miner_session = MinerSession()
         bt.logging.debug("Running main loop...")
         miner_session.run()
-    except Exception:
-        bt.logging.error(
-            f"CRITICAL: Failed to run miner session\n{traceback.format_exc()}"
-        )
+    except Exception as e:
+        bt.logging.error(f"CRITICAL: Failed to run miner session: {e}")
+        traceback.print_exc()
