@@ -26,9 +26,16 @@ from _validator.models.pow_rpc_request import ProofOfWeightsRPCRequest
 from _validator.models.base_rpc_request import QueuedRequestDataModel
 import hashlib
 from constants import (
+    HEADER_NETUID,
+    HEADER_ORIGIN_SS58,
+    HEADER_SIGNATURE,
+    HEADER_TIMESTAMP,
     MAX_SIGNATURE_LIFESPAN,
     MAINNET_TESTNET_UIDS,
     EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
+    RUN_STATUS_PROCESSING,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_COMPLETED_WITH_ERRORS,
 )
 from _validator.config import ValidatorConfig
 import base64
@@ -211,7 +218,7 @@ class ValidatorAPI:
 
             pps_url = TESTNET_PPS_URL if self.is_testnet else PPS_URL
 
-            hotkey_ss58 = headers.get("x-origin-ss58")
+            hotkey_ss58 = headers.get(HEADER_ORIGIN_SS58)
             if not hotkey_ss58:
                 bt.logging.error("No hotkey found in headers")
                 return None
@@ -250,9 +257,9 @@ class ValidatorAPI:
     async def handle_proof_of_weights(
         self, websocket: WebSocket, **params: dict[str, object]
     ) -> dict[str, object]:
-        if not websocket.headers.get("x-netuid"):
+        if not websocket.headers.get(HEADER_NETUID):
             return InvalidParams(
-                "Missing x-netuid header (required for proof of weights requests)"
+                f"Missing {HEADER_NETUID} header (required for proof of weights requests)"
             )
 
         evaluation_data = params.get("evaluation_data")
@@ -262,9 +269,9 @@ class ValidatorAPI:
             return InvalidParams("Missing evaluation data")
 
         try:
-            netuid = websocket.headers.get("x-netuid")
+            netuid = websocket.headers.get(HEADER_NETUID)
             if netuid is None:
-                return InvalidParams("Missing x-netuid header")
+                return InvalidParams(f"Missing {HEADER_NETUID} header")
 
             if self.is_testnet:
                 testnet_uids = [
@@ -413,7 +420,11 @@ class ValidatorAPI:
             )
 
             return Success(
-                {"run_uid": run_uid, "status": "processing", "progress": status}
+                {
+                    "run_uid": run_uid,
+                    "status": RUN_STATUS_PROCESSING,
+                    "progress": status,
+                }
             )
 
         except Exception as e:
@@ -439,11 +450,13 @@ class ValidatorAPI:
         try:
             if status["is_complete"]:
                 run_status = (
-                    "completed" if status["all_successful"] else "completed_with_errors"
+                    RUN_STATUS_COMPLETED
+                    if status["all_successful"]
+                    else RUN_STATUS_COMPLETED_WITH_ERRORS
                 )
                 self._cleanup_run(run_uid)
             else:
-                run_status = "processing"
+                run_status = RUN_STATUS_PROCESSING
 
             return Success(
                 {"run_uid": run_uid, "status": run_status, "progress": status}
@@ -509,7 +522,7 @@ class ValidatorAPI:
         self.ws_manager.active_connections.clear()
 
     async def validate_connection(self, headers) -> bool:
-        required_headers = ["x-timestamp", "x-origin-ss58", "x-signature"]
+        required_headers = [HEADER_TIMESTAMP, HEADER_ORIGIN_SS58, HEADER_SIGNATURE]
         if not all(header in headers for header in required_headers):
             bt.logging.warning(
                 f"Incoming request is missing required headers: {required_headers}"
@@ -517,7 +530,7 @@ class ValidatorAPI:
             return False
 
         try:
-            timestamp = int(headers["x-timestamp"])
+            timestamp = int(headers[HEADER_TIMESTAMP])
             current_time = time.time()
             if current_time - timestamp > MAX_SIGNATURE_LIFESPAN:
                 bt.logging.warning(
@@ -525,8 +538,8 @@ class ValidatorAPI:
                 )
                 return False
 
-            ss58_address = headers["x-origin-ss58"]
-            signature = base64.b64decode(headers["x-signature"])
+            ss58_address = headers[HEADER_ORIGIN_SS58]
+            signature = base64.b64decode(headers[HEADER_SIGNATURE])
 
             public_key = substrateinterface.Keypair(ss58_address=ss58_address)
             if not public_key.verify(str(timestamp).encode(), signature):
@@ -535,8 +548,8 @@ class ValidatorAPI:
                 )
                 return False
 
-            if "x-netuid" in headers:
-                netuid = int(headers["x-netuid"])
+            if HEADER_NETUID in headers:
+                netuid = int(headers[HEADER_NETUID])
                 return await self.validator_keys_cache.check_validator_key(
                     ss58_address, netuid
                 )

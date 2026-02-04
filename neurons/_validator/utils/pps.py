@@ -2,6 +2,7 @@ import time
 import bittensor as bt
 import requests
 from substrateinterface import Keypair
+from constants import HEADER_ORIGIN_SS58, HEADER_SIGNATURE, HEADER_TIMESTAMP
 
 
 class ProofPublishingService:
@@ -25,9 +26,9 @@ class ProofPublishingService:
                 f"{self.url}/proof",
                 json={"proof": proof_json},
                 headers={
-                    "x-timestamp": timestamp,
-                    "x-origin-ss58": hotkey.ss58_address,
-                    "x-signature": signature.hex(),
+                    HEADER_TIMESTAMP: timestamp,
+                    HEADER_ORIGIN_SS58: hotkey.ss58_address,
+                    HEADER_SIGNATURE: signature.hex(),
                     "Content-Type": "application/json",
                 },
                 timeout=60,

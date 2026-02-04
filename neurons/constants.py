@@ -162,3 +162,15 @@ CIRCUIT_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".bittensor", "subnet-2", "circuit_cache"
 )
 CIRCUIT_METADATA_FILENAME = "circuit_metadata.json"
+
+INPUT_SCHEMA_TENSOR = "tensor"
+INPUT_SCHEMA_POW_BATCH = "pow_batch"
+
+HEADER_TIMESTAMP = "x-timestamp"
+HEADER_ORIGIN_SS58 = "x-origin-ss58"
+HEADER_SIGNATURE = "x-signature"
+HEADER_NETUID = "x-netuid"
+
+RUN_STATUS_PROCESSING = "processing"
+RUN_STATUS_COMPLETED = "completed"
+RUN_STATUS_COMPLETED_WITH_ERRORS = "completed_with_errors"

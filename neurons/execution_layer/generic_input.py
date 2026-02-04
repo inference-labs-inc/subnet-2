@@ -8,7 +8,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from _validator.models.request_type import RequestType
-from constants import ONE_MINUTE
+from constants import INPUT_SCHEMA_POW_BATCH, INPUT_SCHEMA_TENSOR, ONE_MINUTE
 from execution_layer.base_input import BaseInput
 
 
@@ -53,9 +53,9 @@ class PoWBatchInputSchema(BaseModel):
 
 def create_schema_from_metadata(input_schema: dict) -> type[BaseModel]:
     schema_type = input_schema.get("type")
-    if schema_type == "tensor":
+    if schema_type == INPUT_SCHEMA_TENSOR:
         return TensorInputSchema
-    if schema_type == "pow_batch":
+    if schema_type == INPUT_SCHEMA_POW_BATCH:
         return PoWBatchInputSchema
     raise ValueError(f"Unsupported input schema type: '{schema_type}'")
 
@@ -91,8 +91,8 @@ class GenericInputHandler(BaseInput):
         return {k: raw.get(k, v) for k, v in _POW_CONSTANT_DEFAULTS.items()}
 
     def generate(self) -> dict[str, object]:
-        schema_type = self.input_schema.get("type", "tensor")
-        if schema_type == "pow_batch":
+        schema_type = self.input_schema.get("type", INPUT_SCHEMA_TENSOR)
+        if schema_type == INPUT_SCHEMA_POW_BATCH:
             return self._generate_pow_batch()
 
         shape = self.input_schema.get("shape", [1, 3, 224, 224])
@@ -170,8 +170,8 @@ class GenericInputHandler(BaseInput):
 
     def validate(self, data: dict[str, object]) -> None:
         self.schema(**data)
-        schema_type = self.input_schema.get("type", "tensor")
-        if schema_type == "pow_batch":
+        schema_type = self.input_schema.get("type", INPUT_SCHEMA_TENSOR)
+        if schema_type == INPUT_SCHEMA_POW_BATCH:
             return
         input_data = data.get("input_data", [])
         expected_shape = self.input_schema.get("shape", [])
@@ -200,8 +200,8 @@ class GenericInputHandler(BaseInput):
                 self._validate_shape(item, expected_shape[1:])
 
     def process(self, data: dict[str, object]) -> dict[str, object]:
-        schema_type = self.input_schema.get("type", "tensor")
-        if schema_type == "pow_batch":
+        schema_type = self.input_schema.get("type", INPUT_SCHEMA_TENSOR)
+        if schema_type == INPUT_SCHEMA_POW_BATCH:
             return self._process_pow_batch(data)
         return data
 
@@ -245,7 +245,7 @@ class GenericInputHandler(BaseInput):
         return data
 
     def to_array(self) -> list:
-        schema_type = self.input_schema.get("type", "tensor")
-        if schema_type == "pow_batch":
+        schema_type = self.input_schema.get("type", INPUT_SCHEMA_TENSOR)
+        if schema_type == INPUT_SCHEMA_POW_BATCH:
             return list(self.data.values())
         return self.data["input_data"]

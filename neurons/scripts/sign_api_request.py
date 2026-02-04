@@ -2,6 +2,7 @@ import bittensor as bt
 import base64
 import time
 import argparse
+from constants import HEADER_ORIGIN_SS58, HEADER_SIGNATURE, HEADER_TIMESTAMP
 
 bt.logging.on()
 bt.logging.set_console()
@@ -33,9 +34,9 @@ def main():
     try:
         timestamp, ss58_address, signature = sign_timestamp(args.wallet, args.hotkey)
         print("\nAPI Request Headers:")
-        print(f"x-timestamp: {timestamp}")
-        print(f"x-origin-ss58: {ss58_address}")
-        print(f"x-signature: {signature}")
+        print(f"{HEADER_TIMESTAMP}: {timestamp}")
+        print(f"{HEADER_ORIGIN_SS58}: {ss58_address}")
+        print(f"{HEADER_SIGNATURE}: {signature}")
         print("\nThese headers are valid for API requests to the validator.")
     except Exception as e:
         print(f"Error: {str(e)}")
