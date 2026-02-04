@@ -106,6 +106,9 @@ class AutoUpdate:
                 return False
 
             current_tag = self.get_local_latest_tag()
+            if not current_tag:
+                logging.error("Failed to get the current local tag.")
+                return False
 
             safe_log(
                 {

@@ -21,8 +21,9 @@ def load_circuit_names(deployment_layer_path: str) -> dict[str, str]:
     circuits: dict[str, str] = {}
     for folder_name in os.listdir(deployment_layer_path):
         folder_path = os.path.join(deployment_layer_path, folder_name)
-        if os.path.isdir(folder_path) and folder_name.startswith("model_"):
-            circuit_id = folder_name.split("_")[1]
+        if not (os.path.isdir(folder_path) and folder_name.startswith("model_")):
+            continue
+        circuit_id = folder_name.split("_", 1)[1]
         try:
             with open(os.path.join(folder_path, CIRCUIT_METADATA_FILENAME), "r") as f:
                 circuit_data = json.load(f)
@@ -34,17 +35,19 @@ def load_circuit_names(deployment_layer_path: str) -> dict[str, str]:
     return circuits
 
 
-def load_scores(scores_path: Path) -> list | dict:
+def load_scores(scores_path: Path) -> list:
     if not scores_path.exists():
-        return {}
+        return []
     try:
         scores = torch.load(scores_path)
         if isinstance(scores, torch.Tensor):
             return scores.tolist()
-        return scores
+        if isinstance(scores, list):
+            return scores
+        return []
     except Exception as e:
         print(f"Error loading scores from {scores_path}: {str(e)}")
-        return {}
+        return []
 
 
 def parse_args():
@@ -61,7 +64,7 @@ def parse_args():
 def process_evaluation_data(
     eval_file: Path,
     model_id: str,
-    scores: list | dict,
+    scores: list,
     circuit_name: str | None = None,
 ) -> dict | None:
     if not eval_file.exists():
@@ -111,11 +114,11 @@ def load_evaluation_data(models_path: Path, scores_path: Path) -> dict:
     scores = load_scores(scores_path)
 
     model_stats = {}
+    circuit_names = load_circuit_names(os.path.join("neurons", "deployment_layer"))
 
     for model_dir in models_path.glob("model_*"):
         model_id = model_dir.name.replace("model_", "")
         eval_file = model_dir / "evaluation_data.json"
-        circuit_names = load_circuit_names(os.path.join("neurons", "deployment_layer"))
         circuit_name = circuit_names.get(model_id)
         if not circuit_name:
             print(f"Warning: No circuit found for model {model_id}")

@@ -26,8 +26,8 @@ elif "-h" in sys.argv:
 # flake8: noqa
 import bittensor as bt
 
-parser: argparse.ArgumentParser | None
-config: bt.Config | None
+parser: argparse.ArgumentParser | None = None
+config: bt.Config | None = None
 
 
 DESCRIPTION = {

@@ -400,12 +400,6 @@ class MinerSession:
         if error:
             return error
 
-        if not circuit:
-            bt.logging.warning(f"Circuit not found: {model_id}")
-            return JSONResponse(
-                content=f"Circuit not found: {model_id}", status_code=404
-            )
-
         circuit_timeout = circuit.timeout
 
         try:

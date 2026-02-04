@@ -7,7 +7,7 @@ def hash_inputs(inputs: BaseInput | dict) -> str:
     Hashes inputs to proof of weights, excluding dynamic fields.
 
     Args:
-        inputs (dict): The inputs to hash.
+        inputs (BaseInput | dict): The inputs to hash.
 
     Returns:
         str: The hashed inputs.

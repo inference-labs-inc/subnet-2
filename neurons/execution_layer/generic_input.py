@@ -245,4 +245,7 @@ class GenericInputHandler(BaseInput):
         return data
 
     def to_array(self) -> list:
+        schema_type = self.input_schema.get("type", "tensor")
+        if schema_type == "pow_batch":
+            return list(self.data.values())
         return self.data["input_data"]

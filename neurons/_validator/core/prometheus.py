@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import statistics
-import threading
 import psutil
 from wsgiref.simple_server import WSGIServer
 
@@ -9,7 +8,6 @@ from prometheus_client import Histogram, Gauge, Counter, start_http_server
 
 
 _server: WSGIServer | None = None
-_thread: threading.Thread | None = None
 
 # Performance Metrics
 _validation_times: Histogram | None = None
@@ -23,7 +21,6 @@ _timeout_counter: Counter | None = None
 _network_errors: Counter | None = None
 
 # Resource Usage
-_active_requests: Gauge | None = None
 _memory_usage: Gauge | None = None
 _cpu_usage: Gauge | None = None
 _disk_usage: Gauge | None = None
@@ -54,7 +51,6 @@ _last_error_timestamp: Gauge | None = None
 
 def start_prometheus_logging(port: int) -> None:
     global _server
-    global _thread
     global _validation_times
     global _response_times
     global _proof_sizes
@@ -62,8 +58,6 @@ def start_prometheus_logging(port: int) -> None:
     global _verification_failures
     global _timeout_counter
     global _network_errors
-    global _active_requests
-
     global _memory_usage
     global _cpu_usage
     global _disk_usage
@@ -81,7 +75,7 @@ def start_prometheus_logging(port: int) -> None:
     global _error_counter
     global _last_error_timestamp
 
-    _server, _thread = start_http_server(port)
+    _server, _ = start_http_server(port)
 
     # Performance Metrics
     _validation_times = Histogram(
@@ -134,7 +128,6 @@ def start_prometheus_logging(port: int) -> None:
     )
 
     # Resource Usage
-    _active_requests = Gauge("active_requests", "Number of currently active requests")
     _memory_usage = Gauge("memory_usage_bytes", "Current memory usage in bytes")
     _cpu_usage = Gauge("cpu_usage_percent", "Current CPU usage percentage")
     _disk_usage = Gauge(
@@ -211,7 +204,6 @@ def start_prometheus_logging(port: int) -> None:
 
 def stop_prometheus_logging() -> None:
     global _server
-    global _thread
     global _validation_times
     global _response_times
     global _proof_sizes
@@ -219,8 +211,6 @@ def stop_prometheus_logging() -> None:
     global _verification_failures
     global _timeout_counter
     global _network_errors
-    global _active_requests
-
     global _memory_usage
     global _cpu_usage
     global _disk_usage
@@ -241,7 +231,6 @@ def stop_prometheus_logging() -> None:
     if _server:
         _server.shutdown()
         _server = None
-        _thread = None
         _validation_times = None
         _response_times = None
         _proof_sizes = None
@@ -249,7 +238,6 @@ def stop_prometheus_logging() -> None:
         _verification_failures = None
         _timeout_counter = None
         _network_errors = None
-        _active_requests = None
         _memory_usage = None
         _cpu_usage = None
         _disk_usage = None
