@@ -290,8 +290,8 @@ class DSperseManager:
             total_run_time = (
                 time.perf_counter() - run.start_time if run.start_time else None
             )
+            loop = asyncio.get_event_loop()
             if self.event_client:
-                loop = asyncio.get_event_loop()
                 loop.create_task(
                     self.event_client.emit_run_complete(
                         run_uid=run_uid,
@@ -299,7 +299,7 @@ class DSperseManager:
                         total_run_time_sec=total_run_time,
                     )
                 )
-            self._submit_metrics(run)
+            loop.run_in_executor(None, self._submit_metrics, run)
             if run.callback:
                 try:
                     run.callback(run)

@@ -137,9 +137,14 @@ def capture_environment() -> dict:
                 ["mpirun", "--version"],
                 capture_output=True,
                 check=True,
+                timeout=2,
             )
             return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
             return False
 
     jst_version = get_jst_version()

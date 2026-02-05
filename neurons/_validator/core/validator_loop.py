@@ -88,7 +88,6 @@ class ValidatorLoop:
             cli_parser.config, "sn2_api_url", "https://sn2-api.inferencelabs.com"
         )
         self.dsperse_event_client = DsperseEventClient(api_url, config.wallet)
-        self.dsperse_event_client.start()
         self.dsperse_manager = DSperseManager(event_client=self.dsperse_event_client)
 
         self.score_manager = ScoreManager(
@@ -481,6 +480,7 @@ class ValidatorLoop:
 
         # Start the relay client connection
         self.relay.start()
+        self.dsperse_event_client.start()
 
         try:
             await asyncio.gather(

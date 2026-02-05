@@ -41,10 +41,14 @@ class DsperseEventClient:
             event["timestamp"] = datetime.now(timezone.utc).isoformat()
         event["validator_key"] = self.wallet.hotkey.ss58_address
 
+        should_flush = False
         async with self._buffer_lock:
             self._buffer.append(event)
             if len(self._buffer) >= BATCH_SIZE:
-                await self._flush()
+                should_flush = True
+
+        if should_flush:
+            await self._flush()
 
     async def emit_run_started(
         self,
@@ -151,20 +155,21 @@ class DsperseEventClient:
         while self._running:
             try:
                 await asyncio.sleep(FLUSH_INTERVAL)
-                async with self._buffer_lock:
-                    if self._buffer:
-                        await self._flush()
+                await self._flush()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning(f"Flush loop error: {e}")
 
     async def _flush(self):
-        if not self._buffer or not self._client:
+        if not self._client:
             return
 
-        events = self._buffer
-        self._buffer = []
+        async with self._buffer_lock:
+            if not self._buffer:
+                return
+            events = self._buffer
+            self._buffer = []
 
         try:
             batch = {
@@ -186,3 +191,5 @@ class DsperseEventClient:
             )
         except Exception as e:
             logger.warning(f"Failed to flush dsperse events: {e}")
+            async with self._buffer_lock:
+                self._buffer = events + self._buffer
