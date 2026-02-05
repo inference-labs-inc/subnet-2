@@ -5,10 +5,11 @@ import random
 import shutil
 import tempfile
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
@@ -36,6 +37,7 @@ SLICE_CACHE_MAX_ENTRIES = 32
 class CachedSlice:
     path: Path
     accessed_at: float
+    in_use: int = 0
 
 
 class SliceCache:
@@ -61,18 +63,30 @@ class SliceCache:
                 self._slice_locks[key] = threading.Lock()
             return self._slice_locks[key]
 
+    @contextmanager
     def get_slice_path(
         self, circuit_id: str, base_slice_num: str, dslice_file: Path
-    ) -> Path:
+    ) -> Iterator[Path]:
         key = self._cache_key(circuit_id, base_slice_num)
         now = time.time()
+        path: Path | None = None
 
         with self._meta_lock:
             self._evict_expired(now)
             if key in self._cache:
                 entry = self._cache[key]
                 entry.accessed_at = now
-                return entry.path
+                entry.in_use += 1
+                path = entry.path
+
+        if path is not None:
+            try:
+                yield path
+            finally:
+                with self._meta_lock:
+                    if key in self._cache:
+                        self._cache[key].in_use -= 1
+            return
 
         slice_lock = self._get_slice_lock(key)
         with slice_lock:
@@ -80,7 +94,19 @@ class SliceCache:
                 if key in self._cache:
                     entry = self._cache[key]
                     entry.accessed_at = now
-                    return entry.path
+                    entry.in_use += 1
+                    path = entry.path
+
+            if path is not None:
+                try:
+                    yield path
+                finally:
+                    with self._meta_lock:
+                        if key in self._cache:
+                            self._cache[key].in_use -= 1
+                return
+
+            with self._meta_lock:
                 self._evict_lru_if_full()
 
             extract_dir = self._cache_dir / circuit_id / f"slice_{base_slice_num}"
@@ -97,24 +123,39 @@ class SliceCache:
             )
 
             with self._meta_lock:
-                self._cache[key] = CachedSlice(path=extract_dir, accessed_at=now)
+                self._cache[key] = CachedSlice(
+                    path=extract_dir, accessed_at=now, in_use=1
+                )
             logging.debug(
                 f"Extracted dslice {dslice_file.name} to cache: {extract_dir}"
             )
-            return extract_dir
+            try:
+                yield extract_dir
+            finally:
+                with self._meta_lock:
+                    if key in self._cache:
+                        self._cache[key].in_use -= 1
 
     def _evict_expired(self, now: float):
-        expired = [k for k, v in self._cache.items() if now - v.accessed_at > self._ttl]
+        expired = [
+            k
+            for k, v in self._cache.items()
+            if now - v.accessed_at > self._ttl and v.in_use == 0
+        ]
         for key in expired:
             self._remove_entry(key)
 
     def _evict_lru_if_full(self):
         while len(self._cache) >= self._max_entries:
-            lru_key = min(self._cache, key=lambda k: self._cache[k].accessed_at)
+            evictable = [k for k, v in self._cache.items() if v.in_use == 0]
+            if not evictable:
+                break
+            lru_key = min(evictable, key=lambda k: self._cache[k].accessed_at)
             self._remove_entry(lru_key)
 
     def _remove_entry(self, key: str):
         entry = self._cache.pop(key, None)
+        self._slice_locks.pop(key, None)
         if entry and entry.path.exists():
             shutil.rmtree(entry.path, ignore_errors=True)
         logging.debug(f"Evicted slice from cache: {key}")
@@ -430,7 +471,6 @@ class DSperseManager:
     ) -> dict:
         circuit = self._get_circuit_by_id(circuit_id)
         base_slice_num, tile_idx = self._parse_slice_num(slice_num)
-        model_dir = self._get_slice_dir(circuit, base_slice_num)
         result = {
             "circuit_id": circuit_id,
             "slice_num": slice_num,
@@ -439,104 +479,111 @@ class DSperseManager:
             "proof": None,
         }
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            input_file = tmp_path / "input.json"
-            output_file = tmp_path / "output.json"
+        with self._get_slice_dir(circuit, base_slice_num) as model_dir:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                input_file = tmp_path / "input.json"
+                output_file = tmp_path / "output.json"
 
-            with open(input_file, "w") as f:
-                json.dump(inputs, f)
+                with open(input_file, "w") as f:
+                    json.dump(inputs, f)
 
-            if tile_idx is not None:
-                return self._prove_tile(
-                    model_dir,
-                    base_slice_num,
-                    tile_idx,
-                    input_file,
-                    output_file,
-                    tmp_path,
-                    proof_system,
-                    result,
-                )
-
-            slice_copy = tmp_path / "slices"
-            shutil.copytree(model_dir, slice_copy)
-            runner = Runner(run_dir=tmp_path, threads=os.cpu_count() or 4, batch=True)
-            runner.run(input_json_path=input_file, slice_path=str(slice_copy))
-            run_dir = runner.last_run_dir
-            logging.info(f"Runner completed for slice_{slice_num}, run_dir: {run_dir}")
-
-            if runner.run_metadata:
-                metadata_path = run_dir / "metadata.json"
-                with open(metadata_path, "w") as f:
-                    json.dump(runner.run_metadata.to_dict(), f)
-
-            prove_start = time.time()
-
-            if proof_system == ProofSystem.JSTPROVE:
-                jst_model_path = (
-                    model_dir
-                    / "payload"
-                    / "jstprove"
-                    / f"slice_{base_slice_num}_circuit.txt"
-                )
-                success, proof_data = self._jstprove_witness_and_prove(
-                    jst_model_path,
-                    input_file,
-                    output_file,
-                    tmp_path,
-                    f"slice {slice_num}",
-                )
-                if not success and proof_data is None:
-                    return result
-
-            elif proof_system == ProofSystem.EZKL:
-                slice_id = f"slice_{base_slice_num}"
-                slice_meta = (
-                    runner.run_metadata.get_slice(slice_id)
-                    if runner.run_metadata
-                    else None
-                )
-                if not slice_meta:
-                    logging.error(
-                        f"No run metadata for {slice_id}, cannot prove with EZKL"
+                if tile_idx is not None:
+                    return self._prove_tile(
+                        model_dir,
+                        base_slice_num,
+                        tile_idx,
+                        input_file,
+                        output_file,
+                        tmp_path,
+                        proof_system,
+                        result,
                     )
+
+                slice_copy = tmp_path / "slices"
+                shutil.copytree(model_dir, slice_copy)
+                runner = Runner(
+                    run_dir=tmp_path, threads=os.cpu_count() or 4, batch=True
+                )
+                runner.run(input_json_path=input_file, slice_path=str(slice_copy))
+                run_dir = runner.last_run_dir
+                logging.info(
+                    f"Runner completed for slice_{slice_num}, run_dir: {run_dir}"
+                )
+
+                if runner.run_metadata:
+                    metadata_path = run_dir / "metadata.json"
+                    with open(metadata_path, "w") as f:
+                        json.dump(runner.run_metadata.to_dict(), f)
+
+                prove_start = time.time()
+
+                if proof_system == ProofSystem.JSTPROVE:
+                    jst_model_path = (
+                        model_dir
+                        / "payload"
+                        / "jstprove"
+                        / f"slice_{base_slice_num}_circuit.txt"
+                    )
+                    success, proof_data = self._jstprove_witness_and_prove(
+                        jst_model_path,
+                        input_file,
+                        output_file,
+                        tmp_path,
+                        f"slice {slice_num}",
+                    )
+                    if not success and proof_data is None:
+                        return result
+
+                elif proof_system == ProofSystem.EZKL:
+                    slice_id = f"slice_{base_slice_num}"
+                    slice_meta = (
+                        runner.run_metadata.get_slice(slice_id)
+                        if runner.run_metadata
+                        else None
+                    )
+                    if not slice_meta:
+                        logging.error(
+                            f"No run metadata for {slice_id}, cannot prove with EZKL"
+                        )
+                        return result
+
+                    ezkl_circuit = RunnerUtils.resolve_relative_path(
+                        slice_meta.ezkl_circuit_path or slice_meta.circuit_path,
+                        model_dir,
+                    )
+                    ezkl_pk = RunnerUtils.resolve_relative_path(
+                        slice_meta.ezkl_pk_path or slice_meta.pk_path, model_dir
+                    )
+                    ezkl_settings = RunnerUtils.resolve_relative_path(
+                        slice_meta.ezkl_settings_path or slice_meta.settings_path,
+                        model_dir,
+                    )
+                    witness_path = run_dir / slice_id / "output.json"
+                    proof_path = tmp_path / "proof.json"
+
+                    ezkl_runner = EZKL()
+                    success, proof_file = ezkl_runner.prove(
+                        witness_path=str(witness_path),
+                        model_path=str(ezkl_circuit),
+                        proof_path=str(proof_path),
+                        pk_path=str(ezkl_pk),
+                        settings_path=ezkl_settings,
+                    )
+
+                    proof_data = None
+                    if success and proof_path.exists():
+                        with open(proof_path, "r") as pf:
+                            proof_data = json.load(pf)
+                else:
+                    logging.error(f"Unsupported proof system: {proof_system}")
                     return result
 
-                ezkl_circuit = RunnerUtils.resolve_relative_path(
-                    slice_meta.ezkl_circuit_path or slice_meta.circuit_path, model_dir
-                )
-                ezkl_pk = RunnerUtils.resolve_relative_path(
-                    slice_meta.ezkl_pk_path or slice_meta.pk_path, model_dir
-                )
-                ezkl_settings = RunnerUtils.resolve_relative_path(
-                    slice_meta.ezkl_settings_path or slice_meta.settings_path, model_dir
-                )
-                witness_path = run_dir / slice_id / "output.json"
-                proof_path = tmp_path / "proof.json"
-
-                ezkl_runner = EZKL()
-                success, proof_file = ezkl_runner.prove(
-                    witness_path=str(witness_path),
-                    model_path=str(ezkl_circuit),
-                    proof_path=str(proof_path),
-                    pk_path=str(ezkl_pk),
-                    settings_path=ezkl_settings,
-                )
-
-                proof_data = None
-                if success and proof_path.exists():
-                    with open(proof_path, "r") as pf:
-                        proof_data = json.load(pf)
-            else:
-                logging.error(f"Unsupported proof system: {proof_system}")
+                proof_generation_time = time.time() - prove_start
+                result["success"] = success
+                result["proof_generation_time"] = proof_generation_time
+                result["proof"] = proof_data
                 return result
-
-            proof_generation_time = time.time() - prove_start
-            result["success"] = success
-            result["proof_generation_time"] = proof_generation_time
-            result["proof"] = proof_data
-            return result
 
     @staticmethod
     def _jstprove_witness_and_prove(
@@ -611,15 +658,21 @@ class DSperseManager:
             return parts[0], int(parts[1])
         return slice_num, None
 
-    def _get_slice_dir(self, circuit: Circuit, base_slice_num: str) -> Path:
+    @contextmanager
+    def _get_slice_dir(self, circuit: Circuit, base_slice_num: str) -> Iterator[Path]:
         base_path = Path(circuit.paths.base_path)
         extracted_dir = base_path / f"slice_{base_slice_num}"
         if extracted_dir.exists():
-            return extracted_dir
+            yield extracted_dir
+            return
 
         dslice_file = base_path / f"slice_{base_slice_num}.dslice"
         if dslice_file.exists():
-            return _slice_cache.get_slice_path(circuit.id, base_slice_num, dslice_file)
+            with _slice_cache.get_slice_path(
+                circuit.id, base_slice_num, dslice_file
+            ) as path:
+                yield path
+            return
 
         raise FileNotFoundError(
             f"No slice found for {circuit.id} slice {base_slice_num}: "
@@ -663,47 +716,50 @@ class DSperseManager:
 
         slice_data.proof_file = proof_file_path
 
-        slice_dir = self._get_slice_dir(circuit, base_slice_num)
+        with self._get_slice_dir(circuit, base_slice_num) as slice_dir:
+            if proof_system == ProofSystem.JSTPROVE:
+                if tile_idx is not None:
+                    circuit_path = (
+                        slice_dir
+                        / "payload"
+                        / "jstprove"
+                        / "tiles"
+                        / "tile_circuit.txt"
+                    )
+                else:
+                    circuit_path = (
+                        slice_dir
+                        / "payload"
+                        / "jstprove"
+                        / f"slice_{base_slice_num}_circuit.txt"
+                    )
+                witness_path = slice_data.witness_file or (
+                    slice_data.input_file.parent / "output_witness.bin"
+                )
 
-        if proof_system == ProofSystem.JSTPROVE:
-            if tile_idx is not None:
-                circuit_path = (
-                    slice_dir / "payload" / "jstprove" / "tiles" / "tile_circuit.txt"
+                jstprove = JSTprove()
+                success = jstprove.verify(
+                    proof_path=proof_file_path,
+                    circuit_path=circuit_path,
+                    input_path=slice_data.input_file,
+                    output_path=slice_data.output_file,
+                    witness_path=witness_path,
                 )
             else:
-                circuit_path = (
-                    slice_dir
-                    / "payload"
-                    / "jstprove"
-                    / f"slice_{base_slice_num}_circuit.txt"
+                verifier = Verifier()
+                run_path = slice_data.input_file.parent.parent
+                result = verifier.verify(
+                    run_path=run_path,
+                    model_path=slice_dir,
+                    backend=proof_system.value.lower() if proof_system else None,
                 )
-            witness_path = slice_data.witness_file or (
-                slice_data.input_file.parent / "output_witness.bin"
-            )
+                _, verification_execution = self._parse_dsperse_result(
+                    result, "verification"
+                )
+                success = verification_execution.get("success", False)
 
-            jstprove = JSTprove()
-            success = jstprove.verify(
-                proof_path=proof_file_path,
-                circuit_path=circuit_path,
-                input_path=slice_data.input_file,
-                output_path=slice_data.output_file,
-                witness_path=witness_path,
-            )
-        else:
-            verifier = Verifier()
-            run_path = slice_data.input_file.parent.parent
-            result = verifier.verify(
-                run_path=run_path,
-                model_path=slice_dir,
-                backend=proof_system.value.lower() if proof_system else None,
-            )
-            _, verification_execution = self._parse_dsperse_result(
-                result, "verification"
-            )
-            success = verification_execution.get("success", False)
-
-        slice_data.success = success
-        return success
+            slice_data.success = success
+            return success
 
     def cleanup_run(self, run_uid: str):
         if run_uid not in self.runs:
