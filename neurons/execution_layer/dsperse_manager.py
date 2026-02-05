@@ -1,8 +1,10 @@
+import atexit
 import json
 import os
 import random
 import shutil
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +26,108 @@ from execution_layer.circuit import Circuit, CircuitType, ProofSystem
 import cli_parser
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.request_type import RequestType
-from utils.pre_flight import SYNC_LOG_PREFIX
+
+
+SLICE_CACHE_TTL_SECONDS = 300
+SLICE_CACHE_MAX_ENTRIES = 32
+
+
+@dataclass
+class CachedSlice:
+    path: Path
+    accessed_at: float
+
+
+class SliceCache:
+    def __init__(
+        self,
+        ttl_seconds: float = SLICE_CACHE_TTL_SECONDS,
+        max_entries: int = SLICE_CACHE_MAX_ENTRIES,
+    ):
+        self._ttl = ttl_seconds
+        self._max_entries = max_entries
+        self._cache: dict[str, CachedSlice] = {}
+        self._meta_lock = threading.Lock()
+        self._slice_locks: dict[str, threading.Lock] = {}
+        self._cache_dir = Path(tempfile.mkdtemp(prefix="dslice_cache_"))
+        atexit.register(self._cleanup_all)
+
+    def _cache_key(self, circuit_id: str, slice_num: str) -> str:
+        return f"{circuit_id}:{slice_num}"
+
+    def _get_slice_lock(self, key: str) -> threading.Lock:
+        with self._meta_lock:
+            if key not in self._slice_locks:
+                self._slice_locks[key] = threading.Lock()
+            return self._slice_locks[key]
+
+    def get_slice_path(
+        self, circuit_id: str, base_slice_num: str, dslice_file: Path
+    ) -> Path:
+        key = self._cache_key(circuit_id, base_slice_num)
+        now = time.time()
+
+        with self._meta_lock:
+            self._evict_expired(now)
+            if key in self._cache:
+                entry = self._cache[key]
+                entry.accessed_at = now
+                return entry.path
+
+        slice_lock = self._get_slice_lock(key)
+        with slice_lock:
+            with self._meta_lock:
+                if key in self._cache:
+                    entry = self._cache[key]
+                    entry.accessed_at = now
+                    return entry.path
+                self._evict_lru_if_full()
+
+            extract_dir = self._cache_dir / circuit_id / f"slice_{base_slice_num}"
+            extract_dir.parent.mkdir(parents=True, exist_ok=True)
+
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir)
+
+            Converter.convert(
+                path=str(dslice_file),
+                output_type="dirs",
+                output_path=str(extract_dir),
+                cleanup=False,
+            )
+
+            with self._meta_lock:
+                self._cache[key] = CachedSlice(path=extract_dir, accessed_at=now)
+            logging.debug(
+                f"Extracted dslice {dslice_file.name} to cache: {extract_dir}"
+            )
+            return extract_dir
+
+    def _evict_expired(self, now: float):
+        expired = [k for k, v in self._cache.items() if now - v.accessed_at > self._ttl]
+        for key in expired:
+            self._remove_entry(key)
+
+    def _evict_lru_if_full(self):
+        while len(self._cache) >= self._max_entries:
+            lru_key = min(self._cache, key=lambda k: self._cache[k].accessed_at)
+            self._remove_entry(lru_key)
+
+    def _remove_entry(self, key: str):
+        entry = self._cache.pop(key, None)
+        if entry and entry.path.exists():
+            shutil.rmtree(entry.path, ignore_errors=True)
+        logging.debug(f"Evicted slice from cache: {key}")
+
+    def _cleanup_all(self):
+        with self._meta_lock:
+            if self._cache_dir.exists():
+                shutil.rmtree(self._cache_dir, ignore_errors=True)
+            self._cache.clear()
+            self._slice_locks.clear()
+
+
+_slice_cache = SliceCache()
 
 
 @dataclass
@@ -327,7 +430,7 @@ class DSperseManager:
     ) -> dict:
         circuit = self._get_circuit_by_id(circuit_id)
         base_slice_num, tile_idx = self._parse_slice_num(slice_num)
-        model_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
+        model_dir = self._get_slice_dir(circuit, base_slice_num)
         result = {
             "circuit_id": circuit_id,
             "slice_num": slice_num,
@@ -482,7 +585,9 @@ class DSperseManager:
         slice_num = f"{base_slice_num}_tile_{tile_idx}"
 
         if proof_system == ProofSystem.JSTPROVE:
-            jst_tile_circuit = model_dir / "jstprove" / "tiles" / "tile_circuit.txt"
+            jst_tile_circuit = (
+                model_dir / "payload" / "jstprove" / "tiles" / "tile_circuit.txt"
+            )
             if not jst_tile_circuit.exists():
                 logging.error(f"Tile JSTprove circuit not found: {jst_tile_circuit}")
                 return result
@@ -505,6 +610,21 @@ class DSperseManager:
             parts = slice_num.split("_tile_")
             return parts[0], int(parts[1])
         return slice_num, None
+
+    def _get_slice_dir(self, circuit: Circuit, base_slice_num: str) -> Path:
+        base_path = Path(circuit.paths.base_path)
+        extracted_dir = base_path / f"slice_{base_slice_num}"
+        if extracted_dir.exists():
+            return extracted_dir
+
+        dslice_file = base_path / f"slice_{base_slice_num}.dslice"
+        if dslice_file.exists():
+            return _slice_cache.get_slice_path(circuit.id, base_slice_num, dslice_file)
+
+        raise FileNotFoundError(
+            f"No slice found for {circuit.id} slice {base_slice_num}: "
+            f"checked {extracted_dir} and {dslice_file}"
+        )
 
     def verify_slice_proof(
         self, run_uid: str, slice_num: str, proof: dict | str, proof_system: ProofSystem
@@ -543,10 +663,13 @@ class DSperseManager:
 
         slice_data.proof_file = proof_file_path
 
+        slice_dir = self._get_slice_dir(circuit, base_slice_num)
+
         if proof_system == ProofSystem.JSTPROVE:
-            slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
             if tile_idx is not None:
-                circuit_path = slice_dir / "jstprove" / "tiles" / "tile_circuit.txt"
+                circuit_path = (
+                    slice_dir / "payload" / "jstprove" / "tiles" / "tile_circuit.txt"
+                )
             else:
                 circuit_path = (
                     slice_dir
@@ -571,7 +694,7 @@ class DSperseManager:
             run_path = slice_data.input_file.parent.parent
             result = verifier.verify(
                 run_path=run_path,
-                model_path=Path(circuit.paths.base_path) / f"slice_{base_slice_num}",
+                model_path=slice_dir,
                 backend=proof_system.value.lower() if proof_system else None,
             )
             _, verification_execution = self._parse_dsperse_result(
@@ -618,23 +741,19 @@ class DSperseManager:
 
     @classmethod
     def extract_dslices(cls, model_path: Path | str) -> None:
+        """No-op for backwards compatibility. DSlices are now extracted on-demand."""
+        pass
+
+    @classmethod
+    def validate_dslices(cls, model_path: Path | str) -> list[Path]:
         model_path = Path(model_path)
         dslice_files = list(model_path.glob("slice_*.dslice"))
-        if not dslice_files:
-            return
-        logging.debug(SYNC_LOG_PREFIX + f"Extracting DSlices for model {model_path}...")
-        for dslice_file in dslice_files:
-            extracted_path = dslice_file.with_suffix("")
-            if extracted_path.exists():
-                shutil.rmtree(extracted_path)
-            logging.info(
-                SYNC_LOG_PREFIX
-                + f"Extracting DSlice file {dslice_file} to {extracted_path}..."
+        extracted_dirs = list(model_path.glob("slice_*"))
+        extracted_dirs = [d for d in extracted_dirs if d.is_dir()]
+        if dslice_files:
+            logging.debug(f"Found {len(dslice_files)} dslice files in {model_path}")
+        if extracted_dirs:
+            logging.debug(
+                f"Found {len(extracted_dirs)} extracted slice dirs in {model_path}"
             )
-            Converter.convert(
-                path=dslice_file,
-                output_type="dirs",
-                output_path=extracted_path,
-                cleanup=True,
-            )
-            dslice_file.unlink(missing_ok=True)
+        return dslice_files + extracted_dirs

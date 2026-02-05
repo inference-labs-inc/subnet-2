@@ -16,7 +16,7 @@ from constants import (
     IGNORED_MODEL_HASHES,
     MAINNET_TESTNET_UIDS,
 )
-from execution_layer.circuit import Circuit, CircuitMetadata, CircuitType
+from execution_layer.circuit import Circuit, CircuitMetadata
 
 
 class CircuitStore:
@@ -108,10 +108,6 @@ class CircuitStore:
                     )
                     continue
                 metadata = CircuitMetadata.from_dict(metadata_dict)
-                if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
-                    from execution_layer.dsperse_manager import DSperseManager
-
-                    DSperseManager.extract_dslices(folder_path)
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit
                 bt.logging.info(f"Loaded circuit {circuit_id} from cache")
@@ -138,11 +134,6 @@ class CircuitStore:
             try:
                 self._cache_circuit(circuit_id, circuit_data)
                 metadata = CircuitMetadata.from_dict(circuit_data.get("metadata", {}))
-                if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
-                    from execution_layer.dsperse_manager import DSperseManager
-
-                    cache_path = os.path.join(self._cache_dir, f"model_{circuit_id}")
-                    DSperseManager.extract_dslices(cache_path)
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit
                 bt.logging.info(f"Loaded circuit {circuit_id} from API")
@@ -251,11 +242,6 @@ class CircuitStore:
 
         self._cache_circuit(circuit_id, circuit_data)
         metadata = CircuitMetadata.from_dict(circuit_data.get("metadata", {}))
-        if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
-            from execution_layer.dsperse_manager import DSperseManager
-
-            cache_path = os.path.join(self._cache_dir, f"model_{circuit_id}")
-            DSperseManager.extract_dslices(cache_path)
         circuit = Circuit(circuit_id, metadata=metadata)
         self.circuits[circuit_id] = circuit
         bt.logging.success(f"Fetched and loaded circuit {circuit_id}")
