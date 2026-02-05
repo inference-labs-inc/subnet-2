@@ -9,6 +9,7 @@ from constants import (
     TEMP_FOLDER,
     Roles,
     COMPETITION_SYNC_INTERVAL,
+    SN2_RELAY_URL,
 )
 
 SHOW_HELP = False
@@ -149,8 +150,6 @@ def init_config(role: Optional[str] = None):
 
     config.full_path = os.path.expanduser("~/.bittensor/subnet-2")  # type: ignore
     config.full_path_score = os.path.join(config.full_path, "scores", "scores.pt")
-    if not config.certificate_path:
-        config.certificate_path = os.path.join(config.full_path, "cert")
 
     if config.external_model_dir:
         # user might have specified a custom location for storing models data
@@ -163,12 +162,8 @@ def init_config(role: Optional[str] = None):
         config.dsperse_run_dir = os.path.join(config.full_path, "dsperse_runs")
     os.makedirs(config.dsperse_run_dir, exist_ok=True)
 
-    if config.whitelisted_public_keys:
-        config.whitelisted_public_keys = config.whitelisted_public_keys.split(",")
-
     os.makedirs(config.full_path, exist_ok=True)
     os.makedirs(config.full_path_models, exist_ok=True)
-    os.makedirs(config.certificate_path, exist_ok=True)
     os.makedirs(os.path.dirname(config.full_path_score), exist_ok=True)
     bt.logging(config=config, logging_dir=config.logging.logging_dir)
     bt.logging.enable_info()
@@ -311,59 +306,10 @@ def _validator_config():
     )
 
     parser.add_argument(
-        "--external-api-host",
+        "--relay-url",
         type=str,
-        default="0.0.0.0",
-        help="The host for the external API.",
-    )
-
-    parser.add_argument(
-        "--external-api-port",
-        type=int,
-        default=8443,
-        help="The port for the external API.",
-    )
-
-    parser.add_argument(
-        "--external-api-workers",
-        type=int,
-        default=1,
-        help="The number of workers for the external API.",
-    )
-
-    parser.add_argument(
-        "--serve-axon",
-        type=bool,
-        default=False,
-        help="Whether to serve the axon displaying your API information.",
-    )
-
-    parser.add_argument(
-        "--do-not-verify-external-signatures",
-        default=False,
-        action="store_true",
-        help=(
-            "External PoW requests are signed by validator's (sender's) wallet. "
-            "By default we verify is the wallet legitimate. "
-            "You can disable this check with the flag."
-        ),
-    )
-
-    parser.add_argument(
-        "--whitelisted-public-keys",
-        type=str,
-        default=None,
-        help="A comma-separated list of public keys to whitelist for external requests.",
-    )
-
-    parser.add_argument(
-        "--certificate-path",
-        type=str,
-        default=None,
-        help="A custom path to a directory containing a public and private SSL certificate. "
-        "(cert.pem and key.pem) "
-        "Please note that this should not be used unless you have issued your own certificate. "
-        "A certificate will be issued for you by default.",
+        default=SN2_RELAY_URL,
+        help="WebSocket URL for the SN2 Relay service.",
     )
 
     parser.add_argument(
@@ -390,7 +336,7 @@ def _validator_config():
         # quick localnet configuration set up for testing (specific params for validator)
         if config.wallet.name == "default":
             config.wallet.name = "validator"
-        config.external_api_workers = config.external_api_workers or 1
-        config.external_api_port = config.external_api_port or 8443
-        config.do_not_verify_external_signatures = True
         config.disable_statistic_logging = True
+        # Use local relay URL for localnet
+        if config.relay_url == SN2_RELAY_URL:
+            config.relay_url = "ws://localhost:8080"

@@ -28,7 +28,7 @@ class Request:
     # next one is used only for rescheduling DSlice and RWR requests in case of failure
     queued_request: QueuedRequestDataModel | None = None
     # `external_request_hash` is the hash of the original request from external API user
-    # we use it to report back results to `ValidatorAPI`` class. It sends the results to the user.
+    # we use it to report back results to `RelayManager` class. It sends the results to the user.
     external_request_hash: str | None = None
     # `guard_hash` is the hash used by HashGuard to prevent duplicate requests
     # It's calculated from the inputs of the request.

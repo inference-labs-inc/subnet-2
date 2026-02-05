@@ -147,17 +147,20 @@ class MinerSession:
 
                 if step % 600 == 0:
                     self.check_register()
+                    circuit_store.refresh_circuits()
 
                 if step % 24 == 0 and self.subnet_uid is not None:
                     table = Table(title=f"Miner Status (UID: {self.subnet_uid})")
                     table.add_column("Block", justify="center", style="cyan")
                     table.add_column("Stake", justify="center", style="cyan")
+                    table.add_column("Trust", justify="center", style="cyan")
                     table.add_column("Consensus", justify="center", style="cyan")
                     table.add_column("Incentive", justify="center", style="cyan")
                     table.add_column("Emission", justify="center", style="cyan")
                     table.add_row(
                         str(self.metagraph.block.item()),
                         str(self.metagraph.S[self.subnet_uid]),
+                        str(self.metagraph.TS[self.subnet_uid]),
                         str(self.metagraph.C[self.subnet_uid]),
                         str(self.metagraph.I[self.subnet_uid]),
                         str(self.metagraph.E[self.subnet_uid]),
@@ -194,7 +197,9 @@ class MinerSession:
     def configure(self):
         self.wallet = bt.Wallet(config=cli_parser.config)
         self.subtensor = bt.Subtensor(config=cli_parser.config)
-        self.metagraph = self.subtensor.metagraph(cli_parser.config.netuid)
+        self.metagraph: bt.Metagraph = self.subtensor.metagraph(
+            cli_parser.config.netuid
+        )
         self.server = MinerServer(
             wallet=self.wallet, config=cli_parser.config, metagraph=self.metagraph
         )

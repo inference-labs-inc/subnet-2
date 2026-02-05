@@ -15,7 +15,7 @@ from bittensor.core.chain_data import AxonInfo
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.dsperse_manager import DSperseManager
 
-from _validator.api import ValidatorAPI
+from _validator.api import RelayManager
 from _validator.api.client import query_miner
 from _validator.config import ValidatorConfig
 from _validator.core.capacity_manager import CapacityManager
@@ -50,6 +50,7 @@ from constants import (
     MAX_CONCURRENT_REQUESTS,
     ONE_HOUR,
     ONE_MINUTE,
+    TEN_MINUTES,
 )
 from utils import AutoUpdate, clean_temp_files, with_rate_limit
 from utils.gc_logging import log_responses as gc_log_responses
@@ -97,10 +98,10 @@ class ValidatorLoop:
             score_manager=self.score_manager,
         )
         self.last_pow_commit_block = 0
-        self.api = ValidatorAPI(self.config)
-        self.api.dsperse_manager = self.dsperse_manager
+        self.relay = RelayManager(self.config)
+        self.relay.dsperse_manager = self.dsperse_manager
         self.request_pipeline = RequestPipeline(
-            self.config, self.score_manager, self.api
+            self.config, self.score_manager, self.relay
         )
 
         self.request_queue = asyncio.Queue()
@@ -202,6 +203,12 @@ class ValidatorLoop:
     def check_auto_update(self):
         self._handle_auto_update()
 
+    @with_rate_limit(period=TEN_MINUTES)
+    async def refresh_circuits(self):
+        await asyncio.get_event_loop().run_in_executor(
+            self.thread_pool, circuit_store.refresh_circuits
+        )
+
     @with_rate_limit(period=FIVE_MINUTES)
     def update_queryable_uids(self):
         self.queryable_uids = list(get_queryable_uids(self.config.metagraph))
@@ -269,11 +276,11 @@ class ValidatorLoop:
                     await asyncio.sleep(1)
                     continue
 
-                if not self.api.stacked_requests_queue:
+                if not self.relay.stacked_requests_queue:
                     for (
                         dslice_request
                     ) in self.dsperse_manager.generate_dslice_requests():
-                        self.api.stacked_requests_queue.insert(0, dslice_request)
+                        self.relay.stacked_requests_queue.insert(0, dslice_request)
 
                 pow_circuit = None
                 if (
@@ -311,7 +318,7 @@ class ValidatorLoop:
                                 uid,
                                 pow_circuit,
                             )
-                        elif self.api.stacked_requests_queue:
+                        elif self.relay.stacked_requests_queue:
                             request = self.request_pipeline._prepare_queued_request(uid)
                         else:
                             request = self.request_pipeline._prepare_benchmark_request(
@@ -375,6 +382,7 @@ class ValidatorLoop:
             try:
 
                 self.check_auto_update()
+                await self.refresh_circuits()
                 await self.sync_metagraph()
                 await self.sync_scores_uids()
                 await self.update_weights()
@@ -463,6 +471,9 @@ class ValidatorLoop:
         bt.logging.success(
             f"Validator started on subnet {self.config.subnet_uid} using UID {self.config.user_uid}"
         )
+
+        # Start the relay client connection
+        self.relay.start()
 
         try:
             await asyncio.gather(
@@ -558,7 +569,7 @@ class ValidatorLoop:
             if request.request_type == RequestType.DSLICE:
                 self._mark_dslice_failed(queued)
             elif request.request_type == RequestType.RWR:
-                self.api.set_request_result(
+                self.relay.set_request_result(
                     request.external_request_hash,
                     {"success": False, "error": "Max retries exceeded"},
                 )
@@ -570,7 +581,7 @@ class ValidatorLoop:
         )
 
         self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
-        self.api.stacked_requests_queue.append(queued)
+        self.relay.stacked_requests_queue.append(queued)
 
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
         self.dsperse_manager.on_slice_result(
@@ -611,7 +622,7 @@ class ValidatorLoop:
             self.recent_responses.append(response)
             if response.request_type == RequestType.RWR:
                 if response.verification_result:
-                    self.api.set_request_result(
+                    self.relay.set_request_result(
                         request_hash,
                         {
                             "hash": request_hash,
@@ -621,7 +632,7 @@ class ValidatorLoop:
                         },
                     )
                 else:
-                    self.api.set_request_result(
+                    self.relay.set_request_result(
                         request_hash,
                         {
                             "success": False,
@@ -667,7 +678,7 @@ class ValidatorLoop:
     async def _cleanup(self):
         """Handle keyboard interrupt by cleaning up and exiting."""
         bt.logging.success("Keyboard interrupt detected. Exiting validator.")
-        await self.api.stop()
+        await self.relay.stop()
         await self.httpx_client.aclose()
         stop_prometheus_logging()
         clean_temp_files()

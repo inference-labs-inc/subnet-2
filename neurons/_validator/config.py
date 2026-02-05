@@ -3,7 +3,6 @@ import bittensor as bt
 from constants import DEFAULT_NETUID, COMPETITION_SYNC_INTERVAL
 
 from utils import wandb_logger
-from _validator.config.api import ApiConfig
 
 
 class ValidatorConfig:
@@ -47,7 +46,9 @@ class ValidatorConfig:
             self.metagraph.hotkeys.index(self.wallet.hotkey.ss58_address)
         )
         self.localnet = self.bt_config.localnet
-        self.api = ApiConfig(self.bt_config)
+        self.relay_enabled = not self.bt_config.ignore_external_requests
+        self.relay_url = self.bt_config.relay_url
+
         self.competition_sync_interval = (
             COMPETITION_SYNC_INTERVAL
             if self.bt_config.competition_sync_interval is None

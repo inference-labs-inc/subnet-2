@@ -1,329 +1,314 @@
 from __future__ import annotations
-import os
-import traceback
-from fastapi import (
-    FastAPI,
-    WebSocket,
-    WebSocketDisconnect,
-    WebSocketException,
-    Request,
-    Response,
-)
-from proof_of_portfolio import verify
-from fastapi.responses import JSONResponse
 
+import asyncio
+import base64
+import contextlib
+import json
+import traceback
+from pathlib import Path
+
+import bittensor as bt
+import websockets
+from deployment_layer.circuit_store import circuit_store
+from execution_layer.circuit import ProofSystem
+from execution_layer.dsperse_manager import DSperseManager, DsperseRun
 from jsonrpcserver import (
-    async_dispatch,
-    Success,
     Error,
     InvalidParams,
+    Success,
+    async_dispatch,
 )
+from websockets.exceptions import ConnectionClosed
 
-from fastapi.routing import APIRoute, APIWebSocketRoute
-import bittensor as bt
-from _validator.models.poc_rpc_request import ProofOfComputationRPCRequest
-from _validator.models.pow_rpc_request import ProofOfWeightsRPCRequest
-from _validator.models.base_rpc_request import QueuedRequestDataModel
-import hashlib
-from constants import (
-    MAX_SIGNATURE_LIFESPAN,
-    MAINNET_TESTNET_UIDS,
-    EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
-)
 from _validator.config import ValidatorConfig
-import base64
-import substrateinterface
-import time
-from _validator.api.cache import ValidatorKeysCache
-import threading
-import uvicorn
-from _validator.api.certificate_manager import CertificateManager
-from _validator.api.websocket_manager import WebSocketManager
-import asyncio
-from OpenSSL import crypto
-from deployment_layer.circuit_store import circuit_store
-from _validator.utils.pps import ProofPublishingService
-from constants import PPS_URL, TESTNET_PPS_URL
-
-app = FastAPI()
-
-recent_requests: dict[str, int] = {}
+from _validator.models.base_rpc_request import QueuedRequestDataModel
+from _validator.models.poc_rpc_request import ProofOfComputationRPCRequest
+from constants import (
+    EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
+    RELAY_AUTH_TIMEOUT,
+    RELAY_OPEN_TIMEOUT,
+    RELAY_PING_INTERVAL,
+    RELAY_PING_TIMEOUT,
+    RELAY_RECONNECT_BASE_DELAY,
+    RELAY_RECONNECT_MAX_DELAY,
+)
 
 
-@app.middleware("http")
-async def rate_limiter(request: Request, call_next):
-    if request.url.path == "/rpc":
-        return await call_next(request)
+class AuthenticationError(Exception):
+    """Raised when authentication with the relay fails."""
 
-    ip = request.client.host
-    if _should_rate_limit(ip):
-        return Response(status_code=429)
-    return await call_next(request)
+    pass
 
 
-def _should_rate_limit(ip: str):
-    if ip in recent_requests.keys():
-        return max(0, time.time() - recent_requests[ip]) < 1
-    recent_requests[ip] = time.time()
-    return False
+class RelayManager:
+    """
+    WebSocket client that connects to the SN2 Relay service.
 
+    Maintains a persistent connection, handles authentication,
+    processes incoming JSON-RPC requests, and sends batch completion
+    notifications with generated proofs.
+    """
 
-class ValidatorAPI:
     def __init__(self, config: ValidatorConfig):
         self.config = config
-        # a Queue of requests to be sent to miners
-        # consists of "real world requests" ProofOfWeightsRPCRequest and ProofOfComputationRPCRequest
-        # and a Request with one slice of a DSperse model (DSlice)
+        # Queue of requests to be sent to miners (consumed by ValidatorLoop)
         self.stacked_requests_queue: list[QueuedRequestDataModel] = []
-        self.ws_manager = WebSocketManager()
-        self.recent_requests: dict[str, int] = {}
-        self.validator_keys_cache = ValidatorKeysCache(config)
-        self.server_thread: threading.Thread | None = None
         self.pending_requests: dict[str, asyncio.Event] = {}
-        self.request_results: dict[str, dict[str, any]] = {}
+        self.request_results: dict[str, dict] = {}
         self.is_testnet = config.bt_config.subtensor.network == "test"
-        self.dsperse_manager = None
-        self._setup_api()
+        self.dsperse_manager: DSperseManager | None = None
 
-    def _setup_api(self) -> None:
-        if not self.config.api.enabled:
-            bt.logging.info("API Disabled: --ignore-external-requests flag present")
+        # WebSocket client state
+        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._connected = asyncio.Event()
+        self._should_run = True
+        self._reconnect_delay = RELAY_RECONNECT_BASE_DELAY
+
+        # Queue for notifications to send when reconnected
+        self._pending_notifications: list[dict] = []
+        self._task: asyncio.Task | None = None
+
+    def start(self) -> None:
+        """Start the WebSocket client connection (called from ValidatorLoop)."""
+        if not self.config.relay_enabled:
+            bt.logging.info(
+                "Relay client disabled: --ignore-external-requests flag present"
+            )
             return
 
-        bt.logging.debug("Starting WebSocket API server...")
+        bt.logging.info("Starting SN2 Relay client...")
+        self._task = asyncio.create_task(self._run())
+        self._task.add_done_callback(self._on_task_done)
 
-        for route in self._get_routes():
-            app.routes.append(route)
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            bt.logging.error(f"Relay task failed with exception: {exc}")
 
-        if self.config.api.certificate_path:
-            cert_manager = CertificateManager(self.config.api.certificate_path)
-            cert_manager.ensure_valid_certificate(
-                bt.Axon(self.config.wallet).external_ip
-            )
-            self.commit_cert_hash()
+    async def _run(self) -> None:
+        """Main run loop with reconnection."""
+        while self._should_run:
+            try:
+                await self._connect_and_handle()
+            except AuthenticationError as e:
+                bt.logging.error(f"Relay authentication failed: {e}")
+            except ConnectionClosed as e:
+                bt.logging.warning(f"Relay connection closed: {e}")
+            except Exception as e:
+                bt.logging.error(f"Relay connection error: {e}")
+                traceback.print_exc()
 
-        self.start_server()
-        bt.logging.success("Ready to serve external requests")
+            if self._should_run:
+                await self._handle_reconnect()
 
-    async def handle_ws(self, websocket: WebSocket):
-        if (
-            self.config.api.verify_external_signatures
-            and not await self.validate_connection(websocket.headers)
-        ):
-            raise WebSocketException(code=3000, reason="Connection validation failed")
+    async def _connect_and_handle(self) -> None:
+        """Connect, authenticate, and handle messages."""
+        bt.logging.info(f"Connecting to SN2 Relay at {self.config.relay_url}...")
 
         try:
-            await self.ws_manager.connect(websocket)
-            async for data in websocket.iter_text():
+            async with websockets.connect(
+                self.config.relay_url,
+                open_timeout=RELAY_OPEN_TIMEOUT,
+                ping_interval=RELAY_PING_INTERVAL,
+                ping_timeout=RELAY_PING_TIMEOUT,
+            ) as ws:
+                bt.logging.debug("WebSocket handshake completed")
+                self._ws = ws
+                await self._authenticate(ws)
+                bt.logging.success("Connected and authenticated to SN2 Relay")
+                self._connected.set()
+                self._reconnect_delay = RELAY_RECONNECT_BASE_DELAY
+
+                await self._flush_pending_notifications(ws)
+
+                message_task = asyncio.create_task(self._message_loop(ws))
+                notify_task = asyncio.create_task(self._notification_sender_loop(ws))
+                done, pending = await asyncio.wait(
+                    {message_task, notify_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+        except asyncio.TimeoutError as e:
+            bt.logging.error(f"WS Connection timeout: {e}")
+            raise
+
+    async def _handle_reconnect(self) -> None:
+        """Handle reconnection with exponential backoff."""
+        self._connected.clear()
+        self._ws = None
+        bt.logging.warning(f"Reconnecting to SN2 Relay in {self._reconnect_delay}s...")
+        await asyncio.sleep(self._reconnect_delay)
+        self._reconnect_delay = min(
+            self._reconnect_delay * 2,
+            RELAY_RECONNECT_MAX_DELAY,
+        )
+
+    async def _authenticate(self, ws: websockets.WebSocketClientProtocol) -> None:
+        """
+        Handle auth challenge/response flow per VALIDATOR_INTEGRATION.md.
+
+        1. Receive auth_challenge with 40 bytes (32 nonce + 8 timestamp)
+        2. Sign challenge bytes with validator's sr25519 keypair
+        3. Send auth_response with SS58 address and signature
+        4. Receive auth_success or connection close
+        """
+        # Receive challenge
+        try:
+            bt.logging.info(
+                f"Authenticating with SN2 Relay (ss58:{self.config.wallet.hotkey.ss58_address})..."
+            )
+            raw_msg = await asyncio.wait_for(ws.recv(), timeout=RELAY_AUTH_TIMEOUT)
+        except asyncio.TimeoutError:
+            bt.logging.error("Timeout waiting for auth_challenge from relay")
+            raise AuthenticationError("Timeout waiting for auth_challenge")
+        msg = json.loads(raw_msg)
+
+        if msg.get("type") != "auth_challenge":
+            raise AuthenticationError(f"Expected auth_challenge, got {msg.get('type')}")
+
+        try:
+            challenge_bytes = base64.b64decode(msg["challenge"], validate=True)
+        except Exception as e:
+            raise AuthenticationError("Invalid auth_challenge payload") from e
+
+        if len(challenge_bytes) != 40:
+            raise AuthenticationError(
+                f"Invalid auth_challenge length: {len(challenge_bytes)}"
+            )
+
+        # Sign with validator's sr25519 keypair
+        signature = self.config.wallet.hotkey.sign(challenge_bytes)
+
+        # Send response
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "auth_response",
+                    "ss58": self.config.wallet.hotkey.ss58_address,
+                    "signature": base64.b64encode(signature).decode(),
+                }
+            )
+        )
+
+        # Wait for success
+        raw_result = await asyncio.wait_for(ws.recv(), timeout=RELAY_AUTH_TIMEOUT)
+        result = json.loads(raw_result)
+
+        if result.get("type") != "auth_success":
+            raise AuthenticationError("Authentication failed")
+
+    async def _message_loop(self, ws: websockets.WebSocketClientProtocol) -> None:
+        """Handle incoming JSON-RPC messages from relay."""
+        async for message in ws:
+            bt.logging.debug(f"Received relay message: {message[:100]}...")
+            try:
                 response = await async_dispatch(
-                    data,
-                    context=websocket,
+                    message,
                     methods={
-                        "subnet-2.proof_of_weights": self.handle_proof_of_weights,
                         "subnet-2.proof_of_computation": self.handle_proof_of_computation,
                         "subnet-2.dsperse_submit": self.handle_dsperse_submit,
                         "subnet-2.run_status": self.handle_run_status,
                     },
                 )
-                await websocket.send_text(str(response))
-        except WebSocketDisconnect:
-            bt.logging.debug("Client disconnected normally")
-        except Exception as e:
-            bt.logging.error(f"WebSocket error: {str(e)}")
-        finally:
-            await self.ws_manager.disconnect(websocket)
-
-    def get_circuits(self, request: Request) -> None:
-
-        try:
-            return JSONResponse(circuit_store.list_circuit_metadata())
-        except Exception:
-            bt.logging.error("Failed to fetch circuit metadata from circuit store.")
-            traceback.print_exc()
-        return Response(status_code=500)
-
-    async def submit_proof(self, request: Request) -> Response:
-        """
-        Handles proof submission from authorized hotkeys.
-        Verifies the proof and uploads to PPS if successful.
-        """
-        try:
-            if not await self.validate_connection(request.headers):
-                bt.logging.warning("Unauthorized proof submission attempt")
-                return JSONResponse({"error": "Unauthorized"}, status_code=401)
-
-            try:
-                body = await request.json()
-            except Exception:
-                return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-            proof_data = body.get("proof")
-            public_signals = body.get("public_signals")
-
-            if not proof_data:
-                return JSONResponse({"error": "Missing proof data"}, status_code=400)
-            try:
-                verification_result = verify(proof_data, public_signals)
-
-                if not verification_result:
-                    return JSONResponse(
-                        {"error": "Proof verification failed"}, status_code=400
-                    )
+                await ws.send(str(response))
             except Exception as e:
-                bt.logging.error(f"Uploaded proof failed to verify {e}")
-                return JSONResponse(
-                    {"error": "Proof verification failed"}, status_code=400
+                bt.logging.error(f"Error processing relay message: {e}")
+                traceback.print_exc()
+                request_id = None
+                with contextlib.suppress(Exception):
+                    request_id = json.loads(message).get("id")
+                error_response = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32603, "message": str(e)},
+                        "id": request_id,
+                    }
                 )
+                await ws.send(error_response)
 
+    async def _notification_sender_loop(
+        self, ws: websockets.WebSocketClientProtocol
+    ) -> None:
+        """Periodically flush queued notifications while connected."""
+        while self._should_run and not ws.closed:
+            await self._flush_pending_notifications(ws)
+            await asyncio.sleep(1)
+
+    async def _flush_pending_notifications(
+        self, ws: websockets.WebSocketClientProtocol
+    ) -> None:
+        """Send any queued notifications after reconnecting."""
+        while self._pending_notifications and not ws.closed:
+            notification = self._pending_notifications.pop(0)
             try:
-                pps_url = self._upload_to_pps(
-                    proof_data, public_signals, request.headers
+                await ws.send(json.dumps(notification))
+                bt.logging.info(
+                    f"Sent queued notification: {notification.get('method')}"
                 )
+            except Exception as e:
+                bt.logging.error(f"Failed to send queued notification: {e}")
+                self._pending_notifications.insert(0, notification)
+                break
 
-                if pps_url:
-                    return JSONResponse(
+    def _on_run_complete(self, run: DsperseRun) -> None:
+        """Callback invoked by DSperseManager when all slices finish (before cleanup)."""
+        proofs = []
+        for slice_num, slice_data in run.slices.items():
+            if not slice_data.success:
+                continue
+            if slice_data.proof_file and slice_data.proof_file.exists():
+                proof_content = self._read_proof_file(
+                    slice_data.proof_file, slice_data.proof_system
+                )
+                if proof_content is not None:
+                    proofs.append(
                         {
-                            "verified": True,
-                            "url": pps_url,
+                            "slice_num": slice_data.slice_num,
+                            "proof_system": slice_data.proof_system.value,
+                            "proof": proof_content,
                         }
                     )
-                else:
-                    return JSONResponse(
-                        {"verified": True, "error": "Failed to upload proof to PPS"},
-                        status_code=200,
-                    )
 
-            except Exception as e:
-                bt.logging.error(f"Error processing proof: {str(e)}")
-                traceback.print_exc()
-                return JSONResponse({"error": "Internal server error"}, status_code=500)
+        notification = {
+            "jsonrpc": "2.0",
+            "method": "subnet-2.batch_completed",
+            "params": {
+                "run_uid": run.run_uid,
+                "circuit_id": run.circuit_id,
+                "status": "completed" if not run.failed else "completed_with_errors",
+                "proofs": proofs,
+                "completed": len(run.completed),
+                "failed": len(run.failed),
+                "total": len(run.slices),
+            },
+        }
+        self._pending_notifications.append(notification)
 
-        except Exception as e:
-            bt.logging.error(f"Error handling proof submission: {str(e)}")
-            traceback.print_exc()
-            return JSONResponse({"error": "Internal server error"}, status_code=500)
-
-    def _upload_to_pps(self, proof_data, public_signals, headers) -> str | None:
-        """
-        Upload verified proof to PPS and return URL.
-        """
+    def _read_proof_file(
+        self, proof_file: Path, proof_system: ProofSystem
+    ) -> dict | str | None:
+        """Read proof content from file based on proof system."""
         try:
-
-            pps_url = TESTNET_PPS_URL if self.is_testnet else PPS_URL
-
-            hotkey_ss58 = headers.get("x-origin-ss58")
-            if not hotkey_ss58:
-                bt.logging.error("No hotkey found in headers")
-                return None
-
-            pps = ProofPublishingService(pps_url)
-
-            proof_json = {
-                "proof": proof_data,
-                "public_signals": public_signals,
-                "submitter_hotkey": hotkey_ss58,
-                "validator_hotkey": self.config.wallet.hotkey.ss58_address,
-            }
-
-            result = pps.publish_proof(proof_json, self.config.wallet.hotkey)
-
-            if result and "gatewayUrl" in result:
-                return result["gatewayUrl"]
-            elif result:
-                return f"{pps_url}/proof/{result.get('id', 'unknown')}"
-
+            if proof_system == ProofSystem.JSTPROVE:
+                with open(proof_file, "rb") as f:
+                    return f.read().hex()
+            else:
+                with open(proof_file, "r") as f:
+                    return json.load(f)
+        except Exception as e:
+            bt.logging.error(f"Error reading proof file {proof_file}: {e}")
             return None
 
-        except Exception as e:
-            bt.logging.error(f"PPS upload error: {str(e)}")
-            traceback.print_exc()
-            return None
+    async def handle_proof_of_computation(self, **params: dict) -> dict:
+        """
+        Handle subnet-2.proof_of_computation RPC method.
 
-    def _get_routes(self) -> list[APIWebSocketRoute | APIRoute]:
-        rpc_endpoint = APIWebSocketRoute("/rpc", self.handle_ws)
-        get_circuits_endpoint = APIRoute("/circuits", self.get_circuits)
-        submit_proof_endpoint = APIRoute(
-            "/verify-and-upload", self.submit_proof, methods=["POST"]
-        )
-        return [rpc_endpoint, get_circuits_endpoint, submit_proof_endpoint]
-
-    async def handle_proof_of_weights(
-        self, websocket: WebSocket, **params: dict[str, object]
-    ) -> dict[str, object]:
-        if not websocket.headers.get("x-netuid"):
-            return InvalidParams(
-                "Missing x-netuid header (required for proof of weights requests)"
-            )
-
-        evaluation_data = params.get("evaluation_data")
-        weights_version = params.get("weights_version")
-
-        if not evaluation_data:
-            return InvalidParams("Missing evaluation data")
-
-        try:
-            netuid = websocket.headers.get("x-netuid")
-            if netuid is None:
-                return InvalidParams("Missing x-netuid header")
-
-            if self.is_testnet:
-                testnet_uids = [
-                    uid[0] for uid in MAINNET_TESTNET_UIDS if uid[1] == int(netuid)
-                ]
-                if not testnet_uids:
-                    return InvalidParams(
-                        f"No testnet UID mapping found for mainnet UID {netuid}"
-                    )
-                netuid = testnet_uids[0]
-
-            netuid = int(netuid)
-            try:
-                external_request = ProofOfWeightsRPCRequest(
-                    evaluation_data=evaluation_data,
-                    netuid=netuid,
-                    weights_version=weights_version,
-                )
-            except ValueError as e:
-                return InvalidParams(str(e))
-
-            self.pending_requests[external_request.hash] = asyncio.Event()
-            self.stacked_requests_queue.insert(0, external_request)
-            bt.logging.success(
-                f"External request with hash {external_request.hash} added to queue"
-            )
-            try:
-                await asyncio.wait_for(
-                    self.pending_requests[external_request.hash].wait(),
-                    timeout=external_request.circuit.timeout
-                    + EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
-                )
-                result = self.request_results.pop(external_request.hash, None)
-
-                if result["success"]:
-                    bt.logging.success(
-                        f"External request with hash {external_request.hash} processed successfully"
-                    )
-                    return Success(result)
-                bt.logging.error(
-                    f"External request with hash {external_request.hash} failed to process"
-                )
-                return Error(9, "Request processing failed")
-            except asyncio.TimeoutError:
-                bt.logging.error(
-                    f"External request with hash {external_request.hash} timed out"
-                )
-                return Error(9, "Request processing failed", "Request timed out")
-            finally:
-                self.pending_requests.pop(external_request.hash, None)
-
-        except Exception as e:
-            bt.logging.error(f"Error processing request: {str(e)}")
-            traceback.print_exc()
-            return Error(9, "Request processing failed", str(e))
-
-    async def handle_proof_of_computation(
-        self, websocket: WebSocket, **params: dict[str, object]
-    ) -> dict[str, object]:
+        Queues a proof generation request and waits for completion.
+        """
         input_json = params.get("input")
         circuit_id = params.get("circuit")
 
@@ -350,6 +335,7 @@ class ValidatorAPI:
             bt.logging.success(
                 f"External request with hash {external_request.hash} added to queue"
             )
+
             try:
                 await asyncio.wait_for(
                     self.pending_requests[external_request.hash].wait(),
@@ -358,7 +344,7 @@ class ValidatorAPI:
                 )
                 result = self.request_results.pop(external_request.hash, None)
 
-                if result["success"]:
+                if result and result.get("success"):
                     bt.logging.success(
                         f"External request with hash {external_request.hash} processed successfully"
                     )
@@ -380,9 +366,7 @@ class ValidatorAPI:
             traceback.print_exc()
             return Error(9, "Request processing failed", str(e))
 
-    async def handle_dsperse_submit(
-        self, websocket: WebSocket, **params: dict[str, object]
-    ) -> dict[str, object]:
+    async def handle_dsperse_submit(self, **params: object) -> dict[str, object]:
         circuit_id = params.get("circuit_id")
         inputs = params.get("inputs")
 
@@ -398,10 +382,11 @@ class ValidatorAPI:
 
             bt.logging.info(f"Starting DSperse run for circuit {circuit_id}")
 
-            loop = asyncio.get_event_loop()
-            run_uid, requests = await loop.run_in_executor(
-                None,
-                lambda: self.dsperse_manager.start_run(circuit, inputs),
+            run_uid, requests = await asyncio.to_thread(
+                self.dsperse_manager.start_run,
+                circuit,
+                inputs,
+                callback=self._on_run_complete,
             )
 
             for request in requests:
@@ -421,9 +406,7 @@ class ValidatorAPI:
             traceback.print_exc()
             return Error(9, "DSperse submission failed", str(e))
 
-    async def handle_run_status(
-        self, websocket: WebSocket, **params: dict[str, object]
-    ) -> dict[str, object]:
+    async def handle_run_status(self, **params: object) -> dict[str, object]:
         run_uid = params.get("run_uid")
 
         if not run_uid:
@@ -462,133 +445,23 @@ class ValidatorAPI:
                 bt.logging.debug(f"Run {run_uid} already cleaned up or not found")
         bt.logging.info(f"Run {run_uid} completed and cleaned up")
 
-    def start_server(self):
-        """Start the uvicorn server in a separate thread"""
-        self.server_thread = threading.Thread(
-            target=uvicorn.run,
-            args=(app,),
-            kwargs={
-                "host": "0.0.0.0",
-                "port": self.config.api.port,
-                "ssl_keyfile": os.path.join(
-                    self.config.api.certificate_path, "key.pem"
-                ),
-                "ssl_certfile": os.path.join(
-                    self.config.api.certificate_path, "cert.pem"
-                ),
-            },
-            daemon=True,
-        )
-        self.server_thread.start()
-        if not self.config.api.serve_axon:
-            return
-        try:
-            bt.logging.info(f"Serving axon on port {self.config.api.port}")
-            axon = bt.Axon(
-                wallet=self.config.wallet, external_port=self.config.api.port
-            )
-            existing_axon = self.config.metagraph.axons[self.config.user_uid]
-            if (
-                existing_axon
-                and existing_axon.port == axon.external_port
-                and existing_axon.ip == axon.external_ip
-            ):
-                bt.logging.debug(
-                    f"Axon already serving on ip {axon.external_ip} and port {axon.external_port}"
-                )
-                return
-            axon.serve(self.config.bt_config.netuid, self.config.subtensor)
-            bt.logging.success("Axon served")
-        except Exception as e:
-            bt.logging.error(f"Error serving axon: {e}")
+    async def stop(self) -> None:
+        """Gracefully shutdown the WebSocket client."""
+        bt.logging.info("Stopping SN2 Relay client...")
+        self._should_run = False
+        self._connected.clear()
+        if self._task:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception as e:
+                bt.logging.debug(f"Error closing websocket: {e}")
+        self._ws = None
 
-    async def stop(self):
-        """Gracefully shutdown the WebSocket server"""
-        for connection in self.ws_manager.active_connections:
-            await connection.close()
-        self.ws_manager.active_connections.clear()
-
-    async def validate_connection(self, headers) -> bool:
-        required_headers = ["x-timestamp", "x-origin-ss58", "x-signature"]
-        if not all(header in headers for header in required_headers):
-            bt.logging.warning(
-                f"Incoming request is missing required headers: {required_headers}"
-            )
-            return False
-
-        try:
-            timestamp = int(headers["x-timestamp"])
-            current_time = time.time()
-            if current_time - timestamp > MAX_SIGNATURE_LIFESPAN:
-                bt.logging.warning(
-                    f"Incoming request signature timestamp {timestamp} is too old. Current time: {current_time}"
-                )
-                return False
-
-            ss58_address = headers["x-origin-ss58"]
-            signature = base64.b64decode(headers["x-signature"])
-
-            public_key = substrateinterface.Keypair(ss58_address=ss58_address)
-            if not public_key.verify(str(timestamp).encode(), signature):
-                bt.logging.warning(
-                    f"Incoming request signature verification failed for address {ss58_address}"
-                )
-                return False
-
-            if "x-netuid" in headers:
-                netuid = int(headers["x-netuid"])
-                return await self.validator_keys_cache.check_validator_key(
-                    ss58_address, netuid
-                )
-            else:
-                return await self.validator_keys_cache.check_whitelisted_key(
-                    ss58_address
-                )
-
-        except Exception as e:
-            bt.logging.error(f"Validation error: {str(e)}")
-            traceback.print_exc()
-            return False
-
-    def commit_cert_hash(self):
-        """Commit the cert hash to the chain. Clients will use this for certificate pinning."""
-
-        existing_commitment = None
-        try:
-            existing_commitment = self.config.subtensor.get_commitment(
-                self.config.subnet_uid, self.config.user_uid
-            )
-        except Exception:
-            bt.logging.warning(
-                "Error getting existing commitment. Assuming no commitment exists."
-            )
-            traceback.print_exc()
-
-        if not self.config.api.certificate_path:
-            return
-
-        cert_path = os.path.join(self.config.api.certificate_path, "cert.pem")
-        if not os.path.exists(cert_path):
-            return
-
-        with open(cert_path, "rb") as f:
-            cert_data = f.read()
-            cert = crypto.load_certificate(crypto.FILETYPE_PEM, cert_data)
-            cert_der = crypto.dump_certificate(crypto.FILETYPE_ASN1, cert)
-            cert_hash = hashlib.sha256(cert_der).hexdigest()
-            if cert_hash != existing_commitment:
-                try:
-                    self.config.subtensor.commit(
-                        self.config.wallet, self.config.subnet_uid, cert_hash
-                    )
-                    bt.logging.success("Certificate hash committed to chain.")
-                except Exception as e:
-                    bt.logging.error(f"Error committing certificate hash: {str(e)}")
-                    traceback.print_exc()
-            else:
-                bt.logging.debug("Certificate hash already committed to chain.")
-
-    def set_request_result(self, request_hash: str, result: dict[str, any]):
+    def set_request_result(self, request_hash: str, result: dict) -> None:
         """Set the result for a pending request and signal its completion."""
         if request_hash in self.pending_requests:
             self.request_results[request_hash] = result

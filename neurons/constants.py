@@ -158,6 +158,7 @@ REPO_URL = "https://github.com/inference-labs-inc/subnet-2"
 ONE_SECOND = 1
 ONE_MINUTE = 60
 FIVE_MINUTES = ONE_MINUTE * 5
+TEN_MINUTES = ONE_MINUTE * 10
 ONE_HOUR = ONE_MINUTE * 60
 ONE_DAY = ONE_HOUR * 24
 ONE_YEAR = ONE_DAY * 365
@@ -182,4 +183,16 @@ CIRCUIT_R2_BASE_URL = os.getenv(
 CIRCUIT_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".bittensor", "subnet-2", "circuit_cache"
 )
+
 CIRCUIT_METADATA_FILENAME = "circuit_metadata.json"
+
+# SN2 Relay WebSocket URLs
+SN2_RELAY_URL = os.getenv("SN2_RELAY_URL", "wss://sn2-relay.inferencelabs.com:8443")
+
+# Relay reconnection settings
+RELAY_RECONNECT_BASE_DELAY = 1  # seconds
+RELAY_RECONNECT_MAX_DELAY = 60  # seconds
+RELAY_AUTH_TIMEOUT = 10  # seconds
+RELAY_OPEN_TIMEOUT = 20  # seconds
+RELAY_PING_INTERVAL = 20  # seconds
+RELAY_PING_TIMEOUT = 20  # seconds
