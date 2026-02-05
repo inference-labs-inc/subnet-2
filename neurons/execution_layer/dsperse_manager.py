@@ -132,7 +132,11 @@ class DSperseManager:
             return run_uid, []
 
         slice_data_list = self._extract_dslice_data(
-            slice_results, actual_run_dir, circuit.id, runner.run_metadata
+            slice_results,
+            actual_run_dir,
+            circuit.id,
+            runner.run_metadata,
+            tensor_cache=runner.tensor_cache,
         )
 
         dsperse_run = DsperseRun(
@@ -233,6 +237,7 @@ class DSperseManager:
         run_dir: Path,
         circuit_id: str,
         run_metadata: RunMetadata | None = None,
+        tensor_cache: dict | None = None,
     ) -> list[DSliceData]:
         dslice_data_list = []
 
@@ -266,8 +271,16 @@ class DSperseManager:
                     tile_output = tile_run_dir / "output.json"
 
                     if not tile_input.exists() or not tile_output.exists():
-                        raise ValueError(
-                            f"Tile {tile_idx} of slice {slice_num} missing input/output files"
+                        if tensor_cache is None:
+                            raise ValueError(
+                                f"Tile {tile_idx} of slice {slice_num} missing input/output files"
+                            )
+                        DSperseManager._write_tile_files_from_cache(
+                            tensor_cache,
+                            base_slice_num,
+                            tile_idx,
+                            tile_input,
+                            tile_output,
                         )
 
                     dslice_data_list.append(
@@ -303,6 +316,46 @@ class DSperseManager:
 
         logging.info(f"Generated {len(dslice_data_list)} DSlice requests")
         return dslice_data_list
+
+    @staticmethod
+    def _write_tile_files_from_cache(
+        tensor_cache: dict,
+        slice_idx: str,
+        tile_idx: int,
+        input_path: Path,
+        output_path: Path,
+    ) -> None:
+        input_key = f"tile_{slice_idx}_{tile_idx}_in"
+        output_key = f"tile_{slice_idx}_{tile_idx}_out"
+
+        input_tensor = tensor_cache.get(input_key)
+        output_tensor = tensor_cache.get(output_key)
+
+        if input_tensor is None or output_tensor is None:
+            raise ValueError(
+                f"Tile {tile_idx} of slice_{slice_idx} missing from tensor_cache "
+                f"(input={input_key in tensor_cache}, output={output_key in tensor_cache})"
+            )
+
+        input_path.parent.mkdir(parents=True, exist_ok=True)
+
+        input_list = (
+            input_tensor.tolist() if hasattr(input_tensor, "tolist") else input_tensor
+        )
+        output_list = (
+            output_tensor.tolist()
+            if hasattr(output_tensor, "tolist")
+            else output_tensor
+        )
+
+        with open(input_path, "w") as f:
+            json.dump({"input_data": input_list}, f)
+        with open(output_path, "w") as f:
+            json.dump({"output_data": output_list}, f)
+
+        logging.debug(
+            f"Materialized tile files from cache: {input_path}, {output_path}"
+        )
 
     @staticmethod
     def _method_to_proof_system(method: str | None) -> ProofSystem:
