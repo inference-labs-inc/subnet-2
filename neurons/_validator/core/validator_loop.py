@@ -14,6 +14,7 @@ import httpx
 from bittensor.core.chain_data import AxonInfo
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.dsperse_manager import DSperseManager
+from execution_layer.dsperse_event_client import DsperseEventClient
 
 from _validator.api import RelayManager
 from _validator.api.client import query_miner
@@ -82,7 +83,12 @@ class ValidatorLoop:
 
         self.current_concurrency = MAX_CONCURRENT_REQUESTS
         self.capacity_manager = CapacityManager(self.config, self.httpx_client)
-        self.dsperse_manager = DSperseManager()
+
+        api_url = getattr(
+            cli_parser.config, "sn2_api_url", "https://sn2-api.inferencelabs.com"
+        )
+        self.dsperse_event_client = DsperseEventClient(api_url, config.wallet)
+        self.dsperse_manager = DSperseManager(event_client=self.dsperse_event_client)
 
         self.score_manager = ScoreManager(
             self.config.metagraph,
@@ -474,6 +480,7 @@ class ValidatorLoop:
 
         # Start the relay client connection
         self.relay.start()
+        self.dsperse_event_client.start()
 
         try:
             await asyncio.gather(
@@ -596,7 +603,13 @@ class ValidatorLoop:
                 f"Cannot mark DSLICE complete: missing run_uid={run_uid} or slice_num={slice_num}"
             )
             return
-        self.dsperse_manager.on_slice_result(run_uid, str(slice_num), success=True)
+        self.dsperse_manager.on_slice_result(
+            run_uid,
+            str(slice_num),
+            success=True,
+            response_time_sec=response.response_time,
+            verification_time_sec=response.verification_time or 0.0,
+        )
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
