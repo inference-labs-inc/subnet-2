@@ -16,7 +16,6 @@ import time
 from dsperse.src.backends.ezkl import EZKL
 from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.run.runner import Runner
-from dsperse.src.run.utils.runner_utils import RunnerUtils
 from dsperse.src.verify.verifier import Verifier
 from dsperse.src.slice.utils.converter import Converter
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
@@ -400,14 +399,28 @@ class DSperseManager:
                     )
                     return result
 
-                ezkl_circuit = RunnerUtils.resolve_relative_path(
-                    slice_meta.ezkl_circuit_path or slice_meta.circuit_path, model_dir
+                ezkl_circuit_path = (
+                    slice_meta.ezkl_circuit_path or slice_meta.circuit_path
                 )
-                ezkl_pk = RunnerUtils.resolve_relative_path(
-                    slice_meta.ezkl_pk_path or slice_meta.pk_path, model_dir
+                ezkl_pk_path = slice_meta.ezkl_pk_path or slice_meta.pk_path
+                ezkl_settings_path = (
+                    slice_meta.ezkl_settings_path or slice_meta.settings_path
                 )
-                ezkl_settings = RunnerUtils.resolve_relative_path(
-                    slice_meta.ezkl_settings_path or slice_meta.settings_path, model_dir
+
+                ezkl_circuit = (
+                    Path(ezkl_circuit_path)
+                    if Path(ezkl_circuit_path).is_absolute()
+                    else model_dir / ezkl_circuit_path
+                )
+                ezkl_pk = (
+                    Path(ezkl_pk_path)
+                    if Path(ezkl_pk_path).is_absolute()
+                    else model_dir / ezkl_pk_path
+                )
+                ezkl_settings = (
+                    Path(ezkl_settings_path)
+                    if Path(ezkl_settings_path).is_absolute()
+                    else model_dir / ezkl_settings_path
                 )
                 witness_path = run_dir / slice_id / "output.json"
                 proof_path = tmp_path / "proof.json"
@@ -418,7 +431,7 @@ class DSperseManager:
                     model_path=str(ezkl_circuit),
                     proof_path=str(proof_path),
                     pk_path=str(ezkl_pk),
-                    settings_path=ezkl_settings,
+                    settings_path=str(ezkl_settings),
                 )
 
                 proof_data = None
@@ -637,4 +650,13 @@ class DSperseManager:
                 output_path=extracted_path,
                 cleanup=True,
             )
+            contents = list(extracted_path.iterdir())
+            if (
+                len(contents) == 1
+                and contents[0].is_dir()
+                and (contents[0] / "payload").is_dir()
+            ):
+                for item in contents[0].iterdir():
+                    shutil.move(str(item), str(extracted_path / item.name))
+                contents[0].rmdir()
             dslice_file.unlink(missing_ok=True)
