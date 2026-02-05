@@ -204,8 +204,10 @@ class ValidatorLoop:
         self._handle_auto_update()
 
     @with_rate_limit(period=TEN_MINUTES)
-    def refresh_circuits(self):
-        circuit_store.refresh_circuits()
+    async def refresh_circuits(self):
+        await asyncio.get_event_loop().run_in_executor(
+            self.thread_pool, circuit_store.refresh_circuits
+        )
 
     @with_rate_limit(period=FIVE_MINUTES)
     def update_queryable_uids(self):
@@ -380,7 +382,7 @@ class ValidatorLoop:
             try:
 
                 self.check_auto_update()
-                self.refresh_circuits()
+                await self.refresh_circuits()
                 await self.sync_metagraph()
                 await self.sync_scores_uids()
                 await self.update_weights()
