@@ -524,6 +524,9 @@ class DSperseManager:
                         / "jstprove"
                         / f"slice_{base_slice_num}_circuit.txt"
                     )
+                    if not jst_model_path.exists():
+                        logging.error(f"JSTprove circuit not found: {jst_model_path}")
+                        return result
                     success, proof_data = self._jstprove_witness_and_prove(
                         jst_model_path,
                         input_file,
