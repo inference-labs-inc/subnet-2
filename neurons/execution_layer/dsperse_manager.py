@@ -389,6 +389,13 @@ class DSperseManager:
             body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
             signature = self._sign_request(body)
 
+            if hotkey == "unknown" or not signature:
+                logging.warning(
+                    f"Skipping metrics submission for run {run.run_uid}: "
+                    f"invalid hotkey or signature"
+                )
+                return
+
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(
                     f"{api_url}/statistics/dsperse/log/",
