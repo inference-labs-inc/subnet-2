@@ -171,8 +171,8 @@ def capture_environment() -> dict:
     try:
         disk = shutil.disk_usage("/")
         env["disk_free_gb"] = round(disk.free / (1024**3), 2)
-    except Exception:
-        pass
+    except OSError:
+        logging.debug("Failed to get disk usage")
 
     return env
 
@@ -208,8 +208,8 @@ class MemoryTracker:
                     current_mb = mem_info.rss / (1024 * 1024)
                     if current_mb > self._peak_mb:
                         self._peak_mb = current_mb
-                except Exception:
-                    pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    self._running = False
                 time.sleep(self.poll_interval)
 
         self._thread = threading.Thread(target=poll, daemon=True)

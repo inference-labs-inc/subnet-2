@@ -403,7 +403,6 @@ class DSperseManager:
 
     def _sign_request(self, payload: dict, hotkey: str) -> str:
         try:
-            import json
             import hashlib
 
             wallet = cli_parser.config.wallet
