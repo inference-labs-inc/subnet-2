@@ -4,6 +4,7 @@ import os
 import random
 import shutil
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -118,6 +119,7 @@ class DSperseManager:
             loop = asyncio.get_running_loop()
             loop.create_task(coro)
         except RuntimeError:
+            logging.warning(f"No running event loop, dropping coroutine: {coro!r}")
             coro.close()
 
     def _get_circuit_by_id(self, circuit_id: str) -> Circuit:
@@ -311,7 +313,9 @@ class DSperseManager:
                 loop = asyncio.get_running_loop()
                 loop.run_in_executor(None, self._submit_metrics, run)
             except RuntimeError:
-                self._submit_metrics(run)
+                threading.Thread(
+                    target=self._submit_metrics, args=(run,), daemon=True
+                ).start()
             if run.callback:
                 try:
                     run.callback(run)
