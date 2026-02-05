@@ -407,6 +407,13 @@ class DSperseManager:
                     slice_meta.ezkl_settings_path or slice_meta.settings_path
                 )
 
+                if not ezkl_circuit_path or not ezkl_pk_path or not ezkl_settings_path:
+                    logging.error(
+                        f"Missing EZKL paths for {slice_id}: "
+                        f"circuit={ezkl_circuit_path}, pk={ezkl_pk_path}, settings={ezkl_settings_path}"
+                    )
+                    return result
+
                 ezkl_circuit = (
                     Path(ezkl_circuit_path)
                     if Path(ezkl_circuit_path).is_absolute()
