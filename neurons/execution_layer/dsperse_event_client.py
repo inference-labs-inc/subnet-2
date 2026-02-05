@@ -181,7 +181,7 @@ class DsperseEventClient:
                 self.wallet.hotkey.sign(body.encode())
             ).decode()
 
-            await self._client.post(
+            response = await self._client.post(
                 f"{self.api_url}/statistics/dsperse/events/",
                 content=body,
                 headers={
@@ -189,6 +189,12 @@ class DsperseEventClient:
                     "X-Request-Signature": signature,
                 },
             )
+            if response.status_code >= 400:
+                logger.warning(
+                    f"Failed to flush dsperse events: {response.status_code} {response.text}"
+                )
+                async with self._buffer_lock:
+                    self._buffer = events + self._buffer
         except Exception as e:
             logger.warning(f"Failed to flush dsperse events: {e}")
             async with self._buffer_lock:

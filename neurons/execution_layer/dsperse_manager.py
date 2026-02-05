@@ -113,6 +113,13 @@ class DSperseManager:
             except Exception as e:
                 logging.warning(f"Failed to remove {entry}: {e}")
 
+    def _schedule_async(self, coro):
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
+        except RuntimeError:
+            pass
+
     def _get_circuit_by_id(self, circuit_id: str) -> Circuit:
         circuit = next((c for c in self.circuits if c.id == circuit_id), None)
         if circuit is None:
@@ -199,8 +206,7 @@ class DSperseManager:
         logging.info(f"Generated {len(requests)} DSlice requests for run {run_uid}")
 
         if self.event_client:
-            loop = asyncio.get_event_loop()
-            loop.create_task(
+            self._schedule_async(
                 self.event_client.emit_run_started(
                     run_uid=run_uid,
                     circuit_id=circuit.id,
@@ -211,7 +217,7 @@ class DSperseManager:
             )
             for slice_data in slice_data_list:
                 if slice_data.timing:
-                    loop.create_task(
+                    self._schedule_async(
                         self.event_client.emit_witness_complete(
                             run_uid=run_uid,
                             slice_num=slice_data.slice_num,
@@ -264,9 +270,8 @@ class DSperseManager:
                 run.slices[slice_num].timing.success = success
 
         if self.event_client:
-            loop = asyncio.get_event_loop()
             if success:
-                loop.create_task(
+                self._schedule_async(
                     self.event_client.emit_verification_complete(
                         run_uid=run_uid,
                         slice_num=slice_num,
@@ -275,7 +280,7 @@ class DSperseManager:
                     )
                 )
             else:
-                loop.create_task(
+                self._schedule_async(
                     self.event_client.emit_slice_failed(
                         run_uid=run_uid,
                         slice_num=slice_num,
@@ -290,16 +295,19 @@ class DSperseManager:
             total_run_time = (
                 time.perf_counter() - run.start_time if run.start_time else None
             )
-            loop = asyncio.get_event_loop()
             if self.event_client:
-                loop.create_task(
+                self._schedule_async(
                     self.event_client.emit_run_complete(
                         run_uid=run_uid,
                         all_successful=run.all_successful,
                         total_run_time_sec=total_run_time,
                     )
                 )
-            loop.run_in_executor(None, self._submit_metrics, run)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, self._submit_metrics, run)
+            except RuntimeError:
+                self._submit_metrics(run)
             if run.callback:
                 try:
                     run.callback(run)
