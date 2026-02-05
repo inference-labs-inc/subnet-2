@@ -232,7 +232,19 @@ class CircuitStore:
     def refresh_circuits(self):
         try:
             circuits_data = self._fetch_circuits_from_api()
+            existing_ids = set(self.circuits.keys())
             self._load_from_api(circuits_data)
+            new_ids = set(self.circuits.keys()) - existing_ids
+            for circuit_id in new_ids:
+                circuit = self.circuits[circuit_id]
+                file_count = len(circuits_data)
+                for cd in circuits_data:
+                    if cd.get("id") == circuit_id:
+                        file_count = len(cd.get("files", {}))
+                        break
+                bt.logging.info(
+                    f"Found new circuit: {circuit.metadata.name} v{circuit.metadata.version} ({file_count} files)"
+                )
         except Exception as e:
             bt.logging.warning(f"Failed to refresh circuits from API: {e}")
 

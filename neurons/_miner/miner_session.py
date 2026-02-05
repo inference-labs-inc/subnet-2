@@ -147,6 +147,7 @@ class MinerSession:
 
                 if step % 600 == 0:
                     self.check_register()
+                    circuit_store.refresh_circuits()
 
                 if step % 24 == 0 and self.subnet_uid is not None:
                     table = Table(title=f"Miner Status (UID: {self.subnet_uid})")

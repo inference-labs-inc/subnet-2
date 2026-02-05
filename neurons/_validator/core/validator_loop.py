@@ -50,6 +50,7 @@ from constants import (
     MAX_CONCURRENT_REQUESTS,
     ONE_HOUR,
     ONE_MINUTE,
+    TEN_MINUTES,
 )
 from utils import AutoUpdate, clean_temp_files, with_rate_limit
 from utils.gc_logging import log_responses as gc_log_responses
@@ -201,6 +202,10 @@ class ValidatorLoop:
     @with_rate_limit(period=FIVE_MINUTES)
     def check_auto_update(self):
         self._handle_auto_update()
+
+    @with_rate_limit(period=TEN_MINUTES)
+    def refresh_circuits(self):
+        circuit_store.refresh_circuits()
 
     @with_rate_limit(period=FIVE_MINUTES)
     def update_queryable_uids(self):
@@ -375,6 +380,7 @@ class ValidatorLoop:
             try:
 
                 self.check_auto_update()
+                self.refresh_circuits()
                 await self.sync_metagraph()
                 await self.sync_scores_uids()
                 await self.update_weights()
