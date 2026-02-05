@@ -382,13 +382,15 @@ class DSperseManager:
                 api_url = "https://sn2-api.inferencelabs.com"
 
             hotkey = self._get_validator_hotkey()
-            signature = self._sign_request(payload, hotkey)
+            body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            signature = self._sign_request(body)
 
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(
                     f"{api_url}/statistics/dsperse/log/",
-                    json=payload,
+                    content=body,
                     headers={
+                        "Content-Type": "application/json",
                         "X-Signature": signature,
                         "X-Hotkey": hotkey,
                     },
@@ -409,14 +411,12 @@ class DSperseManager:
         except Exception:
             return "unknown"
 
-    def _sign_request(self, payload: dict, hotkey: str) -> str:
+    def _sign_request(self, body: str) -> str:
         try:
             import hashlib
 
             wallet = cli_parser.config.wallet
-            message = hashlib.sha256(
-                json.dumps(payload, sort_keys=True).encode()
-            ).hexdigest()
+            message = hashlib.sha256(body.encode()).hexdigest()
             signature = wallet.hotkey.sign(message.encode())
             return signature.hex()
         except Exception:

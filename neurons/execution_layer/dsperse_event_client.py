@@ -25,16 +25,24 @@ class DsperseEventClient:
 
     def start(self):
         if self._task is None or self._task.done():
-            self._running = True
-            self._client = httpx.AsyncClient(timeout=10.0)
-            self._task = asyncio.create_task(self._flush_loop())
+            try:
+                loop = asyncio.get_running_loop()
+                self._running = True
+                self._client = httpx.AsyncClient(timeout=10.0)
+                self._task = loop.create_task(self._flush_loop())
+            except RuntimeError:
+                self._running = False
 
     def stop(self):
         self._running = False
-        if self._task:
+        if self._task is not None:
             self._task.cancel()
         if self._client:
-            asyncio.create_task(self._client.aclose())
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._client.aclose())
+            except RuntimeError:
+                pass
 
     async def emit(self, event: dict[str, Any]):
         if "timestamp" not in event:
