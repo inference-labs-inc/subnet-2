@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import random
@@ -198,8 +199,6 @@ class DSperseManager:
         logging.info(f"Generated {len(requests)} DSlice requests for run {run_uid}")
 
         if self.event_client:
-            import asyncio
-
             loop = asyncio.get_event_loop()
             loop.create_task(
                 self.event_client.emit_run_started(
@@ -265,8 +264,6 @@ class DSperseManager:
                 run.slices[slice_num].timing.success = success
 
         if self.event_client:
-            import asyncio
-
             loop = asyncio.get_event_loop()
             if success:
                 loop.create_task(
@@ -294,8 +291,6 @@ class DSperseManager:
                 time.perf_counter() - run.start_time if run.start_time else None
             )
             if self.event_client:
-                import asyncio
-
                 loop = asyncio.get_event_loop()
                 loop.create_task(
                     self.event_client.emit_run_complete(
