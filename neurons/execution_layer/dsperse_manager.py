@@ -118,7 +118,7 @@ class DSperseManager:
             loop = asyncio.get_running_loop()
             loop.create_task(coro)
         except RuntimeError:
-            pass
+            coro.close()
 
     def _get_circuit_by_id(self, circuit_id: str) -> Circuit:
         circuit = next((c for c in self.circuits if c.id == circuit_id), None)
