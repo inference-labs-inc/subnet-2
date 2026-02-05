@@ -593,7 +593,7 @@ class DSperseManager:
                         model_path=str(ezkl_circuit),
                         proof_path=str(proof_path),
                         pk_path=str(ezkl_pk),
-                        settings_path=ezkl_settings,
+                        settings_path=str(ezkl_settings),
                     )
 
                     proof_data = None
