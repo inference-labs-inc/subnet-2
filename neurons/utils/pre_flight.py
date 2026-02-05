@@ -212,7 +212,6 @@ def sync_models(role: Roles | None = None):
     """
     Download SRS files and sync external files for all models in the deployment layer.
     """
-    from execution_layer.dsperse_manager import DSperseManager
     from execution_layer.circuit import CircuitType
 
     if not getattr(cli_parser.config, "download_all_circuits", False):
@@ -287,7 +286,6 @@ def sync_models(role: Roles | None = None):
         )
         if metadata.get("type") == CircuitType.DSPERSE_PROOF_GENERATION:
             download_dslices(external_files_model_path, metadata.get("dslices", []))
-            DSperseManager.extract_dslices(external_files_model_path)
 
 
 def download_external_files(

@@ -15,7 +15,7 @@ from constants import (
     IGNORED_MODEL_HASHES,
     MAINNET_TESTNET_UIDS,
 )
-from execution_layer.circuit import Circuit, CircuitMetadata, CircuitType
+from execution_layer.circuit import Circuit, CircuitMetadata
 
 
 class CircuitStore:
@@ -96,10 +96,6 @@ class CircuitStore:
                     )
                     continue
                 metadata = CircuitMetadata.from_dict(metadata_dict)
-                if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
-                    from execution_layer.dsperse_manager import DSperseManager
-
-                    DSperseManager.extract_dslices(folder_path)
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit
                 bt.logging.info(f"Loaded circuit {circuit_id} from cache")
@@ -126,11 +122,6 @@ class CircuitStore:
             try:
                 self._cache_circuit(circuit_id, circuit_data)
                 metadata = CircuitMetadata.from_dict(circuit_data.get("metadata", {}))
-                if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
-                    from execution_layer.dsperse_manager import DSperseManager
-
-                    cache_path = os.path.join(self._cache_dir, f"model_{circuit_id}")
-                    DSperseManager.extract_dslices(cache_path)
                 circuit = Circuit(circuit_id, metadata=metadata)
                 self.circuits[circuit_id] = circuit
                 bt.logging.info(f"Loaded circuit {circuit_id} from API")
@@ -217,6 +208,25 @@ class CircuitStore:
                 bt.logging.error(f"Error loading circuit {circuit_id}: {e}")
                 traceback.print_exc()
 
+    def refresh_circuits(self):
+        try:
+            circuits_data = self._fetch_circuits_from_api()
+            existing_ids = set(self.circuits.keys())
+            self._load_from_api(circuits_data)
+            new_ids = set(self.circuits.keys()) - existing_ids
+            for circuit_id in new_ids:
+                circuit = self.circuits[circuit_id]
+                file_count = len(circuits_data)
+                for cd in circuits_data:
+                    if cd.get("id") == circuit_id:
+                        file_count = len(cd.get("files", {}))
+                        break
+                bt.logging.info(
+                    f"Found new circuit: {circuit.metadata.name} v{circuit.metadata.version} ({file_count} files)"
+                )
+        except Exception as e:
+            bt.logging.warning(f"Failed to refresh circuits from API: {e}")
+
     def ensure_circuit(self, circuit_id: str) -> Circuit:
         if circuit_id in self.circuits:
             return self.circuits[circuit_id]
@@ -232,11 +242,6 @@ class CircuitStore:
 
         self._cache_circuit(circuit_id, circuit_data)
         metadata = CircuitMetadata.from_dict(circuit_data.get("metadata", {}))
-        if metadata.type == CircuitType.DSPERSE_PROOF_GENERATION:
-            from execution_layer.dsperse_manager import DSperseManager
-
-            cache_path = os.path.join(self._cache_dir, f"model_{circuit_id}")
-            DSperseManager.extract_dslices(cache_path)
         circuit = Circuit(circuit_id, metadata=metadata)
         self.circuits[circuit_id] = circuit
         bt.logging.success(f"Fetched and loaded circuit {circuit_id}")
