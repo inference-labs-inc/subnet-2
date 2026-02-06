@@ -17,7 +17,12 @@ from typing import Any, Callable, Optional
 import torch
 from bittensor import logging
 
-from dsperse.src.analyzers.schema import Backend, TilingInfo, RunSliceMetadata
+from dsperse.src.analyzers.schema import (
+    Backend,
+    TilingInfo,
+    RunSliceMetadata,
+    RunMetadata,
+)
 from dsperse.src.run.runner import Runner as DsperseRunner
 from dsperse.src.run.tile_executor import TileExecutor
 from dsperse.src.slice.utils.converter import Converter
@@ -104,7 +109,10 @@ class IncrementalRunner:
 
         from dsperse.src.analyzers.runner_analyzer import RunnerAnalyzer
 
-        run_metadata = RunnerAnalyzer.build_run_metadata(slices_path)
+        slices_metadata = RunnerAnalyzer.load_slices_metadata(slices_path)
+        run_metadata = RunMetadata.from_dict(
+            RunnerAnalyzer.build_run_metadata(slices_path, slices_metadata)
+        )
 
         execution_order = sorted(
             run_metadata.slices.keys(), key=lambda k: int(k.split("_")[1])
