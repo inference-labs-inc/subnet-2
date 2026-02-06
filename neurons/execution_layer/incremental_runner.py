@@ -11,6 +11,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 from bittensor import logging
@@ -24,6 +25,7 @@ from dsperse.src.run.incremental_runner import (
     TileResult,
 )
 from dsperse.src.analyzers.schema import Backend
+from dsperse.src.run.runner import Runner as DsperseRunner
 from execution_layer.circuit import Circuit, ProofSystem
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.request_type import RequestType
@@ -306,8 +308,25 @@ class IncrementalRunner:
             return []
 
         tile_requests = []
+        first_tile_checked = False
         for task in self._dsperse_runner.iter_tasks(state):
             if isinstance(task, TileTask):
+                if not first_tile_checked:
+                    first_tile_checked = True
+                    backend = task.backend.lower() if task.backend else ""
+                    if "jstprove" in backend or "jst" in backend:
+                        if not self._has_jstprove_tile_circuits(circuit, task.slice_id):
+                            logging.info(
+                                f"No JSTprove tile circuits found for {task.slice_id}, "
+                                f"running local ONNX inference instead"
+                            )
+                            pending = state.pending_tiled_slice
+                            if pending:
+                                self._run_local_onnx_tiles(
+                                    state, status, circuit, pending
+                                )
+                            return []
+
                 logging.debug(
                     f"[TILE DEBUG] get_tile_requests: TileTask found, task.backend={task.backend!r}, "
                     f"slice_id={task.slice_id}, tile_idx={task.tile_idx}"
@@ -348,7 +367,6 @@ class IncrementalRunner:
         pending,
     ) -> list[IncrementalTileRequest]:
         """Generate tile requests from pending_tiled_slice state."""
-        tile_requests = []
         nodes = state.run_metadata.execution_chain.nodes
         node = nodes.get(pending.slice_id)
 
@@ -366,6 +384,17 @@ class IncrementalRunner:
             logging.error(f"Tiling info not found for pending slice {pending.slice_id}")
             return []
 
+        backend = node.backend.lower() if node.backend else ""
+        if "jstprove" in backend or "jst" in backend:
+            if not self._has_jstprove_tile_circuits(circuit, pending.slice_id):
+                logging.info(
+                    f"No JSTprove tile circuits found for {pending.slice_id}, "
+                    f"running local ONNX inference instead"
+                )
+                self._run_local_onnx_tiles(state, status, circuit, pending)
+                return []
+
+        tile_requests = []
         slice_idx = tiling.slice_idx
 
         for tile_idx in range(pending.total_tiles):
@@ -383,7 +412,6 @@ class IncrementalRunner:
                 continue
 
             tile_inputs = {"input_data": tile_tensor.tolist()}
-            backend = node.backend.lower() if node.backend else ""
 
             logging.info(
                 f"[TILE DEBUG] tile {tile_idx}: node.backend={node.backend!r}, backend_lower={backend!r}"
@@ -701,3 +729,93 @@ class IncrementalRunner:
             f"Unknown backend '{task.backend}' for task {getattr(task, 'slice_id', 'unknown')}"
         )
         return None
+
+    def _has_jstprove_tile_circuits(
+        self,
+        circuit: Circuit,
+        slice_id: str,
+    ) -> bool:
+        """Check if compiled JSTprove tile circuits exist for a tiled slice."""
+        slice_path = Path(circuit.paths.base_path) / slice_id
+        tile_circuit_dirs = [
+            slice_path / "payload" / "jstprove" / "tiles",
+            slice_path / "jstprove" / "tiles",
+        ]
+        for tile_dir in tile_circuit_dirs:
+            circuit_file = tile_dir / "tile_circuit.txt"
+            if circuit_file.exists():
+                logging.info(f"Found JSTprove tile circuit at {circuit_file}")
+                return True
+        logging.info(
+            f"No JSTprove tile circuits found for {slice_id} in {circuit.paths.base_path}"
+        )
+        return False
+
+    def _run_local_onnx_tiles(
+        self,
+        state: IncrementalRunState,
+        status: IncrementalRunStatus,
+        circuit: Circuit,
+        pending,
+    ) -> bool:
+        """Run tiles locally using ONNX when JSTprove circuits are not available."""
+        meta = pending.metadata
+        tiling = pending.tiling_info
+        if not meta or not tiling:
+            logging.error("Missing metadata for local ONNX tile execution")
+            return False
+
+        logging.info(
+            f"Running {pending.total_tiles} tiles locally with ONNX for slice {pending.slice_id}"
+        )
+
+        try:
+            runner = DsperseRunner(batch=True)
+            runner.slices_path = Path(circuit.paths.base_path)
+            runner.tensor_cache = state.tensor_cache
+
+            run_dir = runner.slices_path / "runs" / "incremental"
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            runner.run_tiles(
+                slice_id=pending.slice_id,
+                tiling=tiling,
+                meta=meta,
+                run_dir=run_dir,
+                tensor_cache=state.tensor_cache,
+                backend=Backend.ONNX,
+            )
+
+            from dsperse.src.run.tile_executor import TileExecutor
+
+            tile_executor = TileExecutor(runner.slices_path, state.tensor_cache)
+            tile_executor.reconstruct_from_tiles(pending.slice_id, tiling)
+
+            for i in range(pending.total_tiles):
+                pending.completed_tiles[i] = TileResult(
+                    task_id=f"{pending.slice_id}_tile_{i}",
+                    slice_id=pending.slice_id,
+                    tile_idx=i,
+                    success=True,
+                )
+
+            self._dsperse_runner._finalize_tiled_slice(state)
+            status.completed_slices.append(pending.slice_id)
+            status.current_slice = state.current_slice_id
+
+            logging.info(
+                f"Local ONNX tile execution completed for slice {pending.slice_id}"
+            )
+            return True
+
+        except Exception as e:
+            logging.exception(
+                f"Local ONNX tile execution failed for {pending.slice_id}: {e}"
+            )
+            status.failed_slices.append(pending.slice_id)
+            state.pending_tiled_slice = None
+            nodes = state.run_metadata.execution_chain.nodes
+            node = nodes.get(pending.slice_id)
+            state.current_slice_id = node.next if node else None
+            status.current_slice = state.current_slice_id
+            return False
