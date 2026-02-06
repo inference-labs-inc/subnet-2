@@ -69,6 +69,7 @@ class IncrementalRunStatus:
     failed_slices: list[str] = field(default_factory=list)
     pending_slice: Optional[str] = None
     pending_tiles: dict[int, bool] = field(default_factory=dict)
+    failed_tile_slices: set[str] = field(default_factory=set)
     start_time: float = 0.0
 
     @property
@@ -432,16 +433,24 @@ class IncrementalRunner:
 
         applied = self._dsperse_runner.apply_tile_result(state, tile_result)
 
-        if not applied:
+        if not applied or not success:
             logging.warning(f"Failed to apply tile result for {task_id}")
+            status.failed_tile_slices.add(slice_id)
 
         if not status.pending_tiles:
             status.current_slice = state.current_slice_id
             if state.pending_tiled_slice is None:
                 slice_completed = state.current_slice_id != slice_id
                 if slice_completed:
-                    status.completed_slices.append(slice_id)
-                    logging.info(f"Tiled slice {slice_id} completed")
+                    if slice_id in status.failed_tile_slices:
+                        status.failed_slices.append(slice_id)
+                        status.failed_tile_slices.discard(slice_id)
+                        logging.info(
+                            f"Tiled slice {slice_id} failed (one or more tiles failed)"
+                        )
+                    else:
+                        status.completed_slices.append(slice_id)
+                        logging.info(f"Tiled slice {slice_id} completed")
 
         is_complete = self._dsperse_runner.is_complete(state)
         if is_complete:

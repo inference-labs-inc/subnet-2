@@ -144,7 +144,9 @@ class MinerResponse:
             "response_duration": self.response_time,
             "is_verified": self.verification_result,
             "external_request_hash": self.external_request_hash,
-            "request_type": self.request_type.value,
+            "request_type": (
+                self.request_type.value if self.request_type is not None else None
+            ),
             "error": self.error,
             "save": self.save,
         }
