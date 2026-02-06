@@ -390,7 +390,7 @@ class IncrementalRunner:
     ) -> None:
         """Run a single non-tiled slice with ONNX."""
         from dsperse.src.run.utils.runner_utils import RunnerUtils
-        from dsperse.src.run.utils.onnx_models import OnnxModels
+        from dsperse.src.backends.onnx_models import OnnxModels
 
         onnx_path = RunnerUtils.resolve_relative_path(
             meta.path, state.slices_path / slice_id
