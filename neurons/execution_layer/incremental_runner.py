@@ -311,6 +311,34 @@ class IncrementalRunner:
             compute_outputs=True,
         )
 
+    def create_tile_queued_request(
+        self, tile_req: IncrementalTileRequest
+    ) -> DSliceQueuedProofRequest:
+        """
+        Create a DSliceQueuedProofRequest from an IncrementalTileRequest.
+
+        Args:
+            tile_req: The tile request
+
+        Returns:
+            DSliceQueuedProofRequest ready to be queued for a miner
+        """
+        base_slice_num = tile_req.slice_id.replace("slice_", "")
+        tile_slice_num = f"{base_slice_num}_tile_{tile_req.tile_idx}"
+
+        return DSliceQueuedProofRequest(
+            circuit=tile_req.circuit,
+            inputs=tile_req.inputs,
+            outputs=None,
+            slice_num=tile_slice_num,
+            run_uid=tile_req.run_uid,
+            proof_system=tile_req.proof_system,
+            compute_outputs=True,
+            is_tile=True,
+            tile_idx=tile_req.tile_idx,
+            task_id=tile_req.task_id,
+        )
+
     def apply_slice_result(
         self,
         run_uid: str,

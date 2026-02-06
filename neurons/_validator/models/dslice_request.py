@@ -26,3 +26,6 @@ class DSliceQueuedProofRequest(QueuedRequestDataModel):
     compute_outputs: bool = Field(
         False, description="If True, miner computes and returns outputs"
     )
+    is_tile: bool = Field(False, description="Whether this is a tile request")
+    tile_idx: Optional[int] = Field(None, description="Tile index for tiled slices")
+    task_id: Optional[str] = Field(None, description="Tile task ID for result tracking")

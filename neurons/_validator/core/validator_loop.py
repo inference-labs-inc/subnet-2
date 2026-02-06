@@ -596,7 +596,21 @@ class ValidatorLoop:
         self.relay.stacked_requests_queue.append(queued)
 
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
-        if queued.compute_outputs or self.dsperse_manager.is_incremental_run(
+        if getattr(queued, "is_tile", False):
+            parts = str(queued.slice_num).split("_tile_")
+            base_slice = parts[0]
+            tile_idx = int(parts[1])
+            slice_id = f"slice_{base_slice}"
+            task_id = getattr(queued, "task_id", f"{slice_id}_tile_{tile_idx}")
+
+            self.dsperse_manager.on_incremental_tile_result(
+                run_uid=queued.run_uid,
+                task_id=task_id,
+                slice_id=slice_id,
+                tile_idx=tile_idx,
+                success=False,
+            )
+        elif queued.compute_outputs or self.dsperse_manager.is_incremental_run(
             queued.run_uid
         ):
             self.dsperse_manager.on_incremental_slice_result(
@@ -618,7 +632,38 @@ class ValidatorLoop:
             )
             return
 
-        if response.is_incremental or self.dsperse_manager.is_incremental_run(run_uid):
+        is_tile = "_tile_" in str(slice_num)
+
+        if is_tile:
+            parts = str(slice_num).split("_tile_")
+            base_slice = parts[0]
+            tile_idx = int(parts[1])
+            slice_id = f"slice_{base_slice}"
+            task_id = f"{slice_id}_tile_{tile_idx}"
+
+            is_complete, next_requests = (
+                self.dsperse_manager.on_incremental_tile_result(
+                    run_uid=run_uid,
+                    task_id=task_id,
+                    slice_id=slice_id,
+                    tile_idx=tile_idx,
+                    success=True,
+                    computed_outputs=response.computed_outputs,
+                    proof=response.proof_content,
+                    witness=response.witness,
+                    response_time_sec=response.response_time,
+                    verification_time_sec=response.verification_time or 0.0,
+                )
+            )
+            if next_requests and not is_complete:
+                for req in next_requests:
+                    self.relay.stacked_requests_queue.insert(0, req)
+                bt.logging.debug(
+                    f"Queued {len(next_requests)} next request(s) for run {run_uid}"
+                )
+        elif response.is_incremental or self.dsperse_manager.is_incremental_run(
+            run_uid
+        ):
             is_complete, next_request = (
                 self.dsperse_manager.on_incremental_slice_result(
                     run_uid=run_uid,
