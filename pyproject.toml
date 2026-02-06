@@ -34,7 +34,7 @@ dependencies = [
   "requests==2.32.4",
   "rich==13.8.1",
   "substrate-interface>=1.7.11",
-  "torch==2.7.1",
+  "torch>=2.8.0",
   "tqdm>=4.67.1",
   "urllib3>=2.6.3",
   "uvicorn==0.34.0",
@@ -76,8 +76,8 @@ pythonpath = [".", "neurons"]
 override-dependencies = [
   "setuptools>=78.1.1",
   "wheel>=0.46.2",
-  "torch==2.7.1",
-  "requests==2.32.4",
+  "torch>=2.8.0",
+  "requests>=2.32.4",
   "psutil==6.1.1",
 ]
 
