@@ -1,9 +1,17 @@
 from collections.abc import Generator, Iterable
+import os
 import bittensor as bt
 import torch
 import ipaddress
 
 from constants import VALIDATOR_STAKE_THRESHOLD, MAINNET_TESTNET_UIDS, DEFAULT_NETUID
+
+
+def get_target_uids() -> set[int] | None:
+    target_uids_str = os.environ.get("TARGET_UIDS", "")
+    if not target_uids_str:
+        return None
+    return {int(uid.strip()) for uid in target_uids_str.split(",") if uid.strip()}
 
 
 def is_valid_ip(ip: str) -> bool:
@@ -34,6 +42,8 @@ def get_queryable_uids(metagraph: bt.Metagraph) -> Generator[int, None, None]:
         (total_stake < stake_threshold)
         & torch.tensor([is_valid_ip(metagraph.axons[i].ip) for i in uids])
     ).tolist()
+    target_uids = get_target_uids()
     for uid, is_queryable in zip(uids, queryable_flags):
         if is_queryable:
-            yield uid
+            if target_uids is None or uid in target_uids:
+                yield uid
