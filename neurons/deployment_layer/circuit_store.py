@@ -9,6 +9,7 @@ import bittensor as bt
 import httpx
 from packaging import version
 
+import cli_parser
 from constants import (
     CIRCUIT_API_URL,
     CIRCUIT_CACHE_DIR,
@@ -49,11 +50,29 @@ class CircuitStore:
         except Exception as e:
             bt.logging.warning(f"Failed to fetch active circuits from API: {e}")
 
+        additional = getattr(cli_parser.config, "additional_circuits", None) or []
+        if additional:
+            if active_ids is None:
+                active_ids = set()
+            active_ids.update(additional)
+            bt.logging.info(
+                f"Including {len(additional)} additional circuits: {additional}"
+            )
+
         self._load_from_filesystem(deployment_layer_path, active_ids)
         self._load_from_cache(active_ids)
 
         if api_data is not None:
             self._load_from_api(api_data)
+
+        for circuit_id in additional:
+            if circuit_id not in self.circuits:
+                try:
+                    self.ensure_circuit(circuit_id)
+                except Exception as e:
+                    bt.logging.warning(
+                        f"Failed to load additional circuit {circuit_id}: {e}"
+                    )
 
         bt.logging.info(f"Loaded {len(self.circuits)} circuits")
 
