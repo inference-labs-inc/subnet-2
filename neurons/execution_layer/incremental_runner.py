@@ -109,10 +109,14 @@ class IncrementalRunner:
 
         from dsperse.src.analyzers.runner_analyzer import RunnerAnalyzer
 
-        slices_metadata = RunnerAnalyzer.load_slices_metadata(slices_path)
-        run_metadata = RunMetadata.from_dict(
-            RunnerAnalyzer.build_run_metadata(slices_path, slices_metadata)
-        )
+        if RunnerAnalyzer._has_model_metadata(slices_path):
+            slices_metadata = RunnerAnalyzer.load_slices_metadata(slices_path)
+            run_metadata_dict = RunnerAnalyzer.build_run_metadata(
+                slices_path, slices_metadata
+            )
+        else:
+            run_metadata_dict = RunnerAnalyzer._build_from_per_slice_dirs(slices_path)
+        run_metadata = RunMetadata.from_dict(run_metadata_dict)
 
         execution_order = sorted(
             run_metadata.slices.keys(), key=lambda k: int(k.split("_")[1])
