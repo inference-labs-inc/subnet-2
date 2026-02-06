@@ -6,7 +6,6 @@ import traceback
 
 import bittensor as bt
 import httpx
-from packaging import version
 
 from constants import (
     CIRCUIT_API_URL,
@@ -216,7 +215,7 @@ class CircuitStore:
             new_ids = set(self.circuits.keys()) - existing_ids
             for circuit_id in new_ids:
                 circuit = self.circuits[circuit_id]
-                file_count = len(circuits_data)
+                file_count = 0
                 for cd in circuits_data:
                     if cd.get("id") == circuit_id:
                         file_count = len(cd.get("files", {}))
@@ -246,30 +245,6 @@ class CircuitStore:
         self.circuits[circuit_id] = circuit
         bt.logging.success(f"Fetched and loaded circuit {circuit_id}")
         return circuit
-
-    def get_latest_circuit_for_netuid(self, netuid: int):
-        matching_circuits = [
-            c for c in self.circuits.values() if c.metadata.netuid == netuid
-        ]
-        if not matching_circuits:
-            return None
-
-        return max(matching_circuits, key=lambda c: version.parse(c.metadata.version))
-
-    def get_circuit_for_netuid_and_version(
-        self, netuid: int, version: int
-    ) -> Circuit | None:
-        matching_circuits = [
-            c
-            for c in self.circuits.values()
-            if c.metadata.netuid == netuid and c.metadata.weights_version == version
-        ]
-        if not matching_circuits:
-            bt.logging.warning(
-                f"No circuit found for netuid {netuid} and weights version {version}"
-            )
-            return None
-        return matching_circuits[0]
 
     def list_circuit_metadata(self) -> list[dict]:
         data: list[dict] = []

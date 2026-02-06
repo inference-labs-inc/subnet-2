@@ -70,25 +70,6 @@ def log_weights(weights: torch.Tensor):
     log_tensor_data("weights", weights, "weights")
 
 
-def log_verify_result(results: list[tuple[int, bool]]):
-    """
-    Log verification results to a table and Weights & Biases.
-
-    Args:
-        results (list[tuple[int, bool]]): A list of tuples containing (uid, verification_result).
-
-    """
-    rows = [[str(uid), str(result)] for uid, result in results]
-    create_and_print_table(
-        "proof verification result",
-        [("uid", "right", "cyan"), ("Verified?", "right", "green")],
-        rows,
-    )
-    wandb_logger.safe_log(
-        {"verification_results": {uid: int(result) for uid, result in results}}
-    )
-
-
 def log_responses(responses: list[MinerResponse]):
     """
     Log miner responses to a table and Weights & Biases.

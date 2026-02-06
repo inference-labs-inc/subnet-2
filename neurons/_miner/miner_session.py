@@ -396,6 +396,7 @@ class MinerSession:
         if error:
             return error, None
 
+        model_session = None
         try:
             bt.logging.info(f"Running proof generation for {circuit}")
             model_session = VerifiedModelSession(
@@ -404,12 +405,14 @@ class MinerSession:
             proof, public, proof_time = model_session.gen_proof()
             if isinstance(proof, bytes):
                 proof = proof.hex()
-            model_session.end()
             bt.logging.info(f"Proof completed for {circuit}")
         except Exception as e:
             bt.logging.error(f"An error occurred while generating proof\n{e}")
             traceback.print_exc()
             return JSONResponse(content="An error occurred", status_code=500), None
+        finally:
+            if model_session is not None:
+                model_session.end()
 
         return None, {
             "proof": proof,

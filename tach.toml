@@ -99,7 +99,7 @@ depends_on = ["constants", "cli_parser"]
 
 [[modules ]]
 path = "_validator.core.response_processor"
-depends_on = ["_validator.models.completed_proof_of_weights", "_validator.models.miner_response", "execution_layer.verified_model_session", "execution_layer.generic_input", "_validator.models.request_type", "_validator.core.request", "_validator.scoring.score_manager"]
+depends_on = ["_validator.models.miner_response", "execution_layer.verified_model_session", "execution_layer.generic_input", "_validator.models.request_type", "_validator.core.request", "_validator.scoring.score_manager"]
 
 [[modules ]]
 path = "_validator.models.request_type"
@@ -108,10 +108,6 @@ depends_on = []
 [[modules ]]
 path = "_validator.competitions.1.data_processor"
 depends_on = ["_validator.competitions.services.data_source"]
-
-[[modules ]]
-path = "_validator.models.completed_proof_of_weights"
-depends_on = []
 
 [[modules ]]
 path = "_validator.utils.pps"
