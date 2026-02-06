@@ -1,19 +1,12 @@
 from __future__ import annotations
 
 import copy
+import os
 import random
 import traceback
 
 import bittensor as bt
 from bittensor.core.chain_data import AxonInfo
-from deployment_layer.circuit_store import circuit_store
-from execution_layer.circuit import Circuit, CircuitType
-from execution_layer.generic_input import GenericInput
-from protocol import (
-    DSliceProofGenerationDataModel,
-    ProofOfWeightsDataModel,
-    QueryZkProof,
-)
 
 from _validator.api import RelayManager
 from _validator.config import ValidatorConfig
@@ -26,7 +19,34 @@ from constants import (
     BATCHED_PROOF_OF_WEIGHTS_MODEL_ID,
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
 )
+from deployment_layer.circuit_store import circuit_store
+from execution_layer.circuit import Circuit, CircuitType
+from execution_layer.generic_input import GenericInput
+from protocol import (
+    DSliceProofGenerationDataModel,
+    ProofOfWeightsDataModel,
+    QueryZkProof,
+)
 from utils.wandb_logger import safe_log
+
+
+def _get_local_miner_overrides() -> dict[int, tuple[str, int]]:
+    """Parse LOCAL_MINER_OVERRIDE env var: 'uid:ip:port,uid:ip:port,...'"""
+    override_str = os.environ.get("LOCAL_MINER_OVERRIDE", "")
+    if not override_str:
+        return {}
+    overrides = {}
+    for entry in override_str.split(","):
+        parts = entry.strip().split(":")
+        if len(parts) == 3:
+            try:
+                uid = int(parts[0])
+                ip = parts[1]
+                port = int(parts[2])
+                overrides[uid] = (ip, port)
+            except ValueError:
+                pass
+    return overrides
 
 
 class RequestPipeline:
@@ -71,10 +91,16 @@ class RequestPipeline:
 
         axon: AxonInfo = self.config.metagraph.axons[uid]
 
+        overrides = _get_local_miner_overrides()
+        if uid in overrides:
+            override_ip, override_port = overrides[uid]
+        else:
+            override_ip, override_port = axon.ip, axon.port
+
         request = Request(
             uid=uid,
-            ip=axon.ip,
-            port=axon.port,
+            ip=override_ip,
+            port=override_port,
             hotkey=axon.hotkey,
             coldkey=axon.coldkey,
             data=request_data.model_dump(),

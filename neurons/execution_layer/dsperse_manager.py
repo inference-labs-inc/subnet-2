@@ -1235,32 +1235,35 @@ class DSperseManager:
             num_inputs = c_in * tile_h * tile_w
         else:
             slices_meta = slice_metadata.get("slices", [])
-            if slices_meta:
-                tensor_shapes = (
-                    slices_meta[0]
-                    .get("shape", {})
-                    .get("tensor_shape", {})
-                    .get("input", [])
+            if not isinstance(slices_meta, list) or not slices_meta:
+                logging.error(
+                    f"Slice {slice_num}: slices_meta is not a non-empty list: {slices_meta}"
                 )
-                filtered_inputs = (
-                    slices_meta[0].get("dependencies", {}).get("filtered_inputs", [])
-                )
-                n_filtered = len(filtered_inputs)
-                if tensor_shapes and n_filtered > 0:
-                    runtime_shapes = tensor_shapes[-n_filtered:]
-                else:
-                    runtime_shapes = tensor_shapes
-                num_inputs = 0
-                for shape in runtime_shapes:
-                    int_dims = [d for d in shape if isinstance(d, int)]
-                    if int_dims:
-                        num_inputs += int(np.prod(int_dims))
-                logging.debug(
-                    f"Slice {slice_num}: runtime_shapes={runtime_shapes} -> num_inputs={num_inputs}"
-                )
-            else:
-                logging.error(f"Slice metadata missing 'slices' key for {slice_num}")
                 return False, None
+            if not isinstance(slices_meta[0], dict):
+                logging.error(
+                    f"Slice {slice_num}: slices_meta[0] is not a dict: {slices_meta[0]}"
+                )
+                return False, None
+            tensor_shapes = (
+                slices_meta[0].get("shape", {}).get("tensor_shape", {}).get("input", [])
+            )
+            filtered_inputs = (
+                slices_meta[0].get("dependencies", {}).get("filtered_inputs", [])
+            )
+            n_filtered = len(filtered_inputs)
+            if tensor_shapes and n_filtered > 0:
+                runtime_shapes = tensor_shapes[-n_filtered:]
+            else:
+                runtime_shapes = tensor_shapes
+            num_inputs = 0
+            for shape in runtime_shapes:
+                int_dims = [d for d in shape if isinstance(d, int)]
+                if int_dims:
+                    num_inputs += int(np.prod(int_dims))
+            logging.debug(
+                f"Slice {slice_num}: runtime_shapes={runtime_shapes} -> num_inputs={num_inputs}"
+            )
 
         try:
             witness_bytes = bytes.fromhex(witness_hex)

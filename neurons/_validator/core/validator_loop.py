@@ -601,12 +601,12 @@ class ValidatorLoop:
         ):
             self.dsperse_manager.on_incremental_slice_result(
                 run_uid=queued.run_uid,
-                slice_num=queued.slice_num,
+                slice_num=str(queued.slice_num),
                 success=False,
             )
         else:
             self.dsperse_manager.on_slice_result(
-                queued.run_uid, queued.slice_num, success=False
+                queued.run_uid, str(queued.slice_num), success=False
             )
 
     def _mark_dslice_complete(self, response: MinerResponse) -> None:
