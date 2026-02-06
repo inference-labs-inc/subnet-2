@@ -75,15 +75,24 @@ class ResponseProcessor:
             return False
 
         if response.request_type == RequestType.DSLICE:
-            if response.is_incremental and response.computed_outputs:
-                res: bool = self.dsperse_manager.verify_incremental_slice_proof(
-                    circuit_id=response.circuit.id,
-                    slice_num=str(response.dsperse_slice_num),
-                    inputs=response.inputs or request.data.get("inputs", {}),
-                    computed_outputs=response.computed_outputs,
-                    proof=response.proof_content,
-                    proof_system=request.data.get("proof_system"),
+            if response.is_incremental and response.witness:
+                inputs = request.inputs
+                if inputs is not None and hasattr(inputs, "to_json"):
+                    inputs = inputs.to_json()
+                elif inputs is None:
+                    inputs = request.data.get("inputs", {})
+                res, extracted_outputs = (
+                    self.dsperse_manager.verify_incremental_slice_with_witness(
+                        circuit_id=response.circuit.id,
+                        slice_num=str(response.dsperse_slice_num),
+                        original_inputs=inputs,
+                        witness_hex=response.witness,
+                        proof_hex=response.proof_content,
+                        proof_system=request.data.get("proof_system"),
+                    )
                 )
+                if res and extracted_outputs:
+                    response.computed_outputs = extracted_outputs
             else:
                 res: bool = self.dsperse_manager.verify_slice_proof(
                     run_uid=response.dsperse_run_uid,

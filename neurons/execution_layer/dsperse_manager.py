@@ -20,6 +20,15 @@ from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.run.runner import Runner
 from dsperse.src.verify.verifier import Verifier
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
+import numpy as np
+
+try:
+    from python.core.utils.witness_utils import load_witness, ZKProofSystems
+    from python.core.utils.helper_functions import run_expander_raw, ExpanderMode
+
+    HAS_WITNESS_UTILS = True
+except ImportError:
+    HAS_WITNESS_UTILS = False
 from execution_layer.incremental_runner import IncrementalRunner
 from utils.system import capture_environment
 
@@ -852,7 +861,7 @@ class DSperseManager:
             compute_outputs: If True, compute and return outputs
 
         Returns:
-            Dict with success, proof, proof_generation_time, and optionally computed_outputs
+            Dict with success, proof, proof_generation_time, and witness (for incremental)
         """
         incremental_mode = compute_outputs or outputs is None
         circuit = self._get_circuit_by_id(circuit_id)
@@ -865,8 +874,6 @@ class DSperseManager:
             "proof_generation_time": None,
             "proof": None,
         }
-        if incremental_mode:
-            result["computed_outputs"] = None
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -896,23 +903,6 @@ class DSperseManager:
             run_dir = runner.last_run_dir
             logging.info(f"Runner completed for slice_{slice_num}, run_dir: {run_dir}")
 
-            if incremental_mode:
-                slice_output_file = run_dir / f"slice_{base_slice_num}" / "output.json"
-                if slice_output_file.exists():
-                    with open(slice_output_file, "r") as f:
-                        result["computed_outputs"] = json.load(f)
-                elif runner.tensor_cache:
-                    for key, tensor in runner.tensor_cache.items():
-                        if "output" in key.lower() or key.startswith("slice_"):
-                            result["computed_outputs"] = {
-                                "output_data": (
-                                    tensor.tolist()
-                                    if hasattr(tensor, "tolist")
-                                    else tensor
-                                )
-                            }
-                            break
-
             if runner.run_metadata:
                 metadata_path = run_dir / "metadata.json"
                 with open(metadata_path, "w") as f:
@@ -927,21 +917,15 @@ class DSperseManager:
                     / "jstprove"
                     / f"slice_{base_slice_num}_circuit.txt"
                 )
-                success, proof_data, jst_outputs = self._jstprove_witness_and_prove(
+                success, proof_data, witness_data, _ = self._jstprove_witness_and_prove(
                     jst_model_path,
                     input_file,
                     output_file,
                     tmp_path,
                     f"slice {slice_num}",
-                    return_outputs=incremental_mode
-                    and result.get("computed_outputs") is None,
                 )
-                if (
-                    incremental_mode
-                    and jst_outputs is not None
-                    and result.get("computed_outputs") is None
-                ):
-                    result["computed_outputs"] = jst_outputs
+                if incremental_mode and witness_data is not None:
+                    result["witness"] = witness_data
                 if not success and proof_data is None:
                     return result
 
@@ -1021,8 +1005,7 @@ class DSperseManager:
         output_file: Path,
         tmp_path: Path,
         label: str,
-        return_outputs: bool = False,
-    ) -> tuple[bool, str | None, dict | None]:
+    ) -> tuple[bool, str | None, str | None, None]:
         """
         Generate witness and proof using JSTprove.
 
@@ -1032,10 +1015,9 @@ class DSperseManager:
             output_file: Path to write output JSON
             tmp_path: Temporary directory for artifacts
             label: Label for logging
-            return_outputs: If True, read and return computed outputs
 
         Returns:
-            Tuple of (success, proof_hex, computed_outputs)
+            Tuple of (success, proof_hex, witness_hex, None)
         """
         jstprover = JSTprove()
         success, res = jstprover.generate_witness(
@@ -1045,15 +1027,7 @@ class DSperseManager:
         )
         if not success:
             logging.error(f"Failed to generate witness for {label}: {res}")
-            return False, None, None
-
-        computed_outputs = None
-        if return_outputs and output_file.exists():
-            try:
-                with open(output_file, "r") as f:
-                    computed_outputs = json.load(f)
-            except Exception as e:
-                logging.warning(f"Failed to read computed outputs: {e}")
+            return False, None, None, None
 
         witness_path = tmp_path / "output_witness.bin"
         proof_path = tmp_path / "proof.bin"
@@ -1064,10 +1038,14 @@ class DSperseManager:
         )
 
         proof_data = None
+        witness_data = None
         if success and proof_path.exists():
             with open(proof_path, "rb") as pf:
                 proof_data = pf.read().hex()
-        return success, proof_data, computed_outputs
+        if success and witness_path.exists():
+            with open(witness_path, "rb") as wf:
+                witness_data = wf.read().hex()
+        return success, proof_data, witness_data, None
 
     def _prove_tile(
         self,
@@ -1192,108 +1170,193 @@ class DSperseManager:
         slice_data.success = success
         return success
 
-    def verify_incremental_slice_proof(
+    def verify_incremental_slice_with_witness(
         self,
         circuit_id: str,
         slice_num: str,
-        inputs: dict,
-        computed_outputs: dict,
-        proof: dict | str,
+        original_inputs: dict,
+        witness_hex: str,
+        proof_hex: str,
         proof_system: ProofSystem,
-    ) -> bool:
+    ) -> tuple[bool, dict | None]:
         """
-        Verify a proof for an incremental slice where miner computed outputs.
+        Verify a proof using the witness, extracting and validating inputs/outputs.
+
+        This is the trustless verification approach:
+        1. Extract inputs from witness
+        2. Verify extracted inputs match original inputs sent to miner
+        3. Extract outputs from witness
+        4. Verify proof
+        5. Return extracted outputs (cryptographically bound to proof)
 
         Args:
             circuit_id: The circuit identifier
             slice_num: The slice number
-            inputs: The inputs that were sent to the miner
-            computed_outputs: The outputs computed by the miner
-            proof: The proof from the miner
+            original_inputs: The inputs that were sent to the miner
+            witness_hex: Hex-encoded witness from miner
+            proof_hex: Hex-encoded proof from miner
             proof_system: The proof system used
 
         Returns:
-            True if verification succeeds
+            Tuple of (success, extracted_outputs)
         """
+        if not HAS_WITNESS_UTILS:
+            logging.error("witness_utils not available for trustless verification")
+            return False, None
+
+        if proof_system != ProofSystem.JSTPROVE:
+            logging.error("Trustless verification only implemented for JSTPROVE")
+            return False, None
+
         circuit = self._get_circuit_by_id(circuit_id)
         base_slice_num, tile_idx = self._parse_slice_num(slice_num)
+        slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
+        metadata_path = slice_dir / "metadata.json"
+
+        if not metadata_path.exists():
+            logging.error(f"Slice metadata not found: {metadata_path}")
+            return False, None
+
+        with open(metadata_path, "r") as f:
+            slice_metadata = json.load(f)
+
+        input_shape = slice_metadata.get("input_shape", [])
+        num_inputs = sum(
+            int(np.prod([d for d in shape if isinstance(d, int)]))
+            for shape in input_shape
+        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            input_file = tmp_path / "input.json"
-            output_file = tmp_path / "output.json"
-            proof_file = (
-                tmp_path / "proof.bin"
-                if proof_system == ProofSystem.JSTPROVE
-                else tmp_path / "proof.json"
+            witness_path = tmp_path / "witness.bin"
+            proof_path = tmp_path / "proof.bin"
+
+            try:
+                witness_bytes = bytes.fromhex(witness_hex)
+                proof_bytes = bytes.fromhex(proof_hex)
+            except ValueError as e:
+                logging.error(f"Invalid hex encoding: {e}")
+                return False, None
+
+            with open(witness_path, "wb") as f:
+                f.write(witness_bytes)
+            with open(proof_path, "wb") as f:
+                f.write(proof_bytes)
+
+            try:
+                witness_data = load_witness(str(witness_path), ZKProofSystems.Expander)
+            except Exception as e:
+                logging.error(f"Failed to load witness: {e}")
+                return False, None
+
+            public_inputs = witness_data["witnesses"][0]["public_inputs"]
+            modulus = witness_data["modulus"]
+
+            extracted_inputs = public_inputs[:num_inputs]
+            raw_outputs = public_inputs[num_inputs:-2]
+            scale_base = public_inputs[-2]
+            scale_exponent = public_inputs[-1]
+
+            original_flat = self._flatten_inputs(original_inputs)
+            if len(original_flat) != len(extracted_inputs):
+                logging.error(
+                    f"Input length mismatch: expected {len(original_flat)}, "
+                    f"witness has {len(extracted_inputs)}"
+                )
+                return False, None
+
+            original_scaled = self._scale_inputs(
+                original_flat, scale_base, scale_exponent, modulus
             )
-
-            with open(input_file, "w") as f:
-                json.dump(inputs, f)
-            with open(output_file, "w") as f:
-                json.dump(computed_outputs, f)
-
-            if proof_system == ProofSystem.JSTPROVE:
-                if not isinstance(proof, str):
-                    logging.error(
-                        f"JSTPROVE proof must be a hex string, got {type(proof)}"
-                    )
-                    return False
-                try:
-                    proof_bytes = bytes.fromhex(proof)
-                except ValueError as e:
-                    logging.error(f"Invalid hex in JSTPROVE proof: {e}")
-                    return False
-                with open(proof_file, "wb") as f:
-                    f.write(proof_bytes)
-
-                slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
-                if tile_idx is not None:
-                    circuit_path = slice_dir / "jstprove" / "tiles" / "tile_circuit.txt"
-                else:
-                    circuit_path = (
-                        slice_dir
-                        / "payload"
-                        / "jstprove"
-                        / f"slice_{base_slice_num}_circuit.txt"
-                    )
-
-                jstprover = JSTprove()
-                witness_path = tmp_path / "output_witness.bin"
-                success, _ = jstprover.generate_witness(
-                    input_file=input_file,
-                    model_path=circuit_path,
-                    output_file=output_file,
+            if not self._compare_inputs(original_scaled, extracted_inputs, modulus):
+                logging.error(
+                    "Input verification failed: witness inputs don't match original"
                 )
-                if not success:
-                    logging.error(
-                        f"Failed to generate witness for verification of slice {slice_num}"
-                    )
-                    return False
+                return False, None
 
-                success = jstprover.verify(
-                    proof_path=proof_file,
-                    circuit_path=circuit_path,
-                    input_path=input_file,
-                    output_path=output_file,
-                    witness_path=witness_path,
-                )
-                return success
+            logging.debug("Input verification passed")
+
+            def from_field(val: int) -> int:
+                if val > modulus // 2:
+                    return val - modulus
+                return val
+
+            signed_outputs = [from_field(v) for v in raw_outputs]
+            if scale_base > 0 and scale_exponent > 0:
+                scale = scale_base**scale_exponent
+                rescaled_outputs = [v / scale for v in signed_outputs]
             else:
-                with open(proof_file, "w") as f:
-                    json.dump(proof, f)
+                rescaled_outputs = [float(v) for v in signed_outputs]
 
-                verifier = Verifier()
-                slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
-                result = verifier.verify(
-                    run_path=tmp_path,
-                    model_path=slice_dir,
-                    backend=proof_system.value.lower() if proof_system else None,
+            if tile_idx is not None:
+                circuit_path = slice_dir / "jstprove" / "tiles" / "tile_circuit.txt"
+            else:
+                circuit_path = (
+                    slice_dir
+                    / "payload"
+                    / "jstprove"
+                    / f"slice_{base_slice_num}_circuit.txt"
                 )
-                _, verification_execution = self._parse_dsperse_result(
-                    result, "verification"
+
+            try:
+                result = run_expander_raw(
+                    mode=ExpanderMode.VERIFY,
+                    circuit_file=str(circuit_path),
+                    witness_file=str(witness_path),
+                    proof_file=str(proof_path),
                 )
-                return verification_execution.get("success", False)
+                success = result.returncode == 0
+            except Exception as e:
+                logging.error(f"Proof verification failed: {e}")
+                return False, None
+
+            if not success:
+                logging.error("Proof verification failed")
+                return False, None
+
+            extracted_outputs = {
+                "output": signed_outputs,
+                "rescaled_output": rescaled_outputs,
+            }
+            return True, extracted_outputs
+
+    def _flatten_inputs(self, inputs: dict) -> list:
+        """Flatten input dict to a list of values."""
+        if "input_data" in inputs:
+            data = inputs["input_data"]
+        else:
+            data = list(inputs.values())[0] if inputs else []
+
+        def flatten(x):
+            if isinstance(x, (list, tuple)):
+                result = []
+                for item in x:
+                    result.extend(flatten(item))
+                return result
+            return [x]
+
+        return flatten(data)
+
+    def _scale_inputs(
+        self, inputs: list, scale_base: int, scale_exp: int, modulus: int
+    ) -> list:
+        """Scale inputs to field representation."""
+        if scale_base <= 0 or scale_exp <= 0:
+            return [int(v) % modulus for v in inputs]
+        scale = scale_base**scale_exp
+        return [int(round(v * scale)) % modulus for v in inputs]
+
+    def _compare_inputs(
+        self, expected: list, actual: list, modulus: int, tolerance: int = 1
+    ) -> bool:
+        """Compare inputs with tolerance for rounding."""
+        if len(expected) != len(actual):
+            return False
+        for e, a in zip(expected, actual):
+            diff = abs((e - a) % modulus)
+            if diff > tolerance and diff < modulus - tolerance:
+                return False
+        return True
 
     def cleanup_run(self, run_uid: str):
         if run_uid not in self.runs:

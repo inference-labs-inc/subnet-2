@@ -36,6 +36,7 @@ class MinerResponse:
     save: bool = False
     computed_outputs: dict | None = None
     is_incremental: bool = False
+    witness: str | None = None
 
     @classmethod
     def from_raw_response(
@@ -101,8 +102,8 @@ class MinerResponse:
             bt.logging.debug(f"Miner at {request.uid} did not return public signals.")
             public_json = None
 
-        computed_outputs = deserialized_response.get("computed_outputs")
-        is_incremental = computed_outputs is not None
+        witness = deserialized_response.get("witness")
+        is_incremental = witness is not None
 
         return cls(
             uid=request.uid,
@@ -120,8 +121,8 @@ class MinerResponse:
             save=request.save,
             dsperse_slice_num=request.dsperse_slice_num,
             dsperse_run_uid=request.dsperse_run_uid,
-            computed_outputs=computed_outputs,
             is_incremental=is_incremental,
+            witness=witness,
         )
 
     def to_log_dict(self, metagraph: bt.Metagraph) -> dict:  # type: ignore

@@ -101,7 +101,7 @@ class IncrementalRunner:
             on_run_complete: Optional callback when a run completes.
                             Signature: (run_uid: str, success: bool) -> None
         """
-        self._dsperse_runner = DsperseIncrementalRunner()
+        self._dsperse_runner = DsperseIncrementalRunner(verify_proofs=False)
         self._runs: dict[
             str, tuple[IncrementalRunState, IncrementalRunStatus, Circuit]
         ] = {}
