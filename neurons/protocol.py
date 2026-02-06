@@ -115,7 +115,11 @@ class QueryForCapacities(BaseModel):
 
 class DSliceProofGenerationDataModel(BaseModel):
     """
-    Data model for conveying DSPERSE proof generation messages
+    Data model for conveying DSPERSE proof generation messages.
+
+    In standard mode, both inputs and outputs are provided by the validator.
+    In incremental mode (compute_outputs=True or outputs=None), the miner
+    computes outputs during witness generation and returns them.
     """
 
     name: ClassVar = "dsperse-proof-generation"
@@ -125,3 +129,4 @@ class DSliceProofGenerationDataModel(BaseModel):
     outputs: Optional[Any] = None
     slice_num: Optional[str] = None
     run_uid: Optional[str] = None
+    compute_outputs: bool = False

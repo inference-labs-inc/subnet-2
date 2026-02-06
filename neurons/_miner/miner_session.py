@@ -351,10 +351,16 @@ class MinerSession:
     def handleDSliceRequest(self, data: DSliceProofGenerationDataModel) -> JSONResponse:
         """
         Handle DSlice proof generation requests from validators.
+
+        In standard mode, both inputs and outputs are provided.
+        In incremental mode (compute_outputs=True or outputs=None), the miner
+        computes outputs during witness generation and returns them.
         """
         try:
+            incremental = data.compute_outputs or data.outputs is None
             bt.logging.info(
-                f"Handling DSlice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
+                f"Handling DSlice proof generation request for slice_num={data.slice_num} "
+                f"run_uid={data.run_uid} incremental={incremental}"
             )
 
             result = self.dsperse_manager.prove_slice(
@@ -363,6 +369,7 @@ class MinerSession:
                 inputs=data.inputs,
                 outputs=data.outputs,
                 proof_system=data.proof_system,
+                compute_outputs=incremental,
             )
 
             return JSONResponse(content=result, status_code=200)

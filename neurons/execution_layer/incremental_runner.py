@@ -1,0 +1,351 @@
+"""
+IncrementalRunner for distributed slice execution in the validator.
+
+This module provides an IncrementalRunner that orchestrates distributed execution
+of DSperse models across miners. Unlike the standard DSperseManager which pre-computes
+all outputs locally, IncrementalRunner sends slices to miners sequentially, where
+each slice's verified output becomes the input for the next slice.
+"""
+
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Callable, Optional
+
+from bittensor import logging
+
+from dsperse.src.run.incremental_runner import (
+    IncrementalRunner as DsperseIncrementalRunner,
+    IncrementalRunState,
+    SliceTask,
+    SliceResult,
+)
+from execution_layer.circuit import Circuit, ProofSystem
+from _validator.models.dslice_request import DSliceQueuedProofRequest
+from _validator.models.request_type import RequestType
+
+
+@dataclass
+class IncrementalSliceRequest:
+    """A slice request ready to be sent to a miner."""
+
+    slice_id: str
+    slice_index: int
+    inputs: dict
+    proof_system: ProofSystem
+    circuit: Circuit
+    run_uid: str
+    use_circuit: bool
+    is_tiled: bool = False
+    tile_count: int = 0
+
+
+@dataclass
+class IncrementalRunStatus:
+    """Status of an incremental run."""
+
+    run_uid: str
+    circuit_id: str
+    circuit_name: str
+    total_slices: int
+    current_slice: Optional[str]
+    completed_slices: list[str] = field(default_factory=list)
+    failed_slices: list[str] = field(default_factory=list)
+    pending_slice: Optional[str] = None
+    start_time: float = 0.0
+
+    @property
+    def is_complete(self) -> bool:
+        return self.current_slice is None and not self.pending_slice
+
+    @property
+    def progress_percent(self) -> float:
+        if self.total_slices == 0:
+            return 0.0
+        return (
+            (len(self.completed_slices) + len(self.failed_slices))
+            / self.total_slices
+            * 100
+        )
+
+
+class IncrementalRunner:
+    """
+    Orchestrates distributed slice execution across miners.
+
+    This runner sends slices to miners one at a time, waits for verified outputs,
+    and chains them to subsequent slices. This enables true distributed model
+    execution where the validator doesn't pre-compute outputs.
+
+    Usage:
+        runner = IncrementalRunner()
+        run_uid = runner.start_run(circuit, inputs)
+
+        # Get next slice to send
+        slice_req = runner.get_next_slice(run_uid)
+        if slice_req:
+            # Send to miner and get result
+            result = send_to_miner(slice_req)
+            runner.apply_slice_result(run_uid, result)
+
+        # Check completion
+        if runner.is_complete(run_uid):
+            final_output = runner.get_final_output(run_uid)
+    """
+
+    def __init__(self, on_run_complete: Optional[Callable[[str, bool], None]] = None):
+        """
+        Initialize the IncrementalRunner.
+
+        Args:
+            on_run_complete: Optional callback when a run completes.
+                            Signature: (run_uid: str, success: bool) -> None
+        """
+        self._dsperse_runner = DsperseIncrementalRunner()
+        self._runs: dict[
+            str, tuple[IncrementalRunState, IncrementalRunStatus, Circuit]
+        ] = {}
+        self._on_run_complete = on_run_complete
+
+    def start_run(
+        self,
+        circuit: Circuit,
+        inputs: Optional[dict] = None,
+    ) -> str:
+        """
+        Start a new incremental run.
+
+        Args:
+            circuit: The DSperse circuit to execute
+            inputs: Model inputs (generated if not provided)
+
+        Returns:
+            Run UID for tracking this run
+        """
+        run_uid = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        logging.info(
+            f"Starting incremental run for circuit {circuit.metadata.name}. Run UID: {run_uid}"
+        )
+
+        if inputs is None:
+            inputs = circuit.input_handler(RequestType.BENCHMARK).generate()
+
+        state = self._dsperse_runner.initialize(
+            slice_path=circuit.paths.base_path,
+            input_data=inputs,
+        )
+
+        total_slices = len(state.run_metadata.execution_chain.nodes)
+        status = IncrementalRunStatus(
+            run_uid=run_uid,
+            circuit_id=circuit.id,
+            circuit_name=circuit.metadata.name,
+            total_slices=total_slices,
+            current_slice=state.current_slice_id,
+            start_time=time.perf_counter(),
+        )
+
+        self._runs[run_uid] = (state, status, circuit)
+        logging.info(
+            f"Incremental run {run_uid} initialized with {total_slices} slices"
+        )
+
+        return run_uid
+
+    def get_next_slice(self, run_uid: str) -> Optional[IncrementalSliceRequest]:
+        """
+        Get the next slice that needs execution.
+
+        Args:
+            run_uid: The run identifier
+
+        Returns:
+            IncrementalSliceRequest if there's a slice to execute, None if run is complete
+        """
+        if run_uid not in self._runs:
+            logging.warning(f"Run {run_uid} not found")
+            return None
+
+        state, status, circuit = self._runs[run_uid]
+
+        if status.pending_slice:
+            logging.debug(f"Run {run_uid} has pending slice {status.pending_slice}")
+            return None
+
+        if state.current_slice_id is None:
+            return None
+
+        for task in self._dsperse_runner.iter_tasks(state):
+            if not task.use_circuit:
+                result = self._dsperse_runner.execute_onnx_slice(state, task)
+                self._dsperse_runner.apply_result(state, result)
+                status.completed_slices.append(task.slice_id)
+                status.current_slice = state.current_slice_id
+                logging.debug(f"Executed ONNX-only slice {task.slice_id} locally")
+                continue
+
+            proof_system = self._determine_proof_system(task)
+
+            request = IncrementalSliceRequest(
+                slice_id=task.slice_id,
+                slice_index=task.slice_index,
+                inputs=task.inputs,
+                proof_system=proof_system,
+                circuit=circuit,
+                run_uid=run_uid,
+                use_circuit=task.use_circuit,
+                is_tiled=task.is_tiled,
+                tile_count=task.tile_count,
+            )
+
+            status.pending_slice = task.slice_id
+            return request
+
+        return None
+
+    def create_queued_request(
+        self, slice_req: IncrementalSliceRequest
+    ) -> DSliceQueuedProofRequest:
+        """
+        Create a DSliceQueuedProofRequest from an IncrementalSliceRequest.
+
+        Args:
+            slice_req: The slice request
+
+        Returns:
+            DSliceQueuedProofRequest ready to be queued for a miner
+        """
+        return DSliceQueuedProofRequest(
+            circuit=slice_req.circuit,
+            inputs=slice_req.inputs,
+            outputs=None,
+            slice_num=slice_req.slice_id.replace("slice_", ""),
+            run_uid=slice_req.run_uid,
+            proof_system=slice_req.proof_system,
+            compute_outputs=True,
+        )
+
+    def apply_slice_result(
+        self,
+        run_uid: str,
+        slice_id: str,
+        success: bool,
+        computed_outputs: Optional[dict] = None,
+        proof: Optional[Any] = None,
+        error: Optional[str] = None,
+    ) -> bool:
+        """
+        Apply the result of a slice execution.
+
+        Args:
+            run_uid: The run identifier
+            slice_id: The slice that was executed
+            success: Whether execution succeeded
+            computed_outputs: The outputs computed by the miner
+            proof: The proof generated by the miner
+            error: Error message if failed
+
+        Returns:
+            True if this was the final slice (run is complete)
+        """
+        if run_uid not in self._runs:
+            logging.warning(f"Run {run_uid} not found")
+            return False
+
+        state, status, circuit = self._runs[run_uid]
+
+        if status.pending_slice != slice_id:
+            logging.warning(
+                f"Slice {slice_id} doesn't match pending slice {status.pending_slice}"
+            )
+            return False
+
+        status.pending_slice = None
+
+        slice_result = SliceResult(
+            slice_id=slice_id,
+            success=success,
+            outputs=computed_outputs,
+            error=error,
+            proof=proof,
+        )
+
+        applied = self._dsperse_runner.apply_result(state, slice_result)
+
+        if applied:
+            status.completed_slices.append(slice_id)
+        else:
+            status.failed_slices.append(slice_id)
+
+        status.current_slice = state.current_slice_id
+
+        is_complete = self._dsperse_runner.is_complete(state)
+        if is_complete:
+            total_time = time.perf_counter() - status.start_time
+            all_success = len(status.failed_slices) == 0
+            logging.info(
+                f"Incremental run {run_uid} complete. "
+                f"Completed: {len(status.completed_slices)}, Failed: {len(status.failed_slices)}, "
+                f"Time: {total_time:.2f}s"
+            )
+            if self._on_run_complete:
+                self._on_run_complete(run_uid, all_success)
+
+        return is_complete
+
+    def get_run_status(self, run_uid: str) -> Optional[dict]:
+        """Get status of a run."""
+        if run_uid not in self._runs:
+            return None
+
+        state, status, _ = self._runs[run_uid]
+
+        return {
+            "run_uid": run_uid,
+            "circuit_id": status.circuit_id,
+            "circuit_name": status.circuit_name,
+            "total_slices": status.total_slices,
+            "completed": len(status.completed_slices),
+            "failed": len(status.failed_slices),
+            "pending_slice": status.pending_slice,
+            "current_slice": status.current_slice,
+            "is_complete": status.is_complete,
+            "progress_percent": status.progress_percent,
+            "elapsed_time": time.perf_counter() - status.start_time,
+        }
+
+    def get_final_output(self, run_uid: str) -> Optional[Any]:
+        """Get the final output tensor after run completion."""
+        if run_uid not in self._runs:
+            return None
+
+        state, status, _ = self._runs[run_uid]
+        if not status.is_complete:
+            return None
+
+        output = self._dsperse_runner.get_final_output(state)
+        if output is not None and hasattr(output, "tolist"):
+            return output.tolist()
+        return output
+
+    def is_complete(self, run_uid: str) -> bool:
+        """Check if a run is complete."""
+        if run_uid not in self._runs:
+            return True
+        state, status, _ = self._runs[run_uid]
+        return status.is_complete
+
+    def cleanup_run(self, run_uid: str) -> None:
+        """Clean up a completed run."""
+        if run_uid in self._runs:
+            del self._runs[run_uid]
+            logging.debug(f"Cleaned up incremental run {run_uid}")
+
+    def _determine_proof_system(self, task: SliceTask) -> ProofSystem:
+        """Determine the proof system to use for a slice."""
+        backend = task.backend.lower() if task.backend else ""
+        if "jstprove" in backend or "jst" in backend:
+            return ProofSystem.JSTPROVE
+        if "ezkl" in backend:
+            return ProofSystem.EZKL
+        return ProofSystem.JSTPROVE

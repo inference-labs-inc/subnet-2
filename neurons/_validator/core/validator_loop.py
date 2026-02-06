@@ -89,7 +89,18 @@ class ValidatorLoop:
             or "https://sn2-api.inferencelabs.com"
         )
         self.dsperse_event_client = DsperseEventClient(api_url, config.wallet)
-        self.dsperse_manager = DSperseManager(event_client=self.dsperse_event_client)
+
+        incremental_mode = os.environ.get(
+            "DSPERSE_INCREMENTAL_MODE", "true"
+        ).lower() in ("1", "true", "yes")
+        self.dsperse_manager = DSperseManager(
+            event_client=self.dsperse_event_client,
+            incremental_mode=incremental_mode,
+        )
+        if incremental_mode:
+            bt.logging.info(
+                "DSperse incremental mode enabled - miners will compute outputs"
+            )
 
         self.score_manager = ScoreManager(
             self.config.metagraph,
@@ -592,9 +603,18 @@ class ValidatorLoop:
         self.relay.stacked_requests_queue.append(queued)
 
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
-        self.dsperse_manager.on_slice_result(
-            queued.run_uid, queued.slice_num, success=False
-        )
+        if queued.compute_outputs or self.dsperse_manager.is_incremental_run(
+            queued.run_uid
+        ):
+            self.dsperse_manager.on_incremental_slice_result(
+                run_uid=queued.run_uid,
+                slice_num=queued.slice_num,
+                success=False,
+            )
+        else:
+            self.dsperse_manager.on_slice_result(
+                queued.run_uid, queued.slice_num, success=False
+            )
 
     def _mark_dslice_complete(self, response: MinerResponse) -> None:
         run_uid = response.dsperse_run_uid
@@ -604,13 +624,30 @@ class ValidatorLoop:
                 f"Cannot mark DSLICE complete: missing run_uid={run_uid} or slice_num={slice_num}"
             )
             return
-        self.dsperse_manager.on_slice_result(
-            run_uid,
-            str(slice_num),
-            success=True,
-            response_time_sec=response.response_time,
-            verification_time_sec=response.verification_time or 0.0,
-        )
+
+        if response.is_incremental or self.dsperse_manager.is_incremental_run(run_uid):
+            is_complete, next_request = (
+                self.dsperse_manager.on_incremental_slice_result(
+                    run_uid=run_uid,
+                    slice_num=str(slice_num),
+                    success=True,
+                    computed_outputs=response.computed_outputs,
+                    proof=response.proof_content,
+                    response_time_sec=response.response_time,
+                    verification_time_sec=response.verification_time or 0.0,
+                )
+            )
+            if next_request and not is_complete:
+                self.relay.stacked_requests_queue.insert(0, next_request)
+                bt.logging.debug(f"Queued next incremental slice for run {run_uid}")
+        else:
+            self.dsperse_manager.on_slice_result(
+                run_uid,
+                str(slice_num),
+                success=True,
+                response_time_sec=response.response_time,
+                verification_time_sec=response.verification_time or 0.0,
+            )
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
