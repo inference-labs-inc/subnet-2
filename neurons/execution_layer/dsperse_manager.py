@@ -113,6 +113,7 @@ class DSperseManager:
         self.incremental_mode = incremental_mode
         self._incremental_runner: IncrementalRunner | None = None
         self._incremental_runs: set[str] = set()
+        self._incremental_runs_lock = threading.Lock()
         if incremental_mode:
             self._incremental_runner = IncrementalRunner(
                 on_run_complete=self._on_incremental_run_complete
@@ -292,7 +293,8 @@ class DSperseManager:
             )
 
         run_uid = self._incremental_runner.start_run(circuit, inputs)
-        self._incremental_runs.add(run_uid)
+        with self._incremental_runs_lock:
+            self._incremental_runs.add(run_uid)
 
         if self.event_client:
             status = self._incremental_runner.get_run_status(run_uid)
@@ -344,7 +346,9 @@ class DSperseManager:
                 on_run_complete=self._on_incremental_run_complete
             )
 
-        for run_uid in list(self._incremental_runs):
+        with self._incremental_runs_lock:
+            incremental_runs_snapshot = list(self._incremental_runs)
+        for run_uid in incremental_runs_snapshot:
             if not self._incremental_runner.is_complete(run_uid):
                 request = self.get_next_incremental_slice(run_uid)
                 if request:
@@ -424,28 +428,33 @@ class DSperseManager:
     def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
         """Callback when an incremental run completes."""
         logging.info(f"Incremental run {run_uid} completed, success={success}")
-        self._incremental_runs.discard(run_uid)
 
-        if self.event_client:
-            status = (
-                self._incremental_runner.get_run_status(run_uid)
-                if self._incremental_runner
-                else None
-            )
-            self._schedule_async(
-                self.event_client.emit_run_complete(
-                    run_uid=run_uid,
-                    all_successful=success,
-                    total_run_time_sec=status.get("elapsed_time", 0) if status else 0,
+        with self._incremental_runs_lock:
+            self._incremental_runs.discard(run_uid)
+
+            if self.event_client:
+                status = (
+                    self._incremental_runner.get_run_status(run_uid)
+                    if self._incremental_runner
+                    else None
                 )
-            )
+                self._schedule_async(
+                    self.event_client.emit_run_complete(
+                        run_uid=run_uid,
+                        all_successful=success,
+                        total_run_time_sec=(
+                            status.get("elapsed_time", 0) if status else 0
+                        ),
+                    )
+                )
 
-        if self._incremental_runner:
-            self._incremental_runner.cleanup_run(run_uid)
+            if self._incremental_runner:
+                self._incremental_runner.cleanup_run(run_uid)
 
     def is_incremental_run(self, run_uid: str) -> bool:
         """Check if a run is an incremental run."""
-        return run_uid in self._incremental_runs
+        with self._incremental_runs_lock:
+            return run_uid in self._incremental_runs
 
     def on_slice_result(
         self,
@@ -1208,7 +1217,18 @@ class DSperseManager:
         if tile_idx is not None:
             tiling = slice_metadata.get("tiling", {})
             tile_size = tiling.get("tile_size", 0)
-            halo = tiling.get("halo", [0, 0])
+            raw_halo = tiling.get("halo", 0)
+            if isinstance(raw_halo, int):
+                halo = (raw_halo, raw_halo)
+            elif isinstance(raw_halo, (list, tuple)):
+                if len(raw_halo) == 0:
+                    halo = (0, 0)
+                elif len(raw_halo) == 1:
+                    halo = (int(raw_halo[0]), int(raw_halo[0]))
+                else:
+                    halo = (int(raw_halo[0]), int(raw_halo[1]))
+            else:
+                halo = (0, 0)
             c_in = tiling.get("c_in", 1)
             tile_h = tile_size + 2 * halo[0]
             tile_w = tile_size + 2 * halo[1]

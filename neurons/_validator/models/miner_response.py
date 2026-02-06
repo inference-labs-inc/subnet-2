@@ -103,7 +103,7 @@ class MinerResponse:
             public_json = None
 
         witness = deserialized_response.get("witness")
-        is_incremental = witness is not None
+        is_incremental = bool(witness)
 
         return cls(
             uid=request.uid,

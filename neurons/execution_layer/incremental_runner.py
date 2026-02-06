@@ -204,6 +204,15 @@ class IncrementalRunner:
 
             if not task.use_circuit:
                 result = self._dsperse_runner.execute_onnx_slice(state, task)
+                if result is None or not result.success:
+                    error_msg = (
+                        result.error if result else "execute_onnx_slice returned None"
+                    )
+                    logging.error(
+                        f"ONNX-only slice {task.slice_id} execution failed: {error_msg}"
+                    )
+                    status.failed_slices.append(task.slice_id)
+                    continue
                 self._dsperse_runner.apply_result(state, result)
                 status.completed_slices.append(task.slice_id)
                 status.current_slice = state.current_slice_id
@@ -486,7 +495,8 @@ class IncrementalRunner:
     def is_complete(self, run_uid: str) -> bool:
         """Check if a run is complete."""
         if run_uid not in self._runs:
-            return True
+            logging.debug(f"is_complete: run_uid {run_uid} not found in runs")
+            return False
         state, status, _ = self._runs[run_uid]
         return status.is_complete
 
