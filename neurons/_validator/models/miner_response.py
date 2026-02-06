@@ -102,8 +102,9 @@ class MinerResponse:
             bt.logging.debug(f"Miner at {request.uid} did not return public signals.")
             public_json = None
 
-        witness = deserialized_response.get("witness")
-        is_incremental = bool(witness)
+        witness_raw = deserialized_response.get("witness")
+        witness = witness_raw if isinstance(witness_raw, str) and witness_raw else None
+        is_incremental = witness is not None
 
         return cls(
             uid=request.uid,
