@@ -133,9 +133,7 @@ class MinerResponse:
             "miner_key": metagraph.hotkeys[self.uid],
             "miner_uid": self.uid,
             "proof_model": (
-                self.circuit.metadata.name
-                if self.circuit is not None
-                else str(self.circuit.id)
+                self.circuit.metadata.name if self.circuit is not None else "Unknown"
             ),
             "proof_system": (
                 self.circuit.metadata.proof_system

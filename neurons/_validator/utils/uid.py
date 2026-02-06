@@ -11,7 +11,22 @@ def get_target_uids() -> set[int] | None:
     target_uids_str = os.environ.get("TARGET_UIDS", "")
     if not target_uids_str:
         return None
-    return {int(uid.strip()) for uid in target_uids_str.split(",") if uid.strip()}
+    result = set()
+    invalid_tokens = []
+    for token in target_uids_str.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            result.add(int(token))
+        except ValueError:
+            invalid_tokens.append(token)
+    if invalid_tokens:
+        raise ValueError(
+            f"Invalid TARGET_UIDS tokens: {invalid_tokens}. "
+            f"Original value: '{target_uids_str}'. Expected comma-separated integers."
+        )
+    return result if result else None
 
 
 def is_valid_ip(ip: str) -> bool:

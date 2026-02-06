@@ -22,13 +22,6 @@ from dsperse.src.verify.verifier import Verifier
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
 import numpy as np
 
-try:
-    from python.core.utils.witness_utils import load_witness, ZKProofSystems
-    from python.core.utils.helper_functions import run_expander_raw, ExpanderMode
-
-    HAS_WITNESS_UTILS = True
-except ImportError:
-    HAS_WITNESS_UTILS = False
 from execution_layer.incremental_runner import IncrementalRunner
 from utils.system import capture_environment
 
@@ -1068,16 +1061,15 @@ class DSperseManager:
                 logging.error(f"Tile JSTprove circuit not found: {jst_tile_circuit}")
                 return result
 
-            success, proof_data, computed_outputs = self._jstprove_witness_and_prove(
+            success, proof_data, witness_data, _ = self._jstprove_witness_and_prove(
                 jst_tile_circuit,
                 input_file,
                 output_file,
                 tmp_path,
                 f"tile {slice_num}",
-                return_outputs=incremental_mode,
             )
-            if incremental_mode and computed_outputs is not None:
-                result["computed_outputs"] = computed_outputs
+            if incremental_mode and witness_data is not None:
+                result["witness"] = witness_data
         else:
             logging.error(f"Proof system {proof_system} not supported for tiles")
             return result
@@ -1182,12 +1174,9 @@ class DSperseManager:
         """
         Verify a proof using the witness, extracting and validating inputs/outputs.
 
-        This is the trustless verification approach:
-        1. Extract inputs from witness
-        2. Verify extracted inputs match original inputs sent to miner
-        3. Extract outputs from witness
-        4. Verify proof
-        5. Return extracted outputs (cryptographically bound to proof)
+        Delegates to dsperse's JSTprove.verify_with_io_extraction for trustless
+        verification where inputs/outputs are extracted from the cryptographically
+        bound witness rather than trusting miner-provided values.
 
         Args:
             circuit_id: The circuit identifier
@@ -1200,10 +1189,6 @@ class DSperseManager:
         Returns:
             Tuple of (success, extracted_outputs)
         """
-        if not HAS_WITNESS_UTILS:
-            logging.error("witness_utils not available for trustless verification")
-            return False, None
-
         if proof_system != ProofSystem.JSTPROVE:
             logging.error("Trustless verification only implemented for JSTPROVE")
             return False, None
@@ -1220,112 +1205,67 @@ class DSperseManager:
         with open(metadata_path, "r") as f:
             slice_metadata = json.load(f)
 
-        input_shape = slice_metadata.get("input_shape", [])
-        num_inputs = sum(
-            int(np.prod([d for d in shape if isinstance(d, int)]))
-            for shape in input_shape
+        if tile_idx is not None:
+            tiling = slice_metadata.get("tiling", {})
+            tile_size = tiling.get("tile_size", 0)
+            halo = tiling.get("halo", [0, 0])
+            c_in = tiling.get("c_in", 1)
+            tile_h = tile_size + 2 * halo[0]
+            tile_w = tile_size + 2 * halo[1]
+            num_inputs = c_in * tile_h * tile_w
+        else:
+            input_shape = slice_metadata.get("input_shape", [])
+            num_inputs = sum(
+                int(np.prod([d for d in shape if isinstance(d, int)]))
+                for shape in input_shape
+            )
+
+        try:
+            witness_bytes = bytes.fromhex(witness_hex)
+            proof_bytes = bytes.fromhex(proof_hex)
+        except ValueError as e:
+            logging.error(f"Invalid hex encoding: {e}")
+            return False, None
+
+        if tile_idx is not None:
+            circuit_path = slice_dir / "jstprove" / "tiles" / "tile_circuit.txt"
+        else:
+            circuit_path = (
+                slice_dir
+                / "payload"
+                / "jstprove"
+                / f"slice_{base_slice_num}_circuit.txt"
+            )
+
+        flat_inputs = self._flatten_inputs(original_inputs)
+
+        jstprove = JSTprove()
+        success, extracted_io = jstprove.verify_with_io_extraction(
+            circuit_path=circuit_path,
+            witness_bytes=witness_bytes,
+            proof_bytes=proof_bytes,
+            num_inputs=num_inputs,
+            expected_inputs=flat_inputs,
         )
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            witness_path = tmp_path / "witness.bin"
-            proof_path = tmp_path / "proof.bin"
+        if not success or extracted_io is None:
+            return False, None
 
-            try:
-                witness_bytes = bytes.fromhex(witness_hex)
-                proof_bytes = bytes.fromhex(proof_hex)
-            except ValueError as e:
-                logging.error(f"Invalid hex encoding: {e}")
-                return False, None
-
-            with open(witness_path, "wb") as f:
-                f.write(witness_bytes)
-            with open(proof_path, "wb") as f:
-                f.write(proof_bytes)
-
-            try:
-                witness_data = load_witness(str(witness_path), ZKProofSystems.Expander)
-            except Exception as e:
-                logging.error(f"Failed to load witness: {e}")
-                return False, None
-
-            public_inputs = witness_data["witnesses"][0]["public_inputs"]
-            modulus = witness_data["modulus"]
-
-            extracted_inputs = public_inputs[:num_inputs]
-            raw_outputs = public_inputs[num_inputs:-2]
-            scale_base = public_inputs[-2]
-            scale_exponent = public_inputs[-1]
-
-            original_flat = self._flatten_inputs(original_inputs)
-            if len(original_flat) != len(extracted_inputs):
-                logging.error(
-                    f"Input length mismatch: expected {len(original_flat)}, "
-                    f"witness has {len(extracted_inputs)}"
-                )
-                return False, None
-
-            original_scaled = self._scale_inputs(
-                original_flat, scale_base, scale_exponent, modulus
-            )
-            if not self._compare_inputs(original_scaled, extracted_inputs, modulus):
-                logging.error(
-                    "Input verification failed: witness inputs don't match original"
-                )
-                return False, None
-
-            logging.debug("Input verification passed")
-
-            def from_field(val: int) -> int:
-                if val > modulus // 2:
-                    return val - modulus
-                return val
-
-            signed_outputs = [from_field(v) for v in raw_outputs]
-            if scale_base > 0 and scale_exponent > 0:
-                scale = scale_base**scale_exponent
-                rescaled_outputs = [v / scale for v in signed_outputs]
-            else:
-                rescaled_outputs = [float(v) for v in signed_outputs]
-
-            if tile_idx is not None:
-                circuit_path = slice_dir / "jstprove" / "tiles" / "tile_circuit.txt"
-            else:
-                circuit_path = (
-                    slice_dir
-                    / "payload"
-                    / "jstprove"
-                    / f"slice_{base_slice_num}_circuit.txt"
-                )
-
-            try:
-                result = run_expander_raw(
-                    mode=ExpanderMode.VERIFY,
-                    circuit_file=str(circuit_path),
-                    witness_file=str(witness_path),
-                    proof_file=str(proof_path),
-                )
-                success = result.returncode == 0
-            except Exception as e:
-                logging.error(f"Proof verification failed: {e}")
-                return False, None
-
-            if not success:
-                logging.error("Proof verification failed")
-                return False, None
-
-            extracted_outputs = {
-                "output": signed_outputs,
-                "rescaled_output": rescaled_outputs,
-            }
-            return True, extracted_outputs
+        logging.debug("Input verification passed")
+        extracted_outputs = {
+            "output": extracted_io["outputs"],
+            "rescaled_output": extracted_io["rescaled_outputs"],
+        }
+        return True, extracted_outputs
 
     def _flatten_inputs(self, inputs: dict) -> list:
-        """Flatten input dict to a list of values."""
-        if "input_data" in inputs:
-            data = inputs["input_data"]
-        else:
-            data = list(inputs.values())[0] if inputs else []
+        """Flatten input dict to a list of values.
+
+        Handles:
+        - Single input with "input_data" key
+        - Single input with arbitrary key
+        - Multiple inputs with tensor name keys (concatenated in sorted order)
+        """
 
         def flatten(x):
             if isinstance(x, (list, tuple)):
@@ -1335,28 +1275,16 @@ class DSperseManager:
                 return result
             return [x]
 
-        return flatten(data)
+        if "input_data" in inputs:
+            return flatten(inputs["input_data"])
 
-    def _scale_inputs(
-        self, inputs: list, scale_base: int, scale_exp: int, modulus: int
-    ) -> list:
-        """Scale inputs to field representation."""
-        if scale_base <= 0 or scale_exp <= 0:
-            return [int(v) % modulus for v in inputs]
-        scale = scale_base**scale_exp
-        return [int(round(v * scale)) % modulus for v in inputs]
+        if len(inputs) == 1:
+            return flatten(list(inputs.values())[0])
 
-    def _compare_inputs(
-        self, expected: list, actual: list, modulus: int, tolerance: int = 1
-    ) -> bool:
-        """Compare inputs with tolerance for rounding."""
-        if len(expected) != len(actual):
-            return False
-        for e, a in zip(expected, actual):
-            diff = abs((e - a) % modulus)
-            if diff > tolerance and diff < modulus - tolerance:
-                return False
-        return True
+        result = []
+        for key in sorted(inputs.keys()):
+            result.extend(flatten(inputs[key]))
+        return result
 
     def cleanup_run(self, run_uid: str):
         if run_uid not in self.runs:

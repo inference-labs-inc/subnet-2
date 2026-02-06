@@ -19,6 +19,8 @@ from dsperse.src.run.incremental_runner import (
     IncrementalRunState,
     SliceTask,
     SliceResult,
+    TileTask,
+    TileResult,
 )
 from execution_layer.circuit import Circuit, ProofSystem
 from _validator.models.dslice_request import DSliceQueuedProofRequest
@@ -41,6 +43,20 @@ class IncrementalSliceRequest:
 
 
 @dataclass
+class IncrementalTileRequest:
+    """A tile request ready to be sent to a miner."""
+
+    task_id: str
+    slice_id: str
+    tile_idx: int
+    inputs: dict
+    proof_system: ProofSystem
+    circuit: Circuit
+    run_uid: str
+    use_circuit: bool
+
+
+@dataclass
 class IncrementalRunStatus:
     """Status of an incremental run."""
 
@@ -52,11 +68,16 @@ class IncrementalRunStatus:
     completed_slices: list[str] = field(default_factory=list)
     failed_slices: list[str] = field(default_factory=list)
     pending_slice: Optional[str] = None
+    pending_tiles: dict[int, bool] = field(default_factory=dict)
     start_time: float = 0.0
 
     @property
     def is_complete(self) -> bool:
-        return self.current_slice is None and not self.pending_slice
+        return (
+            self.current_slice is None
+            and not self.pending_slice
+            and not self.pending_tiles
+        )
 
     @property
     def progress_percent(self) -> float:
@@ -154,13 +175,15 @@ class IncrementalRunner:
 
     def get_next_slice(self, run_uid: str) -> Optional[IncrementalSliceRequest]:
         """
-        Get the next slice that needs execution.
+        Get the next slice that needs execution (non-tiled only).
+
+        For tiled slices, use get_tile_requests() instead.
 
         Args:
             run_uid: The run identifier
 
         Returns:
-            IncrementalSliceRequest if there's a slice to execute, None if run is complete
+            IncrementalSliceRequest if there's a non-tiled slice to execute, None otherwise
         """
         if run_uid not in self._runs:
             logging.warning(f"Run {run_uid} not found")
@@ -168,14 +191,17 @@ class IncrementalRunner:
 
         state, status, circuit = self._runs[run_uid]
 
-        if status.pending_slice:
-            logging.debug(f"Run {run_uid} has pending slice {status.pending_slice}")
+        if status.pending_slice or status.pending_tiles:
+            logging.debug(f"Run {run_uid} has pending work")
             return None
 
         if state.current_slice_id is None:
             return None
 
         for task in self._dsperse_runner.iter_tasks(state):
+            if isinstance(task, TileTask):
+                return None
+
             if not task.use_circuit:
                 result = self._dsperse_runner.execute_onnx_slice(state, task)
                 self._dsperse_runner.apply_result(state, result)
@@ -202,6 +228,56 @@ class IncrementalRunner:
             return request
 
         return None
+
+    def get_tile_requests(self, run_uid: str) -> list[IncrementalTileRequest]:
+        """
+        Get all tile requests for the current tiled slice.
+
+        Returns tile requests that can be executed in parallel.
+
+        Args:
+            run_uid: The run identifier
+
+        Returns:
+            List of IncrementalTileRequest objects, empty if no tiles pending
+        """
+        if run_uid not in self._runs:
+            logging.warning(f"Run {run_uid} not found")
+            return []
+
+        state, status, circuit = self._runs[run_uid]
+
+        if status.pending_slice or status.pending_tiles:
+            logging.debug(f"Run {run_uid} has pending work")
+            return []
+
+        if state.current_slice_id is None:
+            return []
+
+        tile_requests = []
+        for task in self._dsperse_runner.iter_tasks(state):
+            if isinstance(task, TileTask):
+                proof_system = self._determine_tile_proof_system(task)
+                request = IncrementalTileRequest(
+                    task_id=task.task_id,
+                    slice_id=task.slice_id,
+                    tile_idx=task.tile_idx,
+                    inputs=task.inputs,
+                    proof_system=proof_system,
+                    circuit=circuit,
+                    run_uid=run_uid,
+                    use_circuit=task.use_circuit,
+                )
+                tile_requests.append(request)
+                status.pending_tiles[task.tile_idx] = True
+
+        if tile_requests:
+            logging.info(
+                f"Generated {len(tile_requests)} tile requests for slice "
+                f"{tile_requests[0].slice_id}"
+            )
+
+        return tile_requests
 
     def create_queued_request(
         self, slice_req: IncrementalSliceRequest
@@ -293,6 +369,85 @@ class IncrementalRunner:
 
         return is_complete
 
+    def apply_tile_result(
+        self,
+        run_uid: str,
+        task_id: str,
+        slice_id: str,
+        tile_idx: int,
+        success: bool,
+        computed_outputs: Optional[dict] = None,
+        proof: Optional[bytes] = None,
+        witness: Optional[bytes] = None,
+        error: Optional[str] = None,
+    ) -> bool:
+        """
+        Apply the result of a tile execution.
+
+        Args:
+            run_uid: The run identifier
+            task_id: The tile task identifier
+            slice_id: The parent slice identifier
+            tile_idx: The tile index
+            success: Whether execution succeeded
+            computed_outputs: The outputs computed by the miner
+            proof: The proof bytes
+            witness: The witness bytes
+            error: Error message if failed
+
+        Returns:
+            True if this completes the tiled slice (ready for next slice)
+        """
+        if run_uid not in self._runs:
+            logging.warning(f"Run {run_uid} not found")
+            return False
+
+        state, status, circuit = self._runs[run_uid]
+
+        if tile_idx not in status.pending_tiles:
+            logging.warning(f"Tile {tile_idx} not in pending tiles")
+            return False
+
+        del status.pending_tiles[tile_idx]
+
+        tile_result = TileResult(
+            task_id=task_id,
+            slice_id=slice_id,
+            tile_idx=tile_idx,
+            success=success,
+            outputs=computed_outputs,
+            error=error,
+            proof=proof,
+            witness=witness,
+        )
+
+        applied = self._dsperse_runner.apply_tile_result(state, tile_result)
+
+        if not applied:
+            logging.warning(f"Failed to apply tile result for {task_id}")
+
+        if not status.pending_tiles:
+            status.current_slice = state.current_slice_id
+            if state.pending_tiled_slice is None:
+                slice_completed = state.current_slice_id != slice_id
+                if slice_completed:
+                    status.completed_slices.append(slice_id)
+                    logging.info(f"Tiled slice {slice_id} completed")
+
+        is_complete = self._dsperse_runner.is_complete(state)
+        if is_complete:
+            total_time = time.perf_counter() - status.start_time
+            all_success = len(status.failed_slices) == 0
+            logging.info(
+                f"Incremental run {run_uid} complete. "
+                f"Completed: {len(status.completed_slices)}, Failed: {len(status.failed_slices)}, "
+                f"Time: {total_time:.2f}s"
+            )
+            if self._on_run_complete:
+                self._on_run_complete(run_uid, all_success)
+
+        return not status.pending_tiles
+
     def get_run_status(self, run_uid: str) -> Optional[dict]:
         """Get status of a run."""
         if run_uid not in self._runs:
@@ -343,6 +498,15 @@ class IncrementalRunner:
 
     def _determine_proof_system(self, task: SliceTask) -> ProofSystem:
         """Determine the proof system to use for a slice."""
+        backend = task.backend.lower() if task.backend else ""
+        if "jstprove" in backend or "jst" in backend:
+            return ProofSystem.JSTPROVE
+        if "ezkl" in backend:
+            return ProofSystem.EZKL
+        return ProofSystem.JSTPROVE
+
+    def _determine_tile_proof_system(self, task: TileTask) -> ProofSystem:
+        """Determine the proof system to use for a tile."""
         backend = task.backend.lower() if task.backend else ""
         if "jstprove" in backend or "jst" in backend:
             return ProofSystem.JSTPROVE
