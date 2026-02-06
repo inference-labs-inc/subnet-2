@@ -102,10 +102,6 @@ class IncrementalRunner:
 
         slices_path = Path(circuit.paths.base_path)
 
-        metadata_path = slices_path / "metadata.json"
-        if not metadata_path.exists():
-            Converter.extract_metadata_only(str(slices_path))
-
         from dsperse.src.analyzers.runner_analyzer import RunnerAnalyzer
 
         run_metadata = RunnerAnalyzer.build_run_metadata(slices_path)
