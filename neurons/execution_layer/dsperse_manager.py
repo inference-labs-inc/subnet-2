@@ -91,7 +91,7 @@ class DSperseManager:
         self,
         event_client: "DsperseEventClient | None" = None,
         lazy: bool = False,
-        incremental_mode: bool = False,
+        incremental_mode: bool = True,
     ):
         """
         Initialize DSperseManager.
@@ -100,7 +100,7 @@ class DSperseManager:
             event_client: Optional event client for telemetry
             lazy: If True, extract slices on-demand
             incremental_mode: If True, use incremental execution where miners
-                             compute outputs (default: False for backwards compatibility)
+                             compute outputs
         """
         self.circuits: list[Circuit] = [
             circuit

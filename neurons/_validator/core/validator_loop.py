@@ -90,17 +90,10 @@ class ValidatorLoop:
         )
         self.dsperse_event_client = DsperseEventClient(api_url, config.wallet)
 
-        incremental_mode = os.environ.get(
-            "DSPERSE_INCREMENTAL_MODE", "true"
-        ).lower() in ("1", "true", "yes")
         self.dsperse_manager = DSperseManager(
             event_client=self.dsperse_event_client,
-            incremental_mode=incremental_mode,
+            incremental_mode=True,
         )
-        if incremental_mode:
-            bt.logging.info(
-                "DSperse incremental mode enabled - miners will compute outputs"
-            )
 
         self.score_manager = ScoreManager(
             self.config.metagraph,
