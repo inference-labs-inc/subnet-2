@@ -500,7 +500,7 @@ class DSperseManager:
         )
 
         if self.event_client:
-            slice_num = f"{slice_id.replace('slice_', '')}_tile_{tile_idx}"
+            slice_num = f"{slice_id.removeprefix('slice_')}_tile_{tile_idx}"
             if success:
                 self._schedule_async(
                     self.event_client.emit_verification_complete(

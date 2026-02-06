@@ -7,10 +7,11 @@ all outputs locally, IncrementalRunner sends slices to miners sequentially, wher
 each slice's verified output becomes the input for the next slice.
 """
 
+import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 from bittensor import logging
 
@@ -144,7 +145,7 @@ class IncrementalRunner:
         Returns:
             Run UID for tracking this run
         """
-        run_uid = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        run_uid = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{secrets.token_hex(8)}"
         logging.info(
             f"Starting incremental run for circuit {circuit.metadata.name}. Run UID: {run_uid}"
         )
@@ -212,7 +213,14 @@ class IncrementalRunner:
                     logging.error(
                         f"ONNX-only slice {task.slice_id} execution failed: {error_msg}"
                     )
+                    failed_result = SliceResult(
+                        slice_id=task.slice_id,
+                        success=False,
+                        error=error_msg,
+                    )
+                    self._dsperse_runner.apply_result(state, failed_result)
                     status.failed_slices.append(task.slice_id)
+                    status.current_slice = state.current_slice_id
                     continue
                 self._dsperse_runner.apply_result(state, result)
                 status.completed_slices.append(task.slice_id)
@@ -273,7 +281,7 @@ class IncrementalRunner:
         tile_requests = []
         for task in self._dsperse_runner.iter_tasks(state):
             if isinstance(task, TileTask):
-                proof_system = self._determine_tile_proof_system(task)
+                proof_system = self._determine_proof_system(task)
                 request = IncrementalTileRequest(
                     task_id=task.task_id,
                     slice_id=task.slice_id,
@@ -618,17 +626,8 @@ class IncrementalRunner:
             del self._runs[run_uid]
             logging.debug(f"Cleaned up incremental run {run_uid}")
 
-    def _determine_proof_system(self, task: SliceTask) -> ProofSystem:
-        """Determine the proof system to use for a slice."""
-        backend = task.backend.lower() if task.backend else ""
-        if "jstprove" in backend or "jst" in backend:
-            return ProofSystem.JSTPROVE
-        if "ezkl" in backend:
-            return ProofSystem.EZKL
-        return ProofSystem.JSTPROVE
-
-    def _determine_tile_proof_system(self, task: TileTask) -> ProofSystem:
-        """Determine the proof system to use for a tile."""
+    def _determine_proof_system(self, task: Union[SliceTask, TileTask]) -> ProofSystem:
+        """Determine the proof system to use for a slice or tile."""
         backend = task.backend.lower() if task.backend else ""
         if "jstprove" in backend or "jst" in backend:
             return ProofSystem.JSTPROVE
