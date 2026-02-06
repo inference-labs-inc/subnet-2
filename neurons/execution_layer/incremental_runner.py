@@ -23,6 +23,7 @@ from dsperse.src.run.incremental_runner import (
     TileTask,
     TileResult,
 )
+from dsperse.src.analyzers.schema import Backend
 from execution_layer.circuit import Circuit, ProofSystem
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.request_type import RequestType
@@ -173,6 +174,22 @@ class IncrementalRunner:
             f"Incremental run {run_uid} initialized with {total_slices} slices"
         )
 
+        expected_backend = (
+            Backend.JSTPROVE
+            if circuit.metadata.proof_system == ProofSystem.JSTPROVE
+            else Backend.EZKL
+        )
+        for slice_id, node in state.run_metadata.execution_chain.nodes.items():
+            if node.backend != expected_backend:
+                logging.warning(
+                    f"Overriding node {slice_id} backend from {node.backend!r} to {expected_backend!r} "
+                    f"(circuit proof_system={circuit.metadata.proof_system})"
+                )
+                node.backend = expected_backend
+            logging.info(
+                f"[TILE DEBUG] Node {slice_id}: backend={node.backend!r}, use_circuit={node.use_circuit}"
+            )
+
         return run_uid
 
     def get_next_slice(self, run_uid: str) -> Optional[IncrementalSliceRequest]:
@@ -229,6 +246,16 @@ class IncrementalRunner:
                 continue
 
             proof_system = self._determine_proof_system(task)
+            if proof_system is None:
+                failed_result = SliceResult(
+                    slice_id=task.slice_id,
+                    success=False,
+                    error=f"Unknown backend '{task.backend}'",
+                )
+                self._dsperse_runner.apply_result(state, failed_result)
+                status.failed_slices.append(task.slice_id)
+                status.current_slice = state.current_slice_id
+                continue
 
             request = IncrementalSliceRequest(
                 slice_id=task.slice_id,
@@ -281,7 +308,16 @@ class IncrementalRunner:
         tile_requests = []
         for task in self._dsperse_runner.iter_tasks(state):
             if isinstance(task, TileTask):
+                logging.debug(
+                    f"[TILE DEBUG] get_tile_requests: TileTask found, task.backend={task.backend!r}, "
+                    f"slice_id={task.slice_id}, tile_idx={task.tile_idx}"
+                )
                 proof_system = self._determine_proof_system(task)
+                if proof_system is None:
+                    continue
+                logging.debug(
+                    f"[TILE DEBUG] get_tile_requests: creating request with proof_system={proof_system}"
+                )
                 request = IncrementalTileRequest(
                     task_id=task.task_id,
                     slice_id=task.slice_id,
@@ -316,6 +352,11 @@ class IncrementalRunner:
         nodes = state.run_metadata.execution_chain.nodes
         node = nodes.get(pending.slice_id)
 
+        logging.info(
+            f"[TILE DEBUG] _generate_tile_requests_from_pending: pending.slice_id={pending.slice_id}, "
+            f"node.backend={getattr(node, 'backend', 'MISSING')!r}"
+        )
+
         if not node:
             logging.error(f"Node not found for pending tiled slice {pending.slice_id}")
             return []
@@ -344,12 +385,22 @@ class IncrementalRunner:
             tile_inputs = {"input_data": tile_tensor.tolist()}
             backend = node.backend.lower() if node.backend else ""
 
+            logging.info(
+                f"[TILE DEBUG] tile {tile_idx}: node.backend={node.backend!r}, backend_lower={backend!r}"
+            )
+
             if "jstprove" in backend or "jst" in backend:
                 proof_system = ProofSystem.JSTPROVE
+                logging.info(f"[TILE DEBUG] tile {tile_idx}: set JSTPROVE")
             elif "ezkl" in backend:
                 proof_system = ProofSystem.EZKL
+                logging.info(f"[TILE DEBUG] tile {tile_idx}: set EZKL")
             else:
-                proof_system = ProofSystem.JSTPROVE
+                logging.error(
+                    f"Unknown backend '{node.backend}' for tile {tile_idx} of slice {pending.slice_id}"
+                )
+                pending.failed_tiles.append(tile_idx)
+                continue
 
             request = IncrementalTileRequest(
                 task_id=f"{pending.slice_id}_tile_{tile_idx}",
@@ -408,6 +459,11 @@ class IncrementalRunner:
         """
         base_slice_num = tile_req.slice_id.replace("slice_", "")
         tile_slice_num = f"{base_slice_num}_tile_{tile_req.tile_idx}"
+
+        logging.debug(
+            f"[TILE DEBUG] create_tile_queued_request: tile_req.proof_system={tile_req.proof_system}, "
+            f"slice_id={tile_req.slice_id}, tile_idx={tile_req.tile_idx}, circuit={tile_req.circuit}"
+        )
 
         return DSliceQueuedProofRequest(
             circuit=tile_req.circuit,
@@ -626,11 +682,22 @@ class IncrementalRunner:
             del self._runs[run_uid]
             logging.debug(f"Cleaned up incremental run {run_uid}")
 
-    def _determine_proof_system(self, task: Union[SliceTask, TileTask]) -> ProofSystem:
+    def _determine_proof_system(
+        self, task: Union[SliceTask, TileTask]
+    ) -> ProofSystem | None:
         """Determine the proof system to use for a slice or tile."""
         backend = task.backend.lower() if task.backend else ""
+        logging.debug(
+            f"[TILE DEBUG] _determine_proof_system: task.backend={task.backend!r}, "
+            f"backend_lower={backend!r}, slice_id={getattr(task, 'slice_id', 'unknown')}"
+        )
         if "jstprove" in backend or "jst" in backend:
+            logging.debug("[TILE DEBUG] _determine_proof_system: returning JSTPROVE")
             return ProofSystem.JSTPROVE
         if "ezkl" in backend:
+            logging.debug("[TILE DEBUG] _determine_proof_system: returning EZKL")
             return ProofSystem.EZKL
-        return ProofSystem.JSTPROVE
+        logging.error(
+            f"Unknown backend '{task.backend}' for task {getattr(task, 'slice_id', 'unknown')}"
+        )
+        return None

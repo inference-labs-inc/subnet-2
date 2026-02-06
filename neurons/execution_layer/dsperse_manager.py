@@ -836,6 +836,15 @@ class DSperseManager:
                             tile_output,
                         )
 
+                    proof_system = DSperseManager._method_to_proof_system(
+                        tile_result.method
+                    )
+                    if proof_system is None:
+                        logging.error(
+                            f"Skipping tile {tile_idx} of slice {slice_num}: unknown method"
+                        )
+                        continue
+
                     timing = SliceTimingData(
                         slice_num=f"{base_slice_num}_tile_{tile_idx}",
                         proof_system=(
@@ -858,9 +867,7 @@ class DSperseManager:
                             output_file=tile_output,
                             witness_file=tile_run_dir / "output_witness.bin",
                             circuit_id=circuit_id,
-                            proof_system=DSperseManager._method_to_proof_system(
-                                tile_result.method
-                            ),
+                            proof_system=proof_system,
                             timing=timing,
                         )
                     )
@@ -872,7 +879,13 @@ class DSperseManager:
                     logging.warning(f"Slice {slice_num} missing input/output files")
                     continue
 
-                # TODO: DSperse ExecutionInfo should expose time_sec for per-slice timing
+                proof_system = DSperseManager._method_to_proof_system(method)
+                if proof_system is None:
+                    logging.error(
+                        f"Skipping slice {slice_num}: unknown method '{method}'"
+                    )
+                    continue
+
                 timing = SliceTimingData(
                     slice_num=base_slice_num,
                     proof_system=method,
@@ -891,7 +904,7 @@ class DSperseManager:
                         output_file=slice_output,
                         witness_file=slice_run_dir / "output_witness.bin",
                         circuit_id=circuit_id,
-                        proof_system=DSperseManager._method_to_proof_system(method),
+                        proof_system=proof_system,
                         timing=timing,
                     )
                 )
@@ -940,16 +953,17 @@ class DSperseManager:
         )
 
     @staticmethod
-    def _method_to_proof_system(method: str | None) -> ProofSystem:
+    def _method_to_proof_system(method: str | None) -> ProofSystem | None:
         if not method:
-            return ProofSystem.JSTPROVE
+            logging.error("No proof method specified")
+            return None
         method_lower = str(method).lower()
         if "ezkl" in method_lower:
             return ProofSystem.EZKL
         if "jstprove" in method_lower or "jst" in method_lower:
             return ProofSystem.JSTPROVE
-        logging.warning(f"Unknown proof method '{method}', defaulting to JSTPROVE")
-        return ProofSystem.JSTPROVE
+        logging.error(f"Unknown proof method '{method}'")
+        return None
 
     def prove_slice(
         self,
