@@ -310,37 +310,40 @@ class DSperseManager:
 
         return run_uid
 
-    def get_next_incremental_slice(
-        self, run_uid: str
-    ) -> DSliceQueuedProofRequest | None:
+    def get_next_incremental_work(self, run_uid: str) -> list[DSliceQueuedProofRequest]:
         """
-        Get the next slice for an incremental run.
+        Get the next work items for an incremental run.
 
         Args:
             run_uid: The run identifier
 
         Returns:
-            DSliceQueuedProofRequest if there's a slice to execute, None otherwise
+            List of DSliceQueuedProofRequest. Empty list means ONNX ran locally (call again).
+            None returned as empty list means waiting or complete.
         """
         if not self._incremental_runner:
-            return None
+            return []
 
-        slice_req = self._incremental_runner.get_next_slice(run_uid)
-        if not slice_req:
-            return None
+        work_items = self._incremental_runner.get_next_work(run_uid)
+        if work_items is None:
+            return []
+        if len(work_items) == 0:
+            return self.get_next_incremental_work(run_uid)
 
-        return self._incremental_runner.create_queued_request(slice_req)
+        return [
+            self._incremental_runner.create_queued_request(item) for item in work_items
+        ]
 
     def generate_incremental_request(self) -> list[DSliceQueuedProofRequest]:
         """
         Generate incremental request(s).
 
-        Returns one slice request at a time, or all tile requests for a tiled slice.
-        If there's an active incremental run, returns the next slice/tiles.
+        Returns work items for the next slice (1 for non-tiled, N for tiled).
+        If there's an active incremental run, returns the next work.
         Otherwise starts a new run.
 
         Returns:
-            List of DSliceQueuedProofRequest (0-1 for slices, 0-N for tiles)
+            List of DSliceQueuedProofRequest
         """
         if not self._incremental_runner:
             self._incremental_runner = IncrementalRunner(
@@ -352,38 +355,22 @@ class DSperseManager:
 
         for run_uid in incremental_runs_snapshot:
             if not self._incremental_runner.is_complete(run_uid):
-                request = self.get_next_incremental_slice(run_uid)
-                if request:
-                    return [request]
-
-                tile_requests = self._incremental_runner.get_tile_requests(run_uid)
-                if tile_requests:
+                requests = self.get_next_incremental_work(run_uid)
+                if requests:
                     logging.info(
-                        f"Generating {len(tile_requests)} tile requests for incremental run {run_uid}"
+                        f"Generating {len(requests)} work items for run {run_uid}"
                     )
-                    return [
-                        self._incremental_runner.create_tile_queued_request(tile_req)
-                        for tile_req in tile_requests
-                    ]
+                    return requests
 
         if not self.circuits:
             return []
         circuit = random.choice(self.circuits)
         run_uid = self.start_incremental_run(circuit)
 
-        request = self.get_next_incremental_slice(run_uid)
-        if request:
-            return [request]
-
-        tile_requests = self._incremental_runner.get_tile_requests(run_uid)
-        if tile_requests:
-            logging.info(
-                f"Generating {len(tile_requests)} tile requests for new incremental run {run_uid}"
-            )
-            return [
-                self._incremental_runner.create_tile_queued_request(tile_req)
-                for tile_req in tile_requests
-            ]
+        requests = self.get_next_incremental_work(run_uid)
+        if requests:
+            logging.info(f"Generating {len(requests)} work items for new run {run_uid}")
+            return requests
 
         return []
 
@@ -415,16 +402,16 @@ class DSperseManager:
         if not self._incremental_runner:
             return True, None
 
-        slice_id = (
+        task_id = (
             f"slice_{slice_num}" if not slice_num.startswith("slice_") else slice_num
         )
 
-        is_complete = self._incremental_runner.apply_slice_result(
+        slice_complete = self._incremental_runner.apply_result(
             run_uid=run_uid,
-            slice_id=slice_id,
+            task_id=task_id,
             success=success,
-            computed_outputs=computed_outputs,
-            proof=proof,
+            outputs={"output_data": computed_outputs} if computed_outputs else None,
+            error=None if success else "Slice execution failed",
         )
 
         if self.event_client:
@@ -445,11 +432,15 @@ class DSperseManager:
                     )
                 )
 
+        is_complete = self._incremental_runner.is_complete(run_uid)
         if is_complete:
             return True, None
 
-        next_request = self.get_next_incremental_slice(run_uid)
-        return False, next_request
+        if not slice_complete:
+            return False, None
+
+        next_requests = self.get_next_incremental_work(run_uid)
+        return False, next_requests[0] if next_requests else None
 
     def on_incremental_tile_result(
         self,
@@ -485,18 +476,12 @@ class DSperseManager:
         if not self._incremental_runner:
             return True, []
 
-        proof_bytes = bytes.fromhex(proof) if proof else None
-        witness_bytes = bytes.fromhex(witness) if witness else None
-
-        tiles_complete = self._incremental_runner.apply_tile_result(
+        slice_complete = self._incremental_runner.apply_result(
             run_uid=run_uid,
             task_id=task_id,
-            slice_id=slice_id,
-            tile_idx=tile_idx,
             success=success,
-            computed_outputs=computed_outputs,
-            proof=proof_bytes,
-            witness=witness_bytes,
+            outputs={"output": computed_outputs} if computed_outputs else None,
+            error=None if success else "Tile execution failed",
         )
 
         if self.event_client:
@@ -522,21 +507,10 @@ class DSperseManager:
         if is_complete:
             return True, []
 
-        if not tiles_complete:
+        if not slice_complete:
             return False, []
 
-        next_request = self.get_next_incremental_slice(run_uid)
-        if next_request:
-            return False, [next_request]
-
-        next_tiles = self._incremental_runner.get_tile_requests(run_uid)
-        if next_tiles:
-            return False, [
-                self._incremental_runner.create_tile_queued_request(t)
-                for t in next_tiles
-            ]
-
-        return False, []
+        return False, self.get_next_incremental_work(run_uid)
 
     def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
         """Callback when an incremental run completes."""

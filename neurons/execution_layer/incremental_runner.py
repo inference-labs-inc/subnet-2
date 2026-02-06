@@ -1,10 +1,10 @@
 """
 IncrementalRunner for distributed slice execution in the validator.
 
-This module provides an IncrementalRunner that orchestrates distributed execution
-of DSperse models across miners. Unlike the standard DSperseManager which pre-computes
-all outputs locally, IncrementalRunner sends slices to miners sequentially, where
-each slice's verified output becomes the input for the next slice.
+Simple state machine:
+1. tensor_cache is source of truth for layer completion
+2. For each slice: inputs ready? → extract if needed → ONNX locally OR JSTprove to miners
+3. Tiled/non-tiled is just N=1 vs N=num_tiles, same flow
 """
 
 import secrets
@@ -12,827 +12,549 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional
 
+import torch
 from bittensor import logging
 
-from dsperse.src.run.incremental_runner import (
-    IncrementalRunner as DsperseIncrementalRunner,
-    IncrementalRunState,
-    SliceTask,
-    SliceResult,
-    TileTask,
-    TileResult,
-)
-from dsperse.src.analyzers.schema import Backend
+from dsperse.src.analyzers.schema import Backend, TilingInfo, RunSliceMetadata
 from dsperse.src.run.runner import Runner as DsperseRunner
+from dsperse.src.run.tile_executor import TileExecutor
+from dsperse.src.slice.utils.converter import Converter
 from execution_layer.circuit import Circuit, ProofSystem
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.request_type import RequestType
 
 
 @dataclass
-class IncrementalSliceRequest:
-    """A slice request ready to be sent to a miner."""
-
-    slice_id: str
-    slice_index: int
-    inputs: dict
-    proof_system: ProofSystem
-    circuit: Circuit
-    run_uid: str
-    use_circuit: bool
-    is_tiled: bool = False
-    tile_count: int = 0
-
-
-@dataclass
-class IncrementalTileRequest:
-    """A tile request ready to be sent to a miner."""
+class WorkItem:
+    """A single work item (slice or tile) to be processed."""
 
     task_id: str
     slice_id: str
-    tile_idx: int
+    tile_idx: Optional[int]
     inputs: dict
     proof_system: ProofSystem
     circuit: Circuit
     run_uid: str
-    use_circuit: bool
 
 
 @dataclass
-class IncrementalRunStatus:
-    """Status of an incremental run."""
+class RunState:
+    """State of an incremental run."""
 
     run_uid: str
-    circuit_id: str
-    circuit_name: str
-    total_slices: int
-    current_slice: Optional[str]
+    circuit: Circuit
+    slices_path: Path
+    tensor_cache: dict[str, Any]
+    execution_order: list[str]
+    slice_metadata: dict[str, RunSliceMetadata]
+    current_idx: int = 0
+    pending_work: dict[str, bool] = field(default_factory=dict)
     completed_slices: list[str] = field(default_factory=list)
     failed_slices: list[str] = field(default_factory=list)
-    pending_slice: Optional[str] = None
-    pending_tiles: dict[int, bool] = field(default_factory=dict)
-    failed_tile_slices: set[str] = field(default_factory=set)
     start_time: float = 0.0
 
     @property
-    def is_complete(self) -> bool:
-        return (
-            self.current_slice is None
-            and not self.pending_slice
-            and not self.pending_tiles
-        )
+    def current_slice_id(self) -> Optional[str]:
+        if self.current_idx >= len(self.execution_order):
+            return None
+        return self.execution_order[self.current_idx]
 
     @property
-    def progress_percent(self) -> float:
-        if self.total_slices == 0:
-            return 0.0
-        return (
-            (len(self.completed_slices) + len(self.failed_slices))
-            / self.total_slices
-            * 100
-        )
+    def is_complete(self) -> bool:
+        return self.current_idx >= len(self.execution_order) and not self.pending_work
+
+    @property
+    def is_waiting(self) -> bool:
+        return bool(self.pending_work)
 
 
 class IncrementalRunner:
     """
-    Orchestrates distributed slice execution across miners.
+    Simple incremental runner for distributed slice execution.
 
-    This runner sends slices to miners one at a time, waits for verified outputs,
-    and chains them to subsequent slices. This enables true distributed model
-    execution where the validator doesn't pre-compute outputs.
-
-    Usage:
-        runner = IncrementalRunner()
-        run_uid = runner.start_run(circuit, inputs)
-
-        # Get next slice to send
-        slice_req = runner.get_next_slice(run_uid)
-        if slice_req:
-            # Send to miner and get result
-            result = send_to_miner(slice_req)
-            runner.apply_slice_result(run_uid, result)
-
-        # Check completion
-        if runner.is_complete(run_uid):
-            final_output = runner.get_final_output(run_uid)
+    Core loop:
+        work_items = runner.get_next_work(run_uid)
+        if work_items is None:
+            # Waiting for pending work or complete
+            pass
+        elif len(work_items) == 0:
+            # ONNX slice executed locally, call again
+            pass
+        else:
+            # Send work_items to miners
+            for item in work_items:
+                send_to_miner(item)
     """
 
     def __init__(self, on_run_complete: Optional[Callable[[str, bool], None]] = None):
-        """
-        Initialize the IncrementalRunner.
-
-        Args:
-            on_run_complete: Optional callback when a run completes.
-                            Signature: (run_uid: str, success: bool) -> None
-        """
-        self._dsperse_runner = DsperseIncrementalRunner(verify_proofs=False)
-        self._runs: dict[
-            str, tuple[IncrementalRunState, IncrementalRunStatus, Circuit]
-        ] = {}
+        self._runs: dict[str, RunState] = {}
         self._on_run_complete = on_run_complete
 
-    def start_run(
-        self,
-        circuit: Circuit,
-        inputs: Optional[dict] = None,
-    ) -> str:
-        """
-        Start a new incremental run.
-
-        Args:
-            circuit: The DSperse circuit to execute
-            inputs: Model inputs (generated if not provided)
-
-        Returns:
-            Run UID for tracking this run
-        """
+    def start_run(self, circuit: Circuit, inputs: Optional[dict] = None) -> str:
+        """Start a new incremental run."""
         run_uid = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{secrets.token_hex(8)}"
-        logging.info(
-            f"Starting incremental run for circuit {circuit.metadata.name}. Run UID: {run_uid}"
-        )
+        logging.info(f"Starting incremental run {run_uid} for {circuit.metadata.name}")
 
         if inputs is None:
             inputs = circuit.input_handler(RequestType.BENCHMARK).generate()
 
-        state = self._dsperse_runner.initialize(
-            slice_path=circuit.paths.base_path,
-            input_data=inputs,
+        slices_path = Path(circuit.paths.base_path)
+
+        metadata_path = slices_path / "metadata.json"
+        if not metadata_path.exists():
+            Converter.extract_metadata_only(str(slices_path))
+
+        from dsperse.src.analyzers.runner_analyzer import RunnerAnalyzer
+
+        run_metadata = RunnerAnalyzer.build_run_metadata(slices_path)
+
+        execution_order = sorted(
+            run_metadata.slices.keys(), key=lambda k: int(k.split("_")[1])
         )
 
-        total_slices = len(state.run_metadata.execution_chain.nodes)
-        status = IncrementalRunStatus(
+        tensor_cache = {}
+        if isinstance(inputs, dict):
+            input_tensor = None
+            for key in ["input_data", "input", "data", "inputs"]:
+                if key in inputs:
+                    input_tensor = torch.tensor(inputs[key])
+                    break
+            if input_tensor is None:
+                input_tensor = torch.tensor(list(inputs.values())[0])
+        else:
+            input_tensor = (
+                torch.tensor(inputs) if not isinstance(inputs, torch.Tensor) else inputs
+            )
+
+        first_slice = (
+            run_metadata.slices.get(execution_order[0]) if execution_order else None
+        )
+        if first_slice:
+            input_names = first_slice.dependencies.filtered_inputs
+            if input_names:
+                tensor_cache[input_names[0]] = input_tensor
+
+        state = RunState(
             run_uid=run_uid,
-            circuit_id=circuit.id,
-            circuit_name=circuit.metadata.name,
-            total_slices=total_slices,
-            current_slice=state.current_slice_id,
+            circuit=circuit,
+            slices_path=slices_path,
+            tensor_cache=tensor_cache,
+            execution_order=execution_order,
+            slice_metadata={k: v for k, v in run_metadata.slices.items()},
             start_time=time.perf_counter(),
         )
 
-        self._runs[run_uid] = (state, status, circuit)
-        logging.info(
-            f"Incremental run {run_uid} initialized with {total_slices} slices"
-        )
-
-        expected_backend = (
-            Backend.JSTPROVE
-            if circuit.metadata.proof_system == ProofSystem.JSTPROVE
-            else Backend.EZKL
-        )
-        for slice_id, node in state.run_metadata.execution_chain.nodes.items():
-            if node.backend != expected_backend:
-                logging.warning(
-                    f"Overriding node {slice_id} backend from {node.backend!r} to {expected_backend!r} "
-                    f"(circuit proof_system={circuit.metadata.proof_system})"
-                )
-                node.backend = expected_backend
-            logging.info(
-                f"[TILE DEBUG] Node {slice_id}: backend={node.backend!r}, use_circuit={node.use_circuit}"
-            )
-
+        self._runs[run_uid] = state
+        logging.info(f"Run {run_uid} initialized with {len(execution_order)} slices")
         return run_uid
 
-    def get_next_slice(self, run_uid: str) -> Optional[IncrementalSliceRequest]:
+    def get_next_work(self, run_uid: str) -> Optional[list[WorkItem]]:
         """
-        Get the next slice that needs execution (non-tiled only).
-
-        For tiled slices, use get_tile_requests() instead.
-
-        Args:
-            run_uid: The run identifier
+        Get the next work items to process.
 
         Returns:
-            IncrementalSliceRequest if there's a non-tiled slice to execute, None otherwise
+            None - waiting for pending work or run complete
+            [] - ONNX slice executed locally, call again for next slice
+            [WorkItem, ...] - work items to send to miners
         """
         if run_uid not in self._runs:
             logging.warning(f"Run {run_uid} not found")
             return None
 
-        state, status, circuit = self._runs[run_uid]
+        state = self._runs[run_uid]
 
-        if status.pending_slice or status.pending_tiles:
-            logging.debug(f"Run {run_uid} has pending work")
+        if state.is_waiting:
             return None
 
-        if state.current_slice_id is None:
+        if state.is_complete:
             return None
 
-        for task in self._dsperse_runner.iter_tasks(state):
-            if isinstance(task, TileTask):
-                return None
+        slice_id = state.current_slice_id
+        if slice_id is None:
+            return None
 
-            if not task.use_circuit:
-                result = self._dsperse_runner.execute_onnx_slice(state, task)
-                if result is None or not result.success:
-                    error_msg = (
-                        result.error if result else "execute_onnx_slice returned None"
-                    )
-                    logging.error(
-                        f"ONNX-only slice {task.slice_id} execution failed: {error_msg}"
-                    )
-                    failed_result = SliceResult(
-                        slice_id=task.slice_id,
-                        success=False,
-                        error=error_msg,
-                    )
-                    self._dsperse_runner.apply_result(state, failed_result)
-                    status.failed_slices.append(task.slice_id)
-                    status.current_slice = state.current_slice_id
-                    continue
-                self._dsperse_runner.apply_result(state, result)
-                status.completed_slices.append(task.slice_id)
-                status.current_slice = state.current_slice_id
-                logging.debug(f"Executed ONNX-only slice {task.slice_id} locally")
-                continue
-
-            proof_system = self._determine_proof_system(task)
-            if proof_system is None:
-                failed_result = SliceResult(
-                    slice_id=task.slice_id,
-                    success=False,
-                    error=f"Unknown backend '{task.backend}'",
-                )
-                self._dsperse_runner.apply_result(state, failed_result)
-                status.failed_slices.append(task.slice_id)
-                status.current_slice = state.current_slice_id
-                continue
-
-            request = IncrementalSliceRequest(
-                slice_id=task.slice_id,
-                slice_index=task.slice_index,
-                inputs=task.inputs,
-                proof_system=proof_system,
-                circuit=circuit,
-                run_uid=run_uid,
-                use_circuit=task.use_circuit,
-                is_tiled=task.is_tiled,
-                tile_count=task.tile_count,
-            )
-
-            status.pending_slice = task.slice_id
-            return request
-
-        return None
-
-    def get_tile_requests(self, run_uid: str) -> list[IncrementalTileRequest]:
-        """
-        Get all tile requests for the current tiled slice.
-
-        Returns tile requests that can be executed in parallel.
-
-        Args:
-            run_uid: The run identifier
-
-        Returns:
-            List of IncrementalTileRequest objects, empty if no tiles pending
-        """
-        if run_uid not in self._runs:
-            logging.warning(f"Run {run_uid} not found")
+        meta = state.slice_metadata.get(slice_id)
+        if not meta:
+            logging.error(f"No metadata for {slice_id}")
+            state.failed_slices.append(slice_id)
+            state.current_idx += 1
             return []
 
-        state, status, circuit = self._runs[run_uid]
-
-        if status.pending_slice or status.pending_tiles:
-            logging.debug(f"Run {run_uid} has pending work")
+        required_inputs = meta.dependencies.filtered_inputs
+        missing = [i for i in required_inputs if i not in state.tensor_cache]
+        if missing:
+            logging.error(f"Slice {slice_id} missing inputs: {missing}")
+            logging.error(f"tensor_cache keys: {list(state.tensor_cache.keys())}")
+            state.failed_slices.append(slice_id)
+            state.current_idx += 1
             return []
 
-        pending = state.pending_tiled_slice
-        if pending and not pending.is_complete:
-            return self._generate_tile_requests_from_pending(
-                state, status, circuit, run_uid, pending
-            )
+        self._ensure_extracted(state, slice_id)
 
-        if state.current_slice_id is None:
+        is_tiled = meta.tiling and meta.tiling.num_tiles > 1
+        has_circuits = self._has_circuits(state, slice_id, meta)
+
+        if not has_circuits:
+            self._run_onnx_locally(state, slice_id, meta)
+            state.completed_slices.append(slice_id)
+            state.current_idx += 1
             return []
 
-        tile_requests = []
-        first_tile_checked = False
-        for task in self._dsperse_runner.iter_tasks(state):
-            if isinstance(task, TileTask):
-                if not first_tile_checked:
-                    first_tile_checked = True
-                    backend = task.backend.lower() if task.backend else ""
-                    if "jstprove" in backend or "jst" in backend:
-                        if not self._has_jstprove_tile_circuits(circuit, task.slice_id):
-                            logging.info(
-                                f"No JSTprove tile circuits found for {task.slice_id}, "
-                                f"running local ONNX inference instead"
-                            )
-                            pending = state.pending_tiled_slice
-                            if pending:
-                                self._run_local_onnx_tiles(
-                                    state, status, circuit, pending
-                                )
-                            return []
+        return self._create_work_items(state, slice_id, meta, is_tiled)
 
-                logging.debug(
-                    f"[TILE DEBUG] get_tile_requests: TileTask found, task.backend={task.backend!r}, "
-                    f"slice_id={task.slice_id}, tile_idx={task.tile_idx}"
-                )
-                proof_system = self._determine_proof_system(task)
-                if proof_system is None:
-                    continue
-                logging.debug(
-                    f"[TILE DEBUG] get_tile_requests: creating request with proof_system={proof_system}"
-                )
-                request = IncrementalTileRequest(
-                    task_id=task.task_id,
-                    slice_id=task.slice_id,
-                    tile_idx=task.tile_idx,
-                    inputs=task.inputs,
-                    proof_system=proof_system,
-                    circuit=circuit,
-                    run_uid=run_uid,
-                    use_circuit=task.use_circuit,
-                )
-                tile_requests.append(request)
-                status.pending_tiles[task.tile_idx] = True
-
-        if tile_requests:
-            logging.info(
-                f"Generated {len(tile_requests)} tile requests for slice "
-                f"{tile_requests[0].slice_id}"
-            )
-
-        return tile_requests
-
-    def _generate_tile_requests_from_pending(
-        self,
-        state: IncrementalRunState,
-        status: IncrementalRunStatus,
-        circuit: Circuit,
-        run_uid: str,
-        pending,
-    ) -> list[IncrementalTileRequest]:
-        """Generate tile requests from pending_tiled_slice state."""
-        nodes = state.run_metadata.execution_chain.nodes
-        node = nodes.get(pending.slice_id)
-
-        logging.info(
-            f"[TILE DEBUG] _generate_tile_requests_from_pending: pending.slice_id={pending.slice_id}, "
-            f"node.backend={getattr(node, 'backend', 'MISSING')!r}"
-        )
-
-        if not node:
-            logging.error(f"Node not found for pending tiled slice {pending.slice_id}")
-            return []
-
-        tiling = pending.tiling_info
-        if not tiling:
-            logging.error(f"Tiling info not found for pending slice {pending.slice_id}")
-            return []
-
-        backend = node.backend.lower() if node.backend else ""
-        if "jstprove" in backend or "jst" in backend:
-            if not self._has_jstprove_tile_circuits(circuit, pending.slice_id):
-                logging.info(
-                    f"No JSTprove tile circuits found for {pending.slice_id}, "
-                    f"running local ONNX inference instead"
-                )
-                self._run_local_onnx_tiles(state, status, circuit, pending)
-                return []
-
-        tile_requests = []
-        slice_idx = tiling.slice_idx
-
-        for tile_idx in range(pending.total_tiles):
-            if tile_idx in pending.completed_tiles or tile_idx in pending.failed_tiles:
-                continue
-
-            cache_name = f"tile_{slice_idx}_{tile_idx}_in"
-            tile_tensor = state.tensor_cache.get(cache_name)
-
-            if tile_tensor is None:
-                logging.error(
-                    f"Tile input {cache_name} not found in cache for slice {pending.slice_id}"
-                )
-                pending.failed_tiles.append(tile_idx)
-                continue
-
-            tile_inputs = {"input_data": tile_tensor.tolist()}
-
-            logging.info(
-                f"[TILE DEBUG] tile {tile_idx}: node.backend={node.backend!r}, backend_lower={backend!r}"
-            )
-
-            if "jstprove" in backend or "jst" in backend:
-                proof_system = ProofSystem.JSTPROVE
-                logging.debug(f"[TILE DEBUG] tile {tile_idx}: set JSTPROVE")
-            elif "ezkl" in backend:
-                proof_system = ProofSystem.EZKL
-                logging.debug(f"[TILE DEBUG] tile {tile_idx}: set EZKL")
-            else:
-                logging.error(
-                    f"Unknown backend '{node.backend}' for tile {tile_idx} of slice {pending.slice_id}"
-                )
-                pending.failed_tiles.append(tile_idx)
-                continue
-
-            request = IncrementalTileRequest(
-                task_id=f"{pending.slice_id}_tile_{tile_idx}",
-                slice_id=pending.slice_id,
-                tile_idx=tile_idx,
-                inputs=tile_inputs,
-                proof_system=proof_system,
-                circuit=circuit,
-                run_uid=run_uid,
-                use_circuit=node.use_circuit,
-            )
-            tile_requests.append(request)
-            status.pending_tiles[tile_idx] = True
-
-        if tile_requests:
-            logging.info(
-                f"Generated {len(tile_requests)} tile requests from pending state for slice "
-                f"{pending.slice_id}"
-            )
-
-        return tile_requests
-
-    def create_queued_request(
-        self, slice_req: IncrementalSliceRequest
-    ) -> DSliceQueuedProofRequest:
-        """
-        Create a DSliceQueuedProofRequest from an IncrementalSliceRequest.
-
-        Args:
-            slice_req: The slice request
-
-        Returns:
-            DSliceQueuedProofRequest ready to be queued for a miner
-        """
-        return DSliceQueuedProofRequest(
-            circuit=slice_req.circuit,
-            inputs=slice_req.inputs,
-            outputs=None,
-            slice_num=slice_req.slice_id.replace("slice_", ""),
-            run_uid=slice_req.run_uid,
-            proof_system=slice_req.proof_system,
-            compute_outputs=True,
-        )
-
-    def create_tile_queued_request(
-        self, tile_req: IncrementalTileRequest
-    ) -> DSliceQueuedProofRequest:
-        """
-        Create a DSliceQueuedProofRequest from an IncrementalTileRequest.
-
-        Args:
-            tile_req: The tile request
-
-        Returns:
-            DSliceQueuedProofRequest ready to be queued for a miner
-        """
-        base_slice_num = tile_req.slice_id.replace("slice_", "")
-        tile_slice_num = f"{base_slice_num}_tile_{tile_req.tile_idx}"
-
-        logging.debug(
-            f"[TILE DEBUG] create_tile_queued_request: tile_req.proof_system={tile_req.proof_system}, "
-            f"slice_id={tile_req.slice_id}, tile_idx={tile_req.tile_idx}, circuit={tile_req.circuit}"
-        )
-
-        return DSliceQueuedProofRequest(
-            circuit=tile_req.circuit,
-            inputs=tile_req.inputs,
-            outputs=None,
-            slice_num=tile_slice_num,
-            run_uid=tile_req.run_uid,
-            proof_system=tile_req.proof_system,
-            compute_outputs=True,
-            is_tile=True,
-            tile_idx=tile_req.tile_idx,
-            task_id=tile_req.task_id,
-        )
-
-    def apply_slice_result(
-        self,
-        run_uid: str,
-        slice_id: str,
-        success: bool,
-        computed_outputs: Optional[dict] = None,
-        proof: Optional[Any] = None,
-        error: Optional[str] = None,
-    ) -> bool:
-        """
-        Apply the result of a slice execution.
-
-        Args:
-            run_uid: The run identifier
-            slice_id: The slice that was executed
-            success: Whether execution succeeded
-            computed_outputs: The outputs computed by the miner
-            proof: The proof generated by the miner
-            error: Error message if failed
-
-        Returns:
-            True if this was the final slice (run is complete)
-        """
-        if run_uid not in self._runs:
-            logging.warning(f"Run {run_uid} not found")
-            return False
-
-        state, status, circuit = self._runs[run_uid]
-
-        if status.pending_slice != slice_id:
-            logging.warning(
-                f"Slice {slice_id} doesn't match pending slice {status.pending_slice}"
-            )
-            return False
-
-        status.pending_slice = None
-
-        slice_result = SliceResult(
-            slice_id=slice_id,
-            success=success,
-            outputs=computed_outputs,
-            error=error,
-            proof=proof,
-        )
-
-        applied = self._dsperse_runner.apply_result(state, slice_result)
-
-        if applied:
-            status.completed_slices.append(slice_id)
-        else:
-            status.failed_slices.append(slice_id)
-
-        status.current_slice = state.current_slice_id
-
-        is_complete = self._dsperse_runner.is_complete(state)
-        if is_complete:
-            total_time = time.perf_counter() - status.start_time
-            all_success = len(status.failed_slices) == 0
-            logging.info(
-                f"Incremental run {run_uid} complete. "
-                f"Completed: {len(status.completed_slices)}, Failed: {len(status.failed_slices)}, "
-                f"Time: {total_time:.2f}s"
-            )
-            if self._on_run_complete:
-                self._on_run_complete(run_uid, all_success)
-
-        return is_complete
-
-    def apply_tile_result(
+    def apply_result(
         self,
         run_uid: str,
         task_id: str,
-        slice_id: str,
-        tile_idx: int,
         success: bool,
-        computed_outputs: Optional[dict] = None,
-        proof: Optional[bytes] = None,
-        witness: Optional[bytes] = None,
+        outputs: Optional[dict] = None,
         error: Optional[str] = None,
     ) -> bool:
         """
-        Apply the result of a tile execution.
+        Apply result from a miner.
 
-        Args:
-            run_uid: The run identifier
-            task_id: The tile task identifier
-            slice_id: The parent slice identifier
-            tile_idx: The tile index
-            success: Whether execution succeeded
-            computed_outputs: The outputs computed by the miner
-            proof: The proof bytes
-            witness: The witness bytes
-            error: Error message if failed
-
-        Returns:
-            True if this completes the tiled slice (ready for next slice)
+        Returns True if this was the last pending item for current slice.
         """
         if run_uid not in self._runs:
-            logging.warning(f"Run {run_uid} not found")
             return False
 
-        state, status, circuit = self._runs[run_uid]
+        state = self._runs[run_uid]
 
-        if tile_idx not in status.pending_tiles:
-            logging.warning(f"Tile {tile_idx} not in pending tiles")
+        if task_id not in state.pending_work:
+            logging.warning(f"Task {task_id} not in pending work")
             return False
 
-        del status.pending_tiles[tile_idx]
+        del state.pending_work[task_id]
 
-        tile_result = TileResult(
-            task_id=task_id,
-            slice_id=slice_id,
-            tile_idx=tile_idx,
-            success=success,
-            outputs=computed_outputs,
-            error=error,
-            proof=proof,
-            witness=witness,
-        )
+        if not success:
+            logging.error(f"Task {task_id} failed: {error}")
+            if not state.pending_work:
+                state.failed_slices.append(state.current_slice_id)
+                state.current_idx += 1
+            return not state.pending_work
 
-        applied = self._dsperse_runner.apply_tile_result(state, tile_result)
+        slice_id = state.current_slice_id
+        meta = state.slice_metadata.get(slice_id)
 
-        if not applied or not success:
-            logging.warning(f"Failed to apply tile result for {task_id}")
-            status.failed_tile_slices.add(slice_id)
+        if "_tile_" in task_id:
+            tile_idx = int(task_id.split("_tile_")[1])
+            self._store_tile_output(state, meta, tile_idx, outputs)
+        else:
+            self._store_slice_output(state, meta, outputs)
 
-        if not status.pending_tiles:
-            status.current_slice = state.current_slice_id
-            if state.pending_tiled_slice is None:
-                slice_completed = state.current_slice_id != slice_id
-                if slice_completed:
-                    if slice_id in status.failed_tile_slices:
-                        status.failed_slices.append(slice_id)
-                        status.failed_tile_slices.discard(slice_id)
-                        logging.info(
-                            f"Tiled slice {slice_id} failed (one or more tiles failed)"
-                        )
-                    else:
-                        status.completed_slices.append(slice_id)
-                        logging.info(f"Tiled slice {slice_id} completed")
+        if not state.pending_work:
+            if meta and meta.tiling and meta.tiling.num_tiles > 1:
+                self._reconstruct_from_tiles(state, slice_id, meta.tiling)
+            state.completed_slices.append(slice_id)
+            state.current_idx += 1
 
-        is_complete = self._dsperse_runner.is_complete(state)
-        if is_complete:
-            total_time = time.perf_counter() - status.start_time
-            all_success = len(status.failed_slices) == 0
-            logging.info(
-                f"Incremental run {run_uid} complete. "
-                f"Completed: {len(status.completed_slices)}, Failed: {len(status.failed_slices)}, "
-                f"Time: {total_time:.2f}s"
-            )
-            if self._on_run_complete:
-                self._on_run_complete(run_uid, all_success)
+            if state.is_complete:
+                self._on_complete(state)
 
-        return not status.pending_tiles
+            return True
+
+        return False
 
     def get_run_status(self, run_uid: str) -> Optional[dict]:
-        """Get status of a run."""
+        """Get run status."""
         if run_uid not in self._runs:
             return None
-
-        state, status, _ = self._runs[run_uid]
-
+        state = self._runs[run_uid]
         return {
             "run_uid": run_uid,
-            "circuit_id": status.circuit_id,
-            "circuit_name": status.circuit_name,
-            "total_slices": status.total_slices,
-            "completed": len(status.completed_slices),
-            "failed": len(status.failed_slices),
-            "pending_slice": status.pending_slice,
-            "current_slice": status.current_slice,
-            "is_complete": status.is_complete,
-            "progress_percent": status.progress_percent,
-            "elapsed_time": time.perf_counter() - status.start_time,
+            "circuit_name": state.circuit.metadata.name,
+            "total_slices": len(state.execution_order),
+            "current_slice": state.current_slice_id,
+            "completed": len(state.completed_slices),
+            "failed": len(state.failed_slices),
+            "pending_work": len(state.pending_work),
+            "is_complete": state.is_complete,
+            "elapsed_time": time.perf_counter() - state.start_time,
         }
 
     def get_final_output(self, run_uid: str) -> Optional[Any]:
-        """Get the final output tensor after run completion."""
+        """Get final output tensor."""
         if run_uid not in self._runs:
             return None
-
-        state, status, _ = self._runs[run_uid]
-        if not status.is_complete:
+        state = self._runs[run_uid]
+        if not state.is_complete:
             return None
 
-        output = self._dsperse_runner.get_final_output(state)
-        if output is not None and hasattr(output, "tolist"):
-            return output.tolist()
-        return output
+        last_slice = state.execution_order[-1] if state.execution_order else None
+        if not last_slice:
+            return None
+        meta = state.slice_metadata.get(last_slice)
+        if not meta:
+            return None
 
-    def is_complete(self, run_uid: str) -> bool:
-        """Check if a run is complete."""
-        if run_uid not in self._runs:
-            logging.debug(f"is_complete: run_uid {run_uid} not found in runs")
-            return False
-        state, status, _ = self._runs[run_uid]
-        return status.is_complete
-
-    def cleanup_run(self, run_uid: str) -> None:
-        """Clean up a completed run."""
-        if run_uid in self._runs:
-            del self._runs[run_uid]
-            logging.debug(f"Cleaned up incremental run {run_uid}")
-
-    def _determine_proof_system(
-        self, task: Union[SliceTask, TileTask]
-    ) -> ProofSystem | None:
-        """Determine the proof system to use for a slice or tile."""
-        backend = task.backend.lower() if task.backend else ""
-        logging.debug(
-            f"[TILE DEBUG] _determine_proof_system: task.backend={task.backend!r}, "
-            f"backend_lower={backend!r}, slice_id={getattr(task, 'slice_id', 'unknown')}"
-        )
-        if "jstprove" in backend or "jst" in backend:
-            logging.debug("[TILE DEBUG] _determine_proof_system: returning JSTPROVE")
-            return ProofSystem.JSTPROVE
-        if "ezkl" in backend:
-            logging.debug("[TILE DEBUG] _determine_proof_system: returning EZKL")
-            return ProofSystem.EZKL
-        logging.error(
-            f"Unknown backend '{task.backend}' for task {getattr(task, 'slice_id', 'unknown')}"
-        )
+        output_names = meta.dependencies.output
+        for name in output_names:
+            if name in state.tensor_cache:
+                return state.tensor_cache[name]
         return None
 
-    def _has_jstprove_tile_circuits(
-        self,
-        circuit: Circuit,
-        slice_id: str,
-    ) -> bool:
-        """Check if compiled JSTprove tile circuits exist for a tiled slice."""
-        slice_path = Path(circuit.paths.base_path) / slice_id
-        tile_circuit_dirs = [
-            slice_path / "payload" / "jstprove" / "tiles",
-            slice_path / "jstprove" / "tiles",
-        ]
-        for tile_dir in tile_circuit_dirs:
-            circuit_file = tile_dir / "tile_circuit.txt"
-            if circuit_file.exists():
-                logging.info(f"Found JSTprove tile circuit at {circuit_file}")
-                return True
-        logging.info(
-            f"No JSTprove tile circuits found for {slice_id} in {circuit.paths.base_path}"
+    def is_complete(self, run_uid: str) -> bool:
+        """Check if run is complete."""
+        if run_uid not in self._runs:
+            return False
+        return self._runs[run_uid].is_complete
+
+    def cleanup_run(self, run_uid: str) -> None:
+        """Clean up run state."""
+        if run_uid in self._runs:
+            del self._runs[run_uid]
+
+    def create_queued_request(self, work_item: WorkItem) -> DSliceQueuedProofRequest:
+        """Convert WorkItem to DSliceQueuedProofRequest."""
+        slice_num = work_item.slice_id.replace("slice_", "")
+        if work_item.tile_idx is not None:
+            slice_num = f"{slice_num}_tile_{work_item.tile_idx}"
+
+        return DSliceQueuedProofRequest(
+            circuit=work_item.circuit,
+            inputs=work_item.inputs,
+            outputs=None,
+            slice_num=slice_num,
+            run_uid=work_item.run_uid,
+            proof_system=work_item.proof_system,
+            compute_outputs=True,
+            is_tile=work_item.tile_idx is not None,
+            tile_idx=work_item.tile_idx,
+            task_id=work_item.task_id,
         )
+
+    def _ensure_extracted(self, state: RunState, slice_id: str) -> None:
+        """Extract slice from .dslice if not already extracted."""
+        slice_dir = state.slices_path / slice_id
+        dslice_path = state.slices_path / f"{slice_id}.dslice"
+
+        if not slice_dir.exists() and dslice_path.exists():
+            logging.info(f"Extracting {slice_id} from {dslice_path}")
+            Converter.extract_single_slice(
+                state.slices_path, slice_id, state.slices_path
+            )
+
+    def _has_circuits(
+        self, state: RunState, slice_id: str, meta: RunSliceMetadata
+    ) -> bool:
+        """Check if slice has JSTprove circuits available."""
+        if state.circuit.metadata.proof_system != ProofSystem.JSTPROVE:
+            return False
+
+        slice_path = state.slices_path / slice_id
+
+        if meta.tiling and meta.tiling.num_tiles > 1:
+            tile_circuit_paths = [
+                slice_path / "jstprove" / "tiles" / "tile_circuit.txt",
+                slice_path / "payload" / "jstprove" / "tiles" / "tile_circuit.txt",
+            ]
+        else:
+            tile_circuit_paths = [
+                slice_path / "jstprove" / "circuit.txt",
+                slice_path / "payload" / "jstprove" / "circuit.txt",
+            ]
+
+        for p in tile_circuit_paths:
+            if p.exists():
+                logging.info(f"Found circuit at {p}")
+                return True
+
+        logging.info(f"No circuits found for {slice_id}, will run ONNX locally")
         return False
 
-    def _run_local_onnx_tiles(
-        self,
-        state: IncrementalRunState,
-        status: IncrementalRunStatus,
-        circuit: Circuit,
-        pending,
-    ) -> bool:
-        """Run tiles locally using ONNX when JSTprove circuits are not available."""
-        meta = pending.metadata
-        tiling = pending.tiling_info
-        if not meta or not tiling:
-            logging.error("Missing metadata for local ONNX tile execution")
-            return False
+    def _run_onnx_locally(
+        self, state: RunState, slice_id: str, meta: RunSliceMetadata
+    ) -> None:
+        """Run slice locally using ONNX."""
+        logging.info(f"Running {slice_id} locally with ONNX")
 
-        logging.info(
-            f"Running {pending.total_tiles} tiles locally with ONNX for slice {pending.slice_id}"
+        is_tiled = meta.tiling and meta.tiling.num_tiles > 1
+
+        if is_tiled:
+            self._run_tiled_onnx(state, slice_id, meta)
+        else:
+            self._run_single_onnx(state, slice_id, meta)
+
+    def _run_single_onnx(
+        self, state: RunState, slice_id: str, meta: RunSliceMetadata
+    ) -> None:
+        """Run a single non-tiled slice with ONNX."""
+        from dsperse.src.run.utils.runner_utils import RunnerUtils
+        from dsperse.src.run.utils.onnx_models import OnnxModels
+
+        onnx_path = RunnerUtils.resolve_relative_path(
+            meta.path, state.slices_path / slice_id
         )
 
-        try:
-            runner = DsperseRunner(batch=True)
-            runner.slices_path = Path(circuit.paths.base_path)
-            runner.tensor_cache = state.tensor_cache
+        if not onnx_path or not Path(onnx_path).exists():
+            raise ValueError(f"ONNX path not found for {slice_id}: {onnx_path}")
 
-            run_dir = runner.slices_path / "runs" / "incremental"
-            run_dir.mkdir(parents=True, exist_ok=True)
+        input_tensor = None
+        for name in meta.dependencies.filtered_inputs:
+            if name in state.tensor_cache:
+                input_tensor = state.tensor_cache[name]
+                break
 
-            runner.run_tiles(
-                slice_id=pending.slice_id,
-                tiling=tiling,
-                meta=meta,
-                run_dir=run_dir,
-                tensor_cache=state.tensor_cache,
-                backend=Backend.ONNX,
-            )
+        if input_tensor is None:
+            raise ValueError(f"No input tensor for {slice_id}")
 
-            from dsperse.src.run.tile_executor import TileExecutor
+        success, result = OnnxModels.run_inference_tensor(
+            input_tensor=input_tensor,
+            model_path=onnx_path,
+        )
 
-            tile_executor = TileExecutor(runner.slices_path, state.tensor_cache)
-            tile_executor.reconstruct_from_tiles(pending.slice_id, tiling)
+        if not success:
+            raise RuntimeError(f"ONNX inference failed for {slice_id}: {result}")
 
-            slice_idx = tiling.slice_idx
-            for i in range(pending.total_tiles):
-                cache_key = f"tile_{slice_idx}_{i}_out"
-                tile_output = state.tensor_cache.get(cache_key)
-                tile_result = TileResult(
-                    task_id=f"{pending.slice_id}_tile_{i}",
-                    slice_id=pending.slice_id,
-                    tile_idx=i,
-                    success=True,
-                    outputs={
-                        "output": (
-                            tile_output.tolist()
-                            if tile_output is not None
-                            and hasattr(tile_output, "tolist")
-                            else tile_output
-                        )
-                    },
-                )
-                self._dsperse_runner.apply_tile_result(state, tile_result)
+        output_tensor = RunnerUtils.extract_output_tensor(result)
+        if output_tensor is None:
+            raise RuntimeError(f"No output tensor from {slice_id}")
 
-            status.completed_slices.append(pending.slice_id)
-            status.current_slice = state.current_slice_id
+        output_names = meta.dependencies.output
+        if output_names:
+            state.tensor_cache[output_names[0]] = output_tensor
+            logging.info(f"Stored output '{output_names[0]}' in tensor_cache")
 
-            logging.info(
-                f"Local ONNX tile execution completed for slice {pending.slice_id}"
-            )
-            return True
+    def _run_tiled_onnx(
+        self, state: RunState, slice_id: str, meta: RunSliceMetadata
+    ) -> None:
+        """Run a tiled slice with ONNX."""
+        tiling = meta.tiling
 
-        except Exception as e:
-            logging.exception(
-                f"Local ONNX tile execution failed for {pending.slice_id}: {e}"
-            )
-            for i in range(pending.total_tiles):
-                if i not in pending.completed_tiles:
-                    fail_result = TileResult(
-                        task_id=f"{pending.slice_id}_tile_{i}",
-                        slice_id=pending.slice_id,
-                        tile_idx=i,
-                        success=False,
-                        error=str(e),
+        tile_executor = TileExecutor(state.slices_path, state.tensor_cache)
+        input_tensor = tile_executor.get_input_tensor(slice_id, tiling, meta)
+        tile_executor.split_into_tiles(slice_id, tiling, input_tensor)
+
+        runner = DsperseRunner(batch=True)
+        runner.slices_path = state.slices_path
+        runner.tensor_cache = state.tensor_cache
+
+        run_dir = state.slices_path / "runs" / state.run_uid
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        runner.run_tiles(
+            slice_id=slice_id,
+            tiling=tiling,
+            meta=meta,
+            run_dir=run_dir,
+            tensor_cache=state.tensor_cache,
+            backend=Backend.ONNX,
+        )
+
+        tile_executor.reconstruct_from_tiles(slice_id, tiling)
+        logging.info(f"Completed {tiling.num_tiles} tiles for {slice_id}")
+
+    def _create_work_items(
+        self, state: RunState, slice_id: str, meta: RunSliceMetadata, is_tiled: bool
+    ) -> list[WorkItem]:
+        """Create work items to send to miners."""
+        work_items = []
+
+        if is_tiled:
+            tiling = meta.tiling
+            tile_executor = TileExecutor(state.slices_path, state.tensor_cache)
+            input_tensor = tile_executor.get_input_tensor(slice_id, tiling, meta)
+            tile_executor.split_into_tiles(slice_id, tiling, input_tensor)
+
+            for tile_idx in range(tiling.num_tiles):
+                cache_name = f"tile_{tiling.slice_idx}_{tile_idx}_in"
+                tile_tensor = state.tensor_cache.get(cache_name)
+                if tile_tensor is None:
+                    logging.error(f"Missing tile input {cache_name}")
+                    continue
+
+                task_id = f"{slice_id}_tile_{tile_idx}"
+                work_items.append(
+                    WorkItem(
+                        task_id=task_id,
+                        slice_id=slice_id,
+                        tile_idx=tile_idx,
+                        inputs={"input_data": tile_tensor.tolist()},
+                        proof_system=ProofSystem.JSTPROVE,
+                        circuit=state.circuit,
+                        run_uid=state.run_uid,
                     )
-                    self._dsperse_runner.apply_tile_result(state, fail_result)
-            status.failed_slices.append(pending.slice_id)
-            status.current_slice = state.current_slice_id
-            return False
+                )
+                state.pending_work[task_id] = True
+        else:
+            input_tensor = None
+            for name in meta.dependencies.filtered_inputs:
+                if name in state.tensor_cache:
+                    input_tensor = state.tensor_cache[name]
+                    break
+
+            if input_tensor is None:
+                logging.error(f"No input tensor for {slice_id}")
+                return []
+
+            task_id = slice_id
+            work_items.append(
+                WorkItem(
+                    task_id=task_id,
+                    slice_id=slice_id,
+                    tile_idx=None,
+                    inputs={"input_data": input_tensor.tolist()},
+                    proof_system=ProofSystem.JSTPROVE,
+                    circuit=state.circuit,
+                    run_uid=state.run_uid,
+                )
+            )
+            state.pending_work[task_id] = True
+
+        logging.info(f"Created {len(work_items)} work items for {slice_id}")
+        return work_items
+
+    def _store_tile_output(
+        self, state: RunState, meta: RunSliceMetadata, tile_idx: int, outputs: dict
+    ) -> None:
+        """Store tile output in tensor_cache."""
+        if not meta or not meta.tiling:
+            return
+
+        cache_name = f"tile_{meta.tiling.slice_idx}_{tile_idx}_out"
+        if outputs and "output" in outputs:
+            output = outputs["output"]
+            if not isinstance(output, torch.Tensor):
+                output = torch.tensor(output)
+            state.tensor_cache[cache_name] = output
+
+    def _store_slice_output(
+        self, state: RunState, meta: RunSliceMetadata, outputs: dict
+    ) -> None:
+        """Store slice output in tensor_cache."""
+        if not meta:
+            return
+
+        output_names = meta.dependencies.output
+        if outputs and "output_data" in outputs and output_names:
+            output = outputs["output_data"]
+            if not isinstance(output, torch.Tensor):
+                output = torch.tensor(output)
+            state.tensor_cache[output_names[0]] = output
+
+    def _reconstruct_from_tiles(
+        self, state: RunState, slice_id: str, tiling: TilingInfo
+    ) -> None:
+        """Reconstruct full output from tile outputs."""
+        tile_executor = TileExecutor(state.slices_path, state.tensor_cache)
+        tile_executor.reconstruct_from_tiles(slice_id, tiling)
+
+    def _on_complete(self, state: RunState) -> None:
+        """Handle run completion."""
+        elapsed = time.perf_counter() - state.start_time
+        success = len(state.failed_slices) == 0
+        logging.info(
+            f"Run {state.run_uid} complete. "
+            f"Completed: {len(state.completed_slices)}, Failed: {len(state.failed_slices)}, "
+            f"Time: {elapsed:.2f}s"
+        )
+        if self._on_run_complete:
+            self._on_run_complete(state.run_uid, success)
+
+
+# Backwards compatibility aliases
+IncrementalSliceRequest = WorkItem
+IncrementalTileRequest = WorkItem
+IncrementalRunStatus = RunState
