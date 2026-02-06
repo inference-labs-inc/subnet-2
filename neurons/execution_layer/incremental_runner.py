@@ -419,10 +419,10 @@ class IncrementalRunner:
 
             if "jstprove" in backend or "jst" in backend:
                 proof_system = ProofSystem.JSTPROVE
-                logging.info(f"[TILE DEBUG] tile {tile_idx}: set JSTPROVE")
+                logging.debug(f"[TILE DEBUG] tile {tile_idx}: set JSTPROVE")
             elif "ezkl" in backend:
                 proof_system = ProofSystem.EZKL
-                logging.info(f"[TILE DEBUG] tile {tile_idx}: set EZKL")
+                logging.debug(f"[TILE DEBUG] tile {tile_idx}: set EZKL")
             else:
                 logging.error(
                     f"Unknown backend '{node.backend}' for tile {tile_idx} of slice {pending.slice_id}"
@@ -791,15 +791,26 @@ class IncrementalRunner:
             tile_executor = TileExecutor(runner.slices_path, state.tensor_cache)
             tile_executor.reconstruct_from_tiles(pending.slice_id, tiling)
 
+            slice_idx = tiling.slice_idx
             for i in range(pending.total_tiles):
-                pending.completed_tiles[i] = TileResult(
+                cache_key = f"tile_{slice_idx}_{i}_out"
+                tile_output = state.tensor_cache.get(cache_key)
+                tile_result = TileResult(
                     task_id=f"{pending.slice_id}_tile_{i}",
                     slice_id=pending.slice_id,
                     tile_idx=i,
                     success=True,
+                    outputs={
+                        "output": (
+                            tile_output.tolist()
+                            if tile_output is not None
+                            and hasattr(tile_output, "tolist")
+                            else tile_output
+                        )
+                    },
                 )
+                self._dsperse_runner.apply_tile_result(state, tile_result)
 
-            self._dsperse_runner._finalize_tiled_slice(state)
             status.completed_slices.append(pending.slice_id)
             status.current_slice = state.current_slice_id
 
@@ -812,10 +823,16 @@ class IncrementalRunner:
             logging.exception(
                 f"Local ONNX tile execution failed for {pending.slice_id}: {e}"
             )
+            for i in range(pending.total_tiles):
+                if i not in pending.completed_tiles:
+                    fail_result = TileResult(
+                        task_id=f"{pending.slice_id}_tile_{i}",
+                        slice_id=pending.slice_id,
+                        tile_idx=i,
+                        success=False,
+                        error=str(e),
+                    )
+                    self._dsperse_runner.apply_tile_result(state, fail_result)
             status.failed_slices.append(pending.slice_id)
-            state.pending_tiled_slice = None
-            nodes = state.run_metadata.execution_chain.nodes
-            node = nodes.get(pending.slice_id)
-            state.current_slice_id = node.next if node else None
             status.current_slice = state.current_slice_id
             return False
