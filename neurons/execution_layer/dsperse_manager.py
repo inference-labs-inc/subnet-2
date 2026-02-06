@@ -19,14 +19,12 @@ from dsperse.src.backends.ezkl import EZKL
 from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.run.runner import Runner
 from dsperse.src.verify.verifier import Verifier
-from dsperse.src.slice.utils.converter import Converter
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
 from utils.system import capture_environment
 
 import cli_parser
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.request_type import RequestType
-from utils.pre_flight import SYNC_LOG_PREFIX
 
 from typing import TYPE_CHECKING
 
@@ -86,7 +84,9 @@ class DsperseRun:
 
 
 class DSperseManager:
-    def __init__(self, event_client: "DsperseEventClient | None" = None):
+    def __init__(
+        self, event_client: "DsperseEventClient | None" = None, lazy: bool = False
+    ):
         self.circuits: list[Circuit] = [
             circuit
             for circuit in circuit_store.circuits.values()
@@ -94,6 +94,7 @@ class DSperseManager:
         ]
         self.runs: dict[str, DsperseRun] = {}
         self.event_client = event_client
+        self.lazy = lazy
         self._purge_old_runs()
 
     @staticmethod
@@ -155,7 +156,9 @@ class DSperseManager:
         with open(input_json_path, "w") as f:
             json.dump(inputs, f)
 
-        runner = Runner(run_dir=run_dir, threads=os.cpu_count() or 4, batch=True)
+        runner = Runner(
+            run_dir=run_dir, threads=os.cpu_count() or 4, batch=True, lazy=self.lazy
+        )
         results = runner.run(
             input_json_path=input_json_path,
             slice_path=str(circuit.paths.base_path),
@@ -942,40 +945,3 @@ class DSperseManager:
             execution = {}
 
         return slice_id, execution
-
-    @classmethod
-    def extract_dslices(cls, model_path: Path | str) -> None:
-        model_path = Path(model_path)
-        dslice_files = list(model_path.glob("slice_*.dslice"))
-        if not dslice_files:
-            return
-        logging.debug(SYNC_LOG_PREFIX + f"Extracting DSlices for model {model_path}...")
-        for dslice_file in dslice_files:
-            extracted_path = dslice_file.with_suffix("")
-            if extracted_path.exists():
-                shutil.rmtree(extracted_path)
-            logging.info(
-                SYNC_LOG_PREFIX
-                + f"Extracting DSlice file {dslice_file} to {extracted_path}..."
-            )
-            try:
-                Converter.convert(
-                    path=dslice_file,
-                    output_type="dirs",
-                    output_path=extracted_path,
-                    cleanup=True,
-                )
-            except Exception:
-                if extracted_path.exists():
-                    shutil.rmtree(extracted_path, ignore_errors=True)
-                raise
-            contents = list(extracted_path.iterdir())
-            if (
-                len(contents) == 1
-                and contents[0].is_dir()
-                and (contents[0] / "payload").is_dir()
-            ):
-                for item in contents[0].iterdir():
-                    shutil.move(str(item), str(extracted_path / item.name))
-                contents[0].rmdir()
-            dslice_file.unlink(missing_ok=True)
