@@ -1342,7 +1342,12 @@ class DSperseManager:
             slice_metadata = json.load(f)
 
         if tile_idx is not None:
-            tiling = slice_metadata.get("tiling", {})
+            slices_list = slice_metadata.get("slices", [])
+            tiling = (
+                slices_list[0].get("tiling", {})
+                if slices_list
+                else slice_metadata.get("tiling", {})
+            )
             tile_size = tiling.get("tile_size", 0)
             raw_halo = tiling.get("halo", 0)
             if isinstance(raw_halo, int):
