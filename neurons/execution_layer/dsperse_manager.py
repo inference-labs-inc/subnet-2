@@ -1234,11 +1234,33 @@ class DSperseManager:
             tile_w = tile_size + 2 * halo[1]
             num_inputs = c_in * tile_h * tile_w
         else:
-            input_shape = slice_metadata.get("input_shape", [])
-            num_inputs = sum(
-                int(np.prod([d for d in shape if isinstance(d, int)]))
-                for shape in input_shape
-            )
+            slices_meta = slice_metadata.get("slices", [])
+            if slices_meta:
+                tensor_shapes = (
+                    slices_meta[0]
+                    .get("shape", {})
+                    .get("tensor_shape", {})
+                    .get("input", [])
+                )
+                filtered_inputs = (
+                    slices_meta[0].get("dependencies", {}).get("filtered_inputs", [])
+                )
+                n_filtered = len(filtered_inputs)
+                if tensor_shapes and n_filtered > 0:
+                    runtime_shapes = tensor_shapes[-n_filtered:]
+                else:
+                    runtime_shapes = tensor_shapes
+                num_inputs = 0
+                for shape in runtime_shapes:
+                    int_dims = [d for d in shape if isinstance(d, int)]
+                    if int_dims:
+                        num_inputs += int(np.prod(int_dims))
+                logging.debug(
+                    f"Slice {slice_num}: runtime_shapes={runtime_shapes} -> num_inputs={num_inputs}"
+                )
+            else:
+                logging.error(f"Slice metadata missing 'slices' key for {slice_num}")
+                return False, None
 
         try:
             witness_bytes = bytes.fromhex(witness_hex)
