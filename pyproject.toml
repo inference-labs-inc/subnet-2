@@ -16,7 +16,7 @@ dependencies = [
   "boto3>=1.36.13",
   "botocore>=1.37.19",
   "dsperse==3.1.0",
-  "jstprove==2.3.1",
+  "jstprove==2.4.0",
   "fastapi>=0.115.6",
   "gitpython>=3.1.44",
   "httpx>=0.28.1",
@@ -83,6 +83,7 @@ override-dependencies = [
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
+dsperse = { git = "https://github.com/inference-labs-inc/dsperse.git", branch = "incremental_run" }
 
 [[tool.uv.index]]
 name = "pytorch"
