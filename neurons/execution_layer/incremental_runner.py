@@ -261,6 +261,12 @@ class IncrementalRunner:
             logging.debug(f"Run {run_uid} has pending work")
             return []
 
+        pending = state.pending_tiled_slice
+        if pending and not pending.is_complete:
+            return self._generate_tile_requests_from_pending(
+                state, status, circuit, run_uid, pending
+            )
+
         if state.current_slice_id is None:
             return []
 
@@ -285,6 +291,75 @@ class IncrementalRunner:
             logging.info(
                 f"Generated {len(tile_requests)} tile requests for slice "
                 f"{tile_requests[0].slice_id}"
+            )
+
+        return tile_requests
+
+    def _generate_tile_requests_from_pending(
+        self,
+        state: IncrementalRunState,
+        status: IncrementalRunStatus,
+        circuit: Circuit,
+        run_uid: str,
+        pending,
+    ) -> list[IncrementalTileRequest]:
+        """Generate tile requests from pending_tiled_slice state."""
+        tile_requests = []
+        nodes = state.run_metadata.execution_chain.nodes
+        node = nodes.get(pending.slice_id)
+
+        if not node:
+            logging.error(f"Node not found for pending tiled slice {pending.slice_id}")
+            return []
+
+        tiling = pending.tiling_info
+        if not tiling:
+            logging.error(f"Tiling info not found for pending slice {pending.slice_id}")
+            return []
+
+        slice_idx = tiling.slice_idx
+
+        for tile_idx in range(pending.total_tiles):
+            if tile_idx in pending.completed_tiles or tile_idx in pending.failed_tiles:
+                continue
+
+            cache_name = f"tile_{slice_idx}_{tile_idx}_in"
+            tile_tensor = state.tensor_cache.get(cache_name)
+
+            if tile_tensor is None:
+                logging.error(
+                    f"Tile input {cache_name} not found in cache for slice {pending.slice_id}"
+                )
+                pending.failed_tiles.append(tile_idx)
+                continue
+
+            tile_inputs = {"input_data": tile_tensor.tolist()}
+            backend = node.backend.lower() if node.backend else ""
+
+            if "jstprove" in backend or "jst" in backend:
+                proof_system = ProofSystem.JSTPROVE
+            elif "ezkl" in backend:
+                proof_system = ProofSystem.EZKL
+            else:
+                proof_system = ProofSystem.JSTPROVE
+
+            request = IncrementalTileRequest(
+                task_id=f"{pending.slice_id}_tile_{tile_idx}",
+                slice_id=pending.slice_id,
+                tile_idx=tile_idx,
+                inputs=tile_inputs,
+                proof_system=proof_system,
+                circuit=circuit,
+                run_uid=run_uid,
+                use_circuit=node.use_circuit,
+            )
+            tile_requests.append(request)
+            status.pending_tiles[tile_idx] = True
+
+        if tile_requests:
+            logging.info(
+                f"Generated {len(tile_requests)} tile requests from pending state for slice "
+                f"{pending.slice_id}"
             )
 
         return tile_requests
