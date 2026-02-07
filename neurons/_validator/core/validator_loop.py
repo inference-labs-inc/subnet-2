@@ -662,10 +662,14 @@ class ValidatorLoop:
                 )
             )
             if next_requests and not is_complete:
+                queue = self.relay.stacked_requests_queue
+                bt.logging.info(
+                    f"Inserting {len(next_requests)} items into queue (size: {len(queue)})"
+                )
                 for req in next_requests:
-                    self.relay.stacked_requests_queue.insert(0, req)
-                bt.logging.debug(
-                    f"Queued {len(next_requests)} next request(s) for run {run_uid}"
+                    queue.insert(0, req)
+                bt.logging.info(
+                    f"Queued {len(next_requests)} items for {run_uid} (size now: {len(queue)})"
                 )
         elif response.is_incremental or self.dsperse_manager.is_incremental_run(
             run_uid

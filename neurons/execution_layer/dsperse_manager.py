@@ -331,9 +331,13 @@ class DSperseManager:
         if len(work_items) == 0:
             return self.get_next_incremental_work(run_uid)
 
-        return [
+        queued_requests = [
             self._incremental_runner.create_queued_request(item) for item in work_items
         ]
+        logging.info(
+            f"Converted {len(work_items)} work items to {len(queued_requests)} queued requests"
+        )
+        return queued_requests
 
     def generate_incremental_request(self) -> list[DSliceQueuedProofRequest]:
         """
