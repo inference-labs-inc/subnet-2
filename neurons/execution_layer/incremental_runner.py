@@ -7,8 +7,10 @@ Simple state machine:
 3. Tiled/non-tiled is just N=1 vs N=num_tiles, same flow
 """
 
+import json
 import secrets
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -97,6 +99,44 @@ class IncrementalRunner:
         self._runs: dict[str, RunState] = {}
         self._on_run_complete = on_run_complete
 
+    def _build_from_dslice_files(self, slices_path: Path) -> dict:
+        """Build run metadata by extracting metadata from .dslice files."""
+        from dsperse.src.analyzers.runner_analyzer import RunnerAnalyzer
+
+        dslice_files = sorted(slices_path.glob("*.dslice"))
+        if not dslice_files:
+            raise ValueError(f"No .dslice files found in {slices_path}")
+
+        slices_data = []
+        for dslice_path in dslice_files:
+            slice_id = dslice_path.stem
+            with zipfile.ZipFile(dslice_path, "r") as zf:
+                if "metadata.json" in zf.namelist():
+                    with zf.open("metadata.json") as f:
+                        meta = json.load(f)
+                        if "slices" in meta and meta["slices"]:
+                            slice_meta = meta["slices"][0]
+                            slice_meta["slice_id"] = slice_id
+                            slices_data.append(slice_meta)
+
+        if not slices_data:
+            raise ValueError(f"No valid slice metadata found in {slices_path}")
+
+        slices = RunnerAnalyzer.process_slices(slices_path, slices_data)
+        execution_chain = RunnerAnalyzer._build_execution_chain(slices)
+        circuit_slices = RunnerAnalyzer._build_circuit_slices(slices)
+        overall_security = RunnerAnalyzer._calculate_security(slices)
+
+        from dsperse.src.analyzers.schema import RunMetadata as DsperseRunMetadata
+
+        run_meta = DsperseRunMetadata(
+            slices=slices,
+            execution_chain=execution_chain,
+            circuit_slices=circuit_slices,
+            overall_security=overall_security,
+        )
+        return run_meta.to_dict()
+
     def start_run(self, circuit: Circuit, inputs: Optional[dict] = None) -> str:
         """Start a new incremental run."""
         run_uid = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{secrets.token_hex(8)}"
@@ -111,9 +151,12 @@ class IncrementalRunner:
 
         if RunnerAnalyzer._has_model_metadata(slices_path):
             slices_metadata = RunnerAnalyzer.load_slices_metadata(slices_path)
-            run_metadata_dict = RunnerAnalyzer.build_run_metadata(
-                slices_path, slices_metadata
-            )
+            if slices_metadata.get("slices"):
+                run_metadata_dict = RunnerAnalyzer.build_run_metadata(
+                    slices_path, slices_metadata
+                )
+            else:
+                run_metadata_dict = self._build_from_dslice_files(slices_path)
         else:
             run_metadata_dict = RunnerAnalyzer._build_from_per_slice_dirs(slices_path)
         run_metadata = RunMetadata.from_dict(run_metadata_dict)
