@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+import torch
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
 from dsperse.src.analyzers.schema import ExecutionInfo, ExecutionMethod, RunMetadata
@@ -410,7 +411,7 @@ class DSperseManager:
             run_uid=run_uid,
             task_id=task_id,
             success=success,
-            outputs={"output_data": computed_outputs} if computed_outputs else None,
+            output=computed_outputs,
             error=None if success else "Slice execution failed",
         )
 
@@ -480,7 +481,7 @@ class DSperseManager:
             run_uid=run_uid,
             task_id=task_id,
             success=success,
-            outputs={"output": computed_outputs} if computed_outputs else None,
+            output=computed_outputs,
             error=None if success else "Tile execution failed",
         )
 
@@ -1280,7 +1281,7 @@ class DSperseManager:
         witness_hex: str,
         proof_hex: str,
         proof_system: ProofSystem,
-    ) -> tuple[bool, dict | None]:
+    ) -> tuple[bool, Optional[torch.Tensor]]:
         """
         Verify a proof using the witness, extracting and validating inputs/outputs.
 
@@ -1297,7 +1298,7 @@ class DSperseManager:
             proof_system: The proof system used
 
         Returns:
-            Tuple of (success, extracted_outputs)
+            Tuple of (success, output_tensor)
         """
         if proof_system != ProofSystem.JSTPROVE:
             logging.error("Trustless verification only implemented for JSTPROVE")
@@ -1403,11 +1404,7 @@ class DSperseManager:
             return False, None
 
         logging.debug("Input verification passed")
-        extracted_outputs = {
-            "output": extracted_io["outputs"],
-            "rescaled_output": extracted_io["rescaled_outputs"],
-        }
-        return True, extracted_outputs
+        return True, torch.tensor(extracted_io["outputs"])
 
     def _flatten_inputs(self, inputs: dict) -> list:
         """Flatten input dict to a list of values.

@@ -217,7 +217,7 @@ class IncrementalRunner:
         run_uid: str,
         task_id: str,
         success: bool,
-        outputs: Optional[dict] = None,
+        output: Optional[torch.Tensor] = None,
         error: Optional[str] = None,
     ) -> bool:
         """
@@ -248,9 +248,9 @@ class IncrementalRunner:
 
         if "_tile_" in task_id:
             tile_idx = int(task_id.split("_tile_")[1])
-            self._store_tile_output(state, meta, tile_idx, outputs)
+            self._store_tile_output(state, meta, tile_idx, output)
         else:
-            self._store_slice_output(state, meta, outputs)
+            self._store_slice_output(state, meta, output)
 
         if not state.pending_work:
             if meta and meta.tiling and meta.tiling.num_tiles > 1:
@@ -516,31 +516,28 @@ class IncrementalRunner:
         return work_items
 
     def _store_tile_output(
-        self, state: RunState, meta: RunSliceMetadata, tile_idx: int, outputs: dict
+        self,
+        state: RunState,
+        meta: RunSliceMetadata,
+        tile_idx: int,
+        output: Optional[torch.Tensor],
     ) -> None:
         """Store tile output in tensor_cache."""
-        if not meta or not meta.tiling:
+        if not meta or not meta.tiling or output is None:
             return
 
         cache_name = f"tile_{meta.tiling.slice_idx}_{tile_idx}_out"
-        if outputs and "output" in outputs:
-            output = outputs["output"]
-            if not isinstance(output, torch.Tensor):
-                output = torch.tensor(output)
-            state.tensor_cache[cache_name] = output
+        state.tensor_cache[cache_name] = output
 
     def _store_slice_output(
-        self, state: RunState, meta: RunSliceMetadata, outputs: dict
+        self, state: RunState, meta: RunSliceMetadata, output: Optional[torch.Tensor]
     ) -> None:
         """Store slice output in tensor_cache."""
-        if not meta:
+        if not meta or output is None:
             return
 
         output_names = meta.dependencies.output
-        if outputs and "output_data" in outputs and output_names:
-            output = outputs["output_data"]
-            if not isinstance(output, torch.Tensor):
-                output = torch.tensor(output)
+        if output_names:
             state.tensor_cache[output_names[0]] = output
 
     def _reconstruct_from_tiles(
