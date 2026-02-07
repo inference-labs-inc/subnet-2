@@ -42,6 +42,12 @@ def get_queryable_uids(metagraph: bt.Metagraph) -> Generator[int, None, None]:
     Returns the uids of the miners that are queryable
     """
     uids = metagraph.uids.tolist()
+    target_uids = get_target_uids()
+    if target_uids:
+        for uid in uids:
+            if uid in target_uids:
+                yield uid
+        return
     stake_threshold = VALIDATOR_STAKE_THRESHOLD
     if metagraph.netuid in [
         i[1] for i in MAINNET_TESTNET_UIDS if i[0] == DEFAULT_NETUID
@@ -57,8 +63,6 @@ def get_queryable_uids(metagraph: bt.Metagraph) -> Generator[int, None, None]:
         (total_stake < stake_threshold)
         & torch.tensor([is_valid_ip(metagraph.axons[i].ip) for i in uids])
     ).tolist()
-    target_uids = get_target_uids()
     for uid, is_queryable in zip(uids, queryable_flags):
         if is_queryable:
-            if target_uids is None or uid in target_uids:
-                yield uid
+            yield uid
