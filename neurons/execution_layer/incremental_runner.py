@@ -61,6 +61,7 @@ class RunState:
     completed_slices: list[str] = field(default_factory=list)
     failed_slices: list[str] = field(default_factory=list)
     start_time: float = 0.0
+    aborted: bool = False
 
     @property
     def current_slice_id(self) -> Optional[str]:
@@ -70,6 +71,8 @@ class RunState:
 
     @property
     def is_complete(self) -> bool:
+        if self.aborted:
+            return True
         return self.current_idx >= len(self.execution_order) and not self.pending_work
 
     @property
@@ -219,17 +222,20 @@ class IncrementalRunner:
         if not meta:
             logging.error(f"No metadata for {slice_id}")
             state.failed_slices.append(slice_id)
-            state.current_idx += 1
-            return []
+            state.aborted = True
+            logging.error(f"Run {state.run_uid} aborted: no metadata for {slice_id}")
+            self._on_complete(state)
+            return None
 
         required_inputs = meta.dependencies.filtered_inputs
         missing = [i for i in required_inputs if i not in state.tensor_cache]
         if missing:
             logging.error(f"Slice {slice_id} missing inputs: {missing}")
-            logging.error(f"tensor_cache keys: {list(state.tensor_cache.keys())}")
             state.failed_slices.append(slice_id)
-            state.current_idx += 1
-            return []
+            state.aborted = True
+            logging.error(f"Run {state.run_uid} aborted: missing inputs for {slice_id}")
+            self._on_complete(state)
+            return None
 
         self._ensure_extracted(state, slice_id)
 
@@ -272,7 +278,11 @@ class IncrementalRunner:
             logging.error(f"Task {task_id} failed: {error}")
             if not state.pending_work:
                 state.failed_slices.append(state.current_slice_id)
-                state.current_idx += 1
+                state.aborted = True
+                logging.error(
+                    f"Run {run_uid} aborted: slice {state.current_slice_id} failed"
+                )
+                self._on_complete(state)
             return not state.pending_work
 
         slice_id = state.current_slice_id

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import os
+import random
 import sys
 import time
 import traceback
@@ -309,7 +310,9 @@ class ValidatorLoop:
                     )
 
                 requests_sent = 0
-                for uid in self.queryable_uids:
+                shuffled_uids = self.queryable_uids.copy()
+                random.shuffle(shuffled_uids)
+                for uid in shuffled_uids:
                     if requests_sent >= slots_available:
                         break
 
