@@ -287,7 +287,10 @@ class ValidatorLoop:
                     await asyncio.sleep(1)
                     continue
 
-                if not self.relay.stacked_requests_queue:
+                if (
+                    not self.relay.stacked_requests_queue
+                    and not self.dsperse_manager.has_work_in_flight()
+                ):
                     for (
                         dslice_request
                     ) in self.dsperse_manager.generate_dslice_requests():

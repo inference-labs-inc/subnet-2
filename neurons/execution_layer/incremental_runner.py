@@ -341,6 +341,12 @@ class IncrementalRunner:
             return False
         return self._runs[run_uid].is_complete
 
+    def has_pending_work(self, run_uid: str) -> bool:
+        """Check if run has work currently being processed."""
+        if run_uid not in self._runs:
+            return False
+        return self._runs[run_uid].is_waiting
+
     def cleanup_run(self, run_uid: str) -> None:
         """Clean up run state."""
         if run_uid in self._runs:

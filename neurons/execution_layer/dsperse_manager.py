@@ -513,6 +513,16 @@ class DSperseManager:
 
         return False, self.get_next_incremental_work(run_uid)
 
+    def has_work_in_flight(self) -> bool:
+        """Check if any run has work currently being processed by miners."""
+        if not self._incremental_runner:
+            return False
+        with self._incremental_runs_lock:
+            for run_uid in self._incremental_runs:
+                if self._incremental_runner.has_pending_work(run_uid):
+                    return True
+        return False
+
     def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
         """Callback when an incremental run completes."""
         logging.info(f"Incremental run {run_uid} completed, success={success}")
