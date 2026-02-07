@@ -168,6 +168,8 @@ class CircuitStore:
         files = circuit_data.get("files", {})
         failed_downloads = []
         for filename, url in files.items():
+            if filename == "metadata.json":
+                continue
             try:
                 self._download_file(url, os.path.join(cache_path, filename))
             except Exception as e:
