@@ -1316,6 +1316,7 @@ class DSperseManager:
         with open(metadata_path, "r") as f:
             slice_metadata = json.load(f)
 
+        output_shape = None
         if tile_idx is not None:
             slices_list = slice_metadata.get("slices", [])
             tiling = (
@@ -1340,6 +1341,9 @@ class DSperseManager:
             tile_h = tile_size + 2 * halo[0]
             tile_w = tile_size + 2 * halo[1]
             num_inputs = c_in * tile_h * tile_w
+            c_out = tiling.get("c_out", 1)
+            out_tile = tiling.get("out_tile", [tile_size, tile_size])
+            output_shape = [1, c_out, out_tile[0], out_tile[1]]
         else:
             slices_meta = slice_metadata.get("slices", [])
             if not isinstance(slices_meta, list) or not slices_meta:
@@ -1355,6 +1359,14 @@ class DSperseManager:
             tensor_shapes = (
                 slices_meta[0].get("shape", {}).get("tensor_shape", {}).get("input", [])
             )
+            output_shapes = (
+                slices_meta[0]
+                .get("shape", {})
+                .get("tensor_shape", {})
+                .get("output", [])
+            )
+            if output_shapes:
+                output_shape = [d for d in output_shapes[0] if isinstance(d, int)]
             filtered_inputs = (
                 slices_meta[0].get("dependencies", {}).get("filtered_inputs", [])
             )
@@ -1404,7 +1416,10 @@ class DSperseManager:
             return False, None
 
         logging.debug("Input verification passed")
-        return True, torch.tensor(extracted_io["outputs"])
+        output_tensor = torch.tensor(extracted_io["outputs"])
+        if output_shape is not None:
+            output_tensor = output_tensor.reshape(output_shape)
+        return True, output_tensor
 
     def _flatten_inputs(self, inputs: dict) -> list:
         """Flatten input dict to a list of values.
