@@ -9,6 +9,7 @@ Simple state machine:
 
 import json
 import secrets
+import shutil
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -60,6 +61,7 @@ class RunState:
     pending_work: dict[str, bool] = field(default_factory=dict)
     completed_slices: list[str] = field(default_factory=list)
     failed_slices: list[str] = field(default_factory=list)
+    failed_tasks: set[str] = field(default_factory=set)
     start_time: float = 0.0
     aborted: bool = False
 
@@ -244,6 +246,7 @@ class IncrementalRunner:
 
         if not has_circuits:
             self._run_onnx_locally(state, slice_id, meta)
+            self._cleanup_extracted_slice(state, slice_id)
             state.completed_slices.append(slice_id)
             state.current_idx += 1
             return []
@@ -276,6 +279,7 @@ class IncrementalRunner:
 
         if not success:
             logging.error(f"Task {task_id} failed: {error}")
+            state.failed_tasks.add(task_id)
             if not state.pending_work:
                 state.failed_slices.append(state.current_slice_id)
                 state.aborted = True
@@ -295,12 +299,29 @@ class IncrementalRunner:
             self._store_slice_output(state, meta, output)
 
         if not state.pending_work:
-            if meta and meta.tiling and meta.tiling.num_tiles > 1:
-                self._reconstruct_from_tiles(state, slice_id, meta.tiling)
-            state.completed_slices.append(slice_id)
-            state.current_idx += 1
+            if state.failed_tasks:
+                logging.error(
+                    f"Slice {slice_id} has {len(state.failed_tasks)} failed tasks, aborting run"
+                )
+                state.failed_slices.append(slice_id)
+                state.aborted = True
+                self._on_complete(state)
+                return True
 
-            if state.is_complete:
+            try:
+                if meta and meta.tiling and meta.tiling.num_tiles > 1:
+                    self._reconstruct_from_tiles(state, slice_id, meta.tiling)
+                self._cleanup_extracted_slice(state, slice_id)
+                state.completed_slices.append(slice_id)
+                state.current_idx += 1
+                state.failed_tasks.clear()
+
+                if state.is_complete:
+                    self._on_complete(state)
+            except Exception as e:
+                logging.error(f"Error completing slice {slice_id}: {e}")
+                state.failed_slices.append(slice_id)
+                state.aborted = True
                 self._on_complete(state)
 
             return True
@@ -391,6 +412,15 @@ class IncrementalRunner:
             Converter.extract_single_slice(
                 state.slices_path, slice_id, state.slices_path
             )
+
+    def _cleanup_extracted_slice(self, state: RunState, slice_id: str) -> None:
+        """Remove extracted slice folder if .dslice exists (lazy mode cleanup)."""
+        slice_dir = state.slices_path / slice_id
+        dslice_path = state.slices_path / f"{slice_id}.dslice"
+
+        if slice_dir.exists() and dslice_path.exists():
+            logging.info(f"Cleaning up extracted {slice_id}")
+            shutil.rmtree(slice_dir, ignore_errors=True)
 
     def _has_circuits(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata
