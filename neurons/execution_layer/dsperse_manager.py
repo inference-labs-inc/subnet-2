@@ -1426,7 +1426,7 @@ class DSperseManager:
             return False, None
 
         logging.debug("Input verification passed")
-        output_tensor = torch.tensor(extracted_io["outputs"])
+        output_tensor = torch.tensor(extracted_io["rescaled_outputs"])
         if output_shape is not None:
             output_tensor = output_tensor.reshape(output_shape)
         return True, output_tensor
