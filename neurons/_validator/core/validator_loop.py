@@ -292,9 +292,12 @@ class ValidatorLoop:
                     not self.relay.stacked_requests_queue
                     and not self.dsperse_manager.has_work_in_flight()
                 ):
-                    for (
-                        dslice_request
-                    ) in self.dsperse_manager.generate_dslice_requests():
+                    new_requests = list(self.dsperse_manager.generate_dslice_requests())
+                    if new_requests:
+                        bt.logging.info(
+                            f"Generated {len(new_requests)} new requests, inserting into queue"
+                        )
+                    for dslice_request in new_requests:
                         self.relay.stacked_requests_queue.insert(0, dslice_request)
 
                 pow_circuit = None
