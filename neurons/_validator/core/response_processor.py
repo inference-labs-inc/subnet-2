@@ -91,7 +91,7 @@ class ResponseProcessor:
                         proof_system=request.data.get("proof_system"),
                     )
                 )
-                if res and extracted_outputs:
+                if res and extracted_outputs is not None:
                     response.computed_outputs = extracted_outputs
             else:
                 res: bool = self.dsperse_manager.verify_slice_proof(
