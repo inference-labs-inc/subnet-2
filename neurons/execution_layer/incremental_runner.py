@@ -424,7 +424,12 @@ class IncrementalRunner:
     def _has_circuits(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata
     ) -> bool:
-        """Check if slice has JSTprove circuits by checking actual files."""
+        """Check if slice has JSTprove circuits by checking actual files.
+
+        Checks both current and legacy paths for backwards compatibility:
+        - Tiled: jstprove/tiles/tile_circuit.txt (current)
+        - Non-tiled: payload/jstprove/{slice_id}_circuit.txt (legacy, used by dsperse_manager.py)
+        """
         if state.circuit.metadata.proof_system != ProofSystem.JSTPROVE:
             return False
 
@@ -436,7 +441,7 @@ class IncrementalRunner:
             ]
             if is_tiled
             else [
-                "jstprove/circuit.txt",
+                f"jstprove/{slice_id}_circuit.txt",
                 f"payload/jstprove/{slice_id}_circuit.txt",
             ]
         )
