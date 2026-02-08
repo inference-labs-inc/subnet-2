@@ -289,7 +289,7 @@ class ValidatorLoop:
                     continue
 
                 if (
-                    not self.relay.stacked_requests_queue
+                    self.relay.stacked_requests_queue.empty()
                     and not self.dsperse_manager.has_work_in_flight()
                 ):
                     new_requests = list(self.dsperse_manager.generate_dslice_requests())
@@ -298,7 +298,7 @@ class ValidatorLoop:
                             f"Generated {len(new_requests)} new requests, inserting into queue"
                         )
                     for dslice_request in new_requests:
-                        self.relay.stacked_requests_queue.insert(0, dslice_request)
+                        self.relay.stacked_requests_queue.put_nowait(dslice_request)
 
                 pow_circuit = None
                 if (
@@ -338,7 +338,7 @@ class ValidatorLoop:
                                 uid,
                                 pow_circuit,
                             )
-                        elif self.relay.stacked_requests_queue:
+                        elif not self.relay.stacked_requests_queue.empty():
                             request = self.request_pipeline._prepare_queued_request(uid)
                         else:
                             request = self.request_pipeline._prepare_benchmark_request(
@@ -602,7 +602,7 @@ class ValidatorLoop:
         )
 
         self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
-        self.relay.stacked_requests_queue.append(queued)
+        self.relay.stacked_requests_queue.put_nowait(queued)
 
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
         if getattr(queued, "is_tile", False):
@@ -667,12 +667,12 @@ class ValidatorLoop:
             if next_requests and not is_complete:
                 queue = self.relay.stacked_requests_queue
                 bt.logging.info(
-                    f"Inserting {len(next_requests)} items into queue (size: {len(queue)})"
+                    f"Inserting {len(next_requests)} items into queue (size: {queue.qsize()})"
                 )
                 for req in next_requests:
-                    queue.insert(0, req)
+                    queue.put_nowait(req)
                 bt.logging.info(
-                    f"Queued {len(next_requests)} items for {run_uid} (size now: {len(queue)})"
+                    f"Queued {len(next_requests)} items for {run_uid} (size now: {queue.qsize()})"
                 )
         elif response.is_incremental or self.dsperse_manager.is_incremental_run(
             run_uid
@@ -689,7 +689,7 @@ class ValidatorLoop:
                 )
             )
             if next_request and not is_complete:
-                self.relay.stacked_requests_queue.insert(0, next_request)
+                self.relay.stacked_requests_queue.put_nowait(next_request)
                 bt.logging.debug(f"Queued next incremental slice for run {run_uid}")
         else:
             self.dsperse_manager.on_slice_result(
