@@ -123,7 +123,12 @@ class RequestPipeline:
         return request
 
     def _prepare_queued_request(self, uid: int) -> Request:
-        external_request = self.relay.stacked_requests_queue.pop()
+        external_request = self.relay.stacked_requests_queue.get_nowait()
+        if hasattr(external_request, "slice_num"):
+            remaining = self.relay.stacked_requests_queue.qsize()
+            bt.logging.debug(
+                f"Popped slice_num={external_request.slice_num} (remaining: {remaining})"
+            )
         request = None
 
         try:

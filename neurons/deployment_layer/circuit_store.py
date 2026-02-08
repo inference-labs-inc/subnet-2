@@ -165,8 +165,6 @@ class CircuitStore:
         os.makedirs(cache_path, exist_ok=True)
 
         metadata = circuit_data.get("metadata", {})
-        critical_files = set(metadata.get("critical_files", []))
-
         files = circuit_data.get("files", {})
         failed_downloads = []
         for filename, url in files.items():
@@ -180,22 +178,17 @@ class CircuitStore:
                 )
                 failed_downloads.append(filename)
 
-        failed_critical = critical_files & set(failed_downloads)
-        complete = len(failed_critical) == 0
-
-        metadata["complete"] = complete
+        metadata["complete"] = len(failed_downloads) == 0
         metadata_path = os.path.join(cache_path, CIRCUIT_METADATA_FILENAME)
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
 
         if failed_downloads:
-            bt.logging.warning(
-                f"Circuit {circuit_id}: {len(failed_downloads)}/{len(files)} files failed to download"
-            )
-
-        if failed_critical:
+            sample = failed_downloads[:5]
+            suffix = "..." if len(failed_downloads) > 5 else ""
             raise RuntimeError(
-                f"Circuit {circuit_id} missing critical files: {', '.join(sorted(failed_critical))}"
+                f"Circuit {circuit_id}: {len(failed_downloads)}/{len(files)} "
+                f"files failed: {sample}{suffix}"
             )
 
     def _download_file(self, url: str, dest_path: str):

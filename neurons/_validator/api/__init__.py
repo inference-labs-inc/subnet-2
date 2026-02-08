@@ -21,7 +21,6 @@ from jsonrpcserver import (
 from websockets.exceptions import ConnectionClosed
 
 from _validator.config import ValidatorConfig
-from _validator.models.base_rpc_request import QueuedRequestDataModel
 from _validator.models.poc_rpc_request import ProofOfComputationRPCRequest
 from constants import (
     EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
@@ -52,7 +51,7 @@ class RelayManager:
     def __init__(self, config: ValidatorConfig):
         self.config = config
         # Queue of requests to be sent to miners (consumed by ValidatorLoop)
-        self.stacked_requests_queue: list[QueuedRequestDataModel] = []
+        self.stacked_requests_queue: asyncio.Queue = asyncio.Queue()
         self.pending_requests: dict[str, asyncio.Event] = {}
         self.request_results: dict[str, dict] = {}
         self.is_testnet = config.bt_config.subtensor.network == "test"
@@ -331,7 +330,7 @@ class RelayManager:
                 return InvalidParams(str(e))
 
             self.pending_requests[external_request.hash] = asyncio.Event()
-            self.stacked_requests_queue.insert(0, external_request)
+            self.stacked_requests_queue.put_nowait(external_request)
             bt.logging.success(
                 f"External request with hash {external_request.hash} added to queue"
             )
@@ -390,7 +389,7 @@ class RelayManager:
             )
 
             for request in requests:
-                self.stacked_requests_queue.append(request)
+                self.stacked_requests_queue.put_nowait(request)
 
             status = self.dsperse_manager.get_run_status(run_uid)
             bt.logging.success(

@@ -7,8 +7,11 @@ Simple state machine:
 3. Tiled/non-tiled is just N=1 vs N=num_tiles, same flow
 """
 
+import json
 import secrets
+import shutil
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -58,7 +61,9 @@ class RunState:
     pending_work: dict[str, bool] = field(default_factory=dict)
     completed_slices: list[str] = field(default_factory=list)
     failed_slices: list[str] = field(default_factory=list)
+    failed_tasks: set[str] = field(default_factory=set)
     start_time: float = 0.0
+    aborted: bool = False
 
     @property
     def current_slice_id(self) -> Optional[str]:
@@ -68,6 +73,8 @@ class RunState:
 
     @property
     def is_complete(self) -> bool:
+        if self.aborted:
+            return True
         return self.current_idx >= len(self.execution_order) and not self.pending_work
 
     @property
@@ -97,6 +104,33 @@ class IncrementalRunner:
         self._runs: dict[str, RunState] = {}
         self._on_run_complete = on_run_complete
 
+    def _build_from_dslice_zips(
+        self, slices_path: Path, dslice_files: list[Path]
+    ) -> dict:
+        from dsperse.src.analyzers.runner_analyzer import RunnerAnalyzer
+        from dsperse.src.analyzers.schema import RunMetadata as DsperseRunMetadata
+
+        slices_data = []
+        for dslice_path in sorted(dslice_files):
+            with zipfile.ZipFile(dslice_path, "r") as zf:
+                if "metadata.json" not in zf.namelist():
+                    continue
+                with zf.open("metadata.json") as f:
+                    meta = json.load(f)
+                    if meta.get("slices"):
+                        slice_meta = meta["slices"][0]
+                        slice_meta["slice_id"] = dslice_path.stem
+                        slices_data.append(slice_meta)
+
+        slices = RunnerAnalyzer.process_slices(slices_path, slices_data)
+        run_meta = DsperseRunMetadata(
+            slices=slices,
+            execution_chain=RunnerAnalyzer._build_execution_chain(slices),
+            circuit_slices=RunnerAnalyzer._build_circuit_slices(slices),
+            overall_security=RunnerAnalyzer._calculate_security(slices),
+        )
+        return run_meta.to_dict()
+
     def start_run(self, circuit: Circuit, inputs: Optional[dict] = None) -> str:
         """Start a new incremental run."""
         run_uid = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{secrets.token_hex(8)}"
@@ -109,7 +143,10 @@ class IncrementalRunner:
 
         from dsperse.src.analyzers.runner_analyzer import RunnerAnalyzer
 
-        if RunnerAnalyzer._has_model_metadata(slices_path):
+        dslice_files = list(slices_path.glob("*.dslice"))
+        if dslice_files:
+            run_metadata_dict = self._build_from_dslice_zips(slices_path, dslice_files)
+        elif RunnerAnalyzer._has_model_metadata(slices_path):
             slices_metadata = RunnerAnalyzer.load_slices_metadata(slices_path)
             run_metadata_dict = RunnerAnalyzer.build_run_metadata(
                 slices_path, slices_metadata
@@ -187,17 +224,20 @@ class IncrementalRunner:
         if not meta:
             logging.error(f"No metadata for {slice_id}")
             state.failed_slices.append(slice_id)
-            state.current_idx += 1
-            return []
+            state.aborted = True
+            logging.error(f"Run {state.run_uid} aborted: no metadata for {slice_id}")
+            self._on_complete(state)
+            return None
 
         required_inputs = meta.dependencies.filtered_inputs
         missing = [i for i in required_inputs if i not in state.tensor_cache]
         if missing:
             logging.error(f"Slice {slice_id} missing inputs: {missing}")
-            logging.error(f"tensor_cache keys: {list(state.tensor_cache.keys())}")
             state.failed_slices.append(slice_id)
-            state.current_idx += 1
-            return []
+            state.aborted = True
+            logging.error(f"Run {state.run_uid} aborted: missing inputs for {slice_id}")
+            self._on_complete(state)
+            return None
 
         self._ensure_extracted(state, slice_id)
 
@@ -206,6 +246,7 @@ class IncrementalRunner:
 
         if not has_circuits:
             self._run_onnx_locally(state, slice_id, meta)
+            self._cleanup_extracted_slice(state, slice_id)
             state.completed_slices.append(slice_id)
             state.current_idx += 1
             return []
@@ -238,9 +279,14 @@ class IncrementalRunner:
 
         if not success:
             logging.error(f"Task {task_id} failed: {error}")
+            state.failed_tasks.add(task_id)
             if not state.pending_work:
                 state.failed_slices.append(state.current_slice_id)
-                state.current_idx += 1
+                state.aborted = True
+                logging.error(
+                    f"Run {run_uid} aborted: slice {state.current_slice_id} failed"
+                )
+                self._on_complete(state)
             return not state.pending_work
 
         slice_id = state.current_slice_id
@@ -253,12 +299,29 @@ class IncrementalRunner:
             self._store_slice_output(state, meta, output)
 
         if not state.pending_work:
-            if meta and meta.tiling and meta.tiling.num_tiles > 1:
-                self._reconstruct_from_tiles(state, slice_id, meta.tiling)
-            state.completed_slices.append(slice_id)
-            state.current_idx += 1
+            if state.failed_tasks:
+                logging.error(
+                    f"Slice {slice_id} has {len(state.failed_tasks)} failed tasks, aborting run"
+                )
+                state.failed_slices.append(slice_id)
+                state.aborted = True
+                self._on_complete(state)
+                return True
 
-            if state.is_complete:
+            try:
+                if meta and meta.tiling and meta.tiling.num_tiles > 1:
+                    self._reconstruct_from_tiles(state, slice_id, meta.tiling)
+                self._cleanup_extracted_slice(state, slice_id)
+                state.completed_slices.append(slice_id)
+                state.current_idx += 1
+                state.failed_tasks.clear()
+
+                if state.is_complete:
+                    self._on_complete(state)
+            except Exception as e:
+                logging.error(f"Error completing slice {slice_id}: {e}")
+                state.failed_slices.append(slice_id)
+                state.aborted = True
                 self._on_complete(state)
 
             return True
@@ -309,6 +372,12 @@ class IncrementalRunner:
             return False
         return self._runs[run_uid].is_complete
 
+    def has_pending_work(self, run_uid: str) -> bool:
+        """Check if run has work currently being processed."""
+        if run_uid not in self._runs:
+            return False
+        return self._runs[run_uid].is_waiting
+
     def cleanup_run(self, run_uid: str) -> None:
         """Clean up run state."""
         if run_uid in self._runs:
@@ -344,32 +413,42 @@ class IncrementalRunner:
                 state.slices_path, slice_id, state.slices_path
             )
 
+    def _cleanup_extracted_slice(self, state: RunState, slice_id: str) -> None:
+        """Remove extracted slice folder if .dslice exists (lazy mode cleanup)."""
+        slice_dir = state.slices_path / slice_id
+        dslice_path = state.slices_path / f"{slice_id}.dslice"
+
+        if slice_dir.exists() and dslice_path.exists():
+            logging.info(f"Cleaning up extracted {slice_id}")
+            shutil.rmtree(slice_dir, ignore_errors=True)
+
     def _has_circuits(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata
     ) -> bool:
-        """Check if slice has JSTprove circuits available."""
+        """Check if slice has JSTprove circuits by checking actual files."""
         if state.circuit.metadata.proof_system != ProofSystem.JSTPROVE:
             return False
 
-        slice_path = state.slices_path / slice_id
+        is_tiled = meta.tiling and meta.tiling.num_tiles > 1
+        circuit_paths = (
+            ["jstprove/tiles/tile_circuit.txt"]
+            if is_tiled
+            else ["jstprove/circuit.txt"]
+        )
 
-        if meta.tiling and meta.tiling.num_tiles > 1:
-            tile_circuit_paths = [
-                slice_path / "jstprove" / "tiles" / "tile_circuit.txt",
-                slice_path / "payload" / "jstprove" / "tiles" / "tile_circuit.txt",
-            ]
-        else:
-            tile_circuit_paths = [
-                slice_path / "jstprove" / "circuit.txt",
-                slice_path / "payload" / "jstprove" / "circuit.txt",
-            ]
+        slice_dir = state.slices_path / slice_id
+        dslice_zip = state.slices_path / f"{slice_id}.dslice"
 
-        for p in tile_circuit_paths:
-            if p.exists():
-                logging.info(f"Found circuit at {p}")
+        for rel in circuit_paths:
+            if (slice_dir / rel).exists():
                 return True
 
-        logging.info(f"No circuits found for {slice_id}, will run ONNX locally")
+        if dslice_zip.exists():
+            with zipfile.ZipFile(dslice_zip, "r") as zf:
+                for rel in circuit_paths:
+                    if rel in zf.namelist():
+                        return True
+
         return False
 
     def _run_onnx_locally(
@@ -416,15 +495,23 @@ class IncrementalRunner:
         if not success:
             raise RuntimeError(f"ONNX inference failed for {slice_id}: {result}")
 
-        output_tensor = RunnerUtils.extract_output_tensor(result)
-        if output_tensor is None:
-            raise RuntimeError(f"No output tensor from {slice_id}")
-
-        output_names = meta.dependencies.output
-        if output_names:
-            final_output = output_names[-1]
-            state.tensor_cache[final_output] = output_tensor
-            logging.info(f"Stored output '{final_output}' in tensor_cache")
+        output_tensors = result.get("output_tensors", {})
+        if not output_tensors:
+            output_tensor = RunnerUtils.extract_output_tensor(result)
+            if output_tensor is None:
+                raise RuntimeError(f"No output tensor from {slice_id}")
+            output_names = meta.dependencies.output
+            if output_names:
+                state.tensor_cache[output_names[-1]] = output_tensor
+                logging.info(f"Stored output '{output_names[-1]}' in tensor_cache")
+        else:
+            output_names = set(meta.dependencies.output)
+            stored = 0
+            for name, tensor in output_tensors.items():
+                if name in output_names:
+                    state.tensor_cache[name] = tensor
+                    stored += 1
+            logging.info(f"Stored {stored} outputs for {slice_id} in tensor_cache")
 
     def _run_tiled_onnx(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata
