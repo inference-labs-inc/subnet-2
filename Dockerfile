@@ -23,7 +23,7 @@ RUN apt update && \
     && apt clean && rm -rf /var/lib/apt/lists/*
 
 ENV UV_PYTHON_INSTALL_DIR=/opt/python
-RUN uv python install 3.13t && \
+RUN uv python install 3.13 && \
     chmod -R 755 /opt/python
 
 RUN mkdir -p /opt/.cargo /opt/.nvm /opt/.npm /opt/.snarkjs /opt/subnet-2/neurons && \
@@ -53,12 +53,11 @@ COPY --chown=ubuntu:ubuntu --chmod=775 neurons /opt/subnet-2/neurons
 COPY --chown=ubuntu:ubuntu --chmod=775 pyproject.toml /opt/subnet-2/pyproject.toml
 COPY --chown=ubuntu:ubuntu --chmod=775 uv.lock /opt/subnet-2/uv.lock
 RUN cd /opt/subnet-2 && \
-    uv sync --frozen --no-dev --compile-bytecode --python 3.13t --no-install-package ezkl && \
+    uv sync --frozen --no-dev --compile-bytecode --python 3.13 --no-install-package ezkl && \
     uv cache clean && \
     echo "source /opt/subnet-2/.venv/bin/activate" >> ~/.bashrc && \
     chmod -R 775 /opt/subnet-2/.venv
 ENV PATH="/opt/subnet-2/.venv/bin:${PATH}"
-ENV PYTHON_GIL=0
 
 # Set workdir for running miner.py or validator.py and compile circuits
 WORKDIR /opt/subnet-2/neurons
