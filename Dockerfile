@@ -53,7 +53,7 @@ COPY --chown=ubuntu:ubuntu --chmod=775 neurons /opt/subnet-2/neurons
 COPY --chown=ubuntu:ubuntu --chmod=775 pyproject.toml /opt/subnet-2/pyproject.toml
 COPY --chown=ubuntu:ubuntu --chmod=775 uv.lock /opt/subnet-2/uv.lock
 RUN cd /opt/subnet-2 && \
-    uv sync --frozen --no-dev --compile-bytecode --python 3.13 --no-install-package ezkl && \
+    uv sync --frozen --no-dev --compile-bytecode --python 3.13 && \
     uv cache clean && \
     echo "source /opt/subnet-2/.venv/bin/activate" >> ~/.bashrc && \
     chmod -R 775 /opt/subnet-2/.venv
