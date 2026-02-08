@@ -1027,12 +1027,12 @@ class DSperseManager:
             prove_start = time.time()
 
             if proof_system == ProofSystem.JSTPROVE:
-                jst_model_path = (
-                    model_dir
-                    / "payload"
-                    / "jstprove"
-                    / f"slice_{base_slice_num}_circuit.txt"
+                jst_model_path = self._find_jstprove_circuit(
+                    model_dir, base_slice_num, is_tiled=False
                 )
+                if jst_model_path is None or not jst_model_path.exists():
+                    logging.error(f"JSTprove circuit not found for slice {slice_num}")
+                    return result
                 success, proof_data, witness_data, _ = self._jstprove_witness_and_prove(
                     jst_model_path,
                     input_file,
@@ -1179,9 +1179,11 @@ class DSperseManager:
         slice_num = f"{base_slice_num}_tile_{tile_idx}"
 
         if proof_system == ProofSystem.JSTPROVE:
-            jst_tile_circuit = model_dir / "jstprove" / "tiles" / "tile_circuit.txt"
-            if not jst_tile_circuit.exists():
-                logging.error(f"Tile JSTprove circuit not found: {jst_tile_circuit}")
+            jst_tile_circuit = self._find_jstprove_circuit(
+                model_dir, base_slice_num, is_tiled=True
+            )
+            if jst_tile_circuit is None or not jst_tile_circuit.exists():
+                logging.error(f"Tile JSTprove circuit not found for slice {slice_num}")
                 return result
 
             success, proof_data, witness_data, _ = self._jstprove_witness_and_prove(
@@ -1208,6 +1210,26 @@ class DSperseManager:
             parts = slice_num.split("_tile_")
             return parts[0], int(parts[1])
         return slice_num, None
+
+    def _find_jstprove_circuit(
+        self, model_dir: Path, base_slice_num: str, is_tiled: bool
+    ) -> Path | None:
+        """Find JSTprove circuit path, checking both current and legacy locations."""
+        if is_tiled:
+            paths = [
+                model_dir / "jstprove" / "tiles" / "tile_circuit.txt",
+                model_dir / "payload" / "jstprove" / "tiles" / "tile_circuit.txt",
+            ]
+        else:
+            slice_id = f"slice_{base_slice_num}"
+            paths = [
+                model_dir / "jstprove" / f"{slice_id}_circuit.txt",
+                model_dir / "payload" / "jstprove" / f"{slice_id}_circuit.txt",
+            ]
+        for p in paths:
+            if p.exists():
+                return p
+        return None
 
     def verify_slice_proof(
         self, run_uid: str, slice_num: str, proof: dict | str, proof_system: ProofSystem
@@ -1248,15 +1270,12 @@ class DSperseManager:
 
         if proof_system == ProofSystem.JSTPROVE:
             slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
-            if tile_idx is not None:
-                circuit_path = slice_dir / "jstprove" / "tiles" / "tile_circuit.txt"
-            else:
-                circuit_path = (
-                    slice_dir
-                    / "payload"
-                    / "jstprove"
-                    / f"slice_{base_slice_num}_circuit.txt"
-                )
+            circuit_path = self._find_jstprove_circuit(
+                slice_dir, base_slice_num, is_tiled=(tile_idx is not None)
+            )
+            if circuit_path is None or not circuit_path.exists():
+                logging.error(f"JSTprove circuit not found for slice {slice_num}")
+                return False
             witness_path = slice_data.witness_file or (
                 slice_data.input_file.parent / "output_witness.bin"
             )
@@ -1403,15 +1422,12 @@ class DSperseManager:
             logging.error(f"Invalid hex encoding: {e}")
             return False, None
 
-        if tile_idx is not None:
-            circuit_path = slice_dir / "jstprove" / "tiles" / "tile_circuit.txt"
-        else:
-            circuit_path = (
-                slice_dir
-                / "payload"
-                / "jstprove"
-                / f"slice_{base_slice_num}_circuit.txt"
-            )
+        circuit_path = self._find_jstprove_circuit(
+            slice_dir, base_slice_num, is_tiled=(tile_idx is not None)
+        )
+        if circuit_path is None or not circuit_path.exists():
+            logging.error(f"JSTprove circuit not found for slice {slice_num}")
+            return False, None
 
         flat_inputs = self._flatten_inputs(original_inputs)
 
