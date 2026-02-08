@@ -430,9 +430,15 @@ class IncrementalRunner:
 
         is_tiled = meta.tiling and meta.tiling.num_tiles > 1
         circuit_paths = (
-            ["jstprove/tiles/tile_circuit.txt"]
+            [
+                "jstprove/tiles/tile_circuit.txt",
+                "payload/jstprove/tiles/tile_circuit.txt",
+            ]
             if is_tiled
-            else ["jstprove/circuit.txt"]
+            else [
+                "jstprove/circuit.txt",
+                f"payload/jstprove/{slice_id}_circuit.txt",
+            ]
         )
 
         slice_dir = state.slices_path / slice_id
