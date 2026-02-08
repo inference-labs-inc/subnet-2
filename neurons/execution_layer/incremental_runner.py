@@ -425,29 +425,30 @@ class IncrementalRunner:
     def _has_circuits(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata
     ) -> bool:
-        """Check if slice has JSTprove circuits available."""
+        """Check if slice has JSTprove circuits by checking actual files."""
         if state.circuit.metadata.proof_system != ProofSystem.JSTPROVE:
             return False
 
-        slice_path = state.slices_path / slice_id
+        is_tiled = meta.tiling and meta.tiling.num_tiles > 1
+        circuit_paths = (
+            ["jstprove/tiles/tile_circuit.txt"]
+            if is_tiled
+            else ["jstprove/circuit.txt"]
+        )
 
-        if meta.tiling and meta.tiling.num_tiles > 1:
-            tile_circuit_paths = [
-                slice_path / "jstprove" / "tiles" / "tile_circuit.txt",
-                slice_path / "payload" / "jstprove" / "tiles" / "tile_circuit.txt",
-            ]
-        else:
-            tile_circuit_paths = [
-                slice_path / "jstprove" / "circuit.txt",
-                slice_path / "payload" / "jstprove" / "circuit.txt",
-            ]
+        slice_dir = state.slices_path / slice_id
+        dslice_zip = state.slices_path / f"{slice_id}.dslice"
 
-        for p in tile_circuit_paths:
-            if p.exists():
-                logging.info(f"Found circuit at {p}")
+        for rel in circuit_paths:
+            if (slice_dir / rel).exists():
                 return True
 
-        logging.info(f"No circuits found for {slice_id}, will run ONNX locally")
+        if dslice_zip.exists():
+            with zipfile.ZipFile(dslice_zip, "r") as zf:
+                for rel in circuit_paths:
+                    if rel in zf.namelist():
+                        return True
+
         return False
 
     def _run_onnx_locally(
