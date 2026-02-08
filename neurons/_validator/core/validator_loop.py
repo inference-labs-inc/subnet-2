@@ -12,7 +12,6 @@ from typing import NoReturn
 import bittensor as bt
 import cli_parser
 import httpx
-from bittensor.core.chain_data import AxonInfo
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.dsperse_manager import DSperseManager
 from execution_layer.dsperse_event_client import DsperseEventClient
@@ -20,7 +19,6 @@ from execution_layer.dsperse_event_client import DsperseEventClient
 from _validator.api import RelayManager
 from _validator.api.client import query_miner
 from _validator.config import ValidatorConfig
-from _validator.core.capacity_manager import CapacityManager
 from _validator.core.exceptions import EmptyProofException, IncorrectProofException
 from _validator.core.prometheus import (
     log_error,
@@ -83,7 +81,6 @@ class ValidatorLoop:
         self.httpx_client = httpx.AsyncClient()
 
         self.current_concurrency = MAX_CONCURRENT_REQUESTS
-        self.capacity_manager = CapacityManager(self.config, self.httpx_client)
 
         api_url = (
             getattr(cli_parser.config, "sn2_api_url", None)
@@ -119,7 +116,6 @@ class ValidatorLoop:
         self.request_queue = asyncio.Queue()
         self.active_tasks: dict[str, asyncio.Task | None] = {}
         self.miner_active_count: dict[int, int] = {}
-        self.miner_capacities: dict[int, int] = {}
         self.default_miner_capacity = 10
         self.queryable_uids: list[int] = []
         self.last_response_time = time.time()
@@ -190,26 +186,6 @@ class ValidatorLoop:
             bt.logging.error("sync_metagraph timed out after 120 seconds")
         except Exception as e:
             bt.logging.error(f"Error in sync_metagraph: {e}")
-
-    @with_rate_limit(period=ONE_HOUR)
-    async def sync_capacities(self, miners_info: dict[int, AxonInfo]):
-        capacities_by_uid = await self.capacity_manager.sync_capacities(miners_info)
-        bt.logging.debug(f"Synced capacities for {len(capacities_by_uid)} miners")
-
-        for uid in miners_info:
-            response = capacities_by_uid.get(uid)
-            if response and hasattr(response, "capacities") and response.capacities:
-                total_capacity = sum(response.capacities.values())
-                self.miner_capacities[uid] = (
-                    min(total_capacity, 20)
-                    if total_capacity > 0
-                    else self.default_miner_capacity
-                )
-            else:
-                self.miner_capacities[uid] = self.default_miner_capacity
-
-        bt.logging.info(f"Updated capacities for {len(self.miner_capacities)} miners")
-        return capacities_by_uid
 
     @with_rate_limit(period=FIVE_MINUTES)
     def check_auto_update(self):
@@ -319,11 +295,8 @@ class ValidatorLoop:
                     if requests_sent >= slots_available:
                         break
 
-                    miner_capacity = self.miner_capacities.get(
-                        uid, self.default_miner_capacity
-                    )
                     miner_active = self.miner_active_count.get(uid, 0)
-                    available_slots = miner_capacity - miner_active
+                    available_slots = self.default_miner_capacity - miner_active
 
                     if available_slots <= 0:
                         continue
@@ -407,12 +380,6 @@ class ValidatorLoop:
                 await self.sync_scores_uids()
                 await self.update_weights()
                 self.update_queryable_uids()
-                await self.sync_capacities(
-                    {
-                        uid: self.config.metagraph.axons[uid]
-                        for uid in self.queryable_uids
-                    }
-                )
                 self.log_health()
                 await self.log_responses()
                 self.last_periodic_task_time = time.time()

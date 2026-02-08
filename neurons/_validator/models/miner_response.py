@@ -88,7 +88,6 @@ class MinerResponse:
             else:
                 proof_size = DEFAULT_PROOF_SIZE
         else:
-            # capacity requests don't have circuit associated
             proof_size = 0
 
         public_signals = deserialized_response.get("public_signals", "[]")
