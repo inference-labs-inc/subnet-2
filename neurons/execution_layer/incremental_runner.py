@@ -495,15 +495,23 @@ class IncrementalRunner:
         if not success:
             raise RuntimeError(f"ONNX inference failed for {slice_id}: {result}")
 
-        output_tensor = RunnerUtils.extract_output_tensor(result)
-        if output_tensor is None:
-            raise RuntimeError(f"No output tensor from {slice_id}")
-
-        output_names = meta.dependencies.output
-        if output_names:
-            final_output = output_names[-1]
-            state.tensor_cache[final_output] = output_tensor
-            logging.info(f"Stored output '{final_output}' in tensor_cache")
+        output_tensors = result.get("output_tensors", {})
+        if not output_tensors:
+            output_tensor = RunnerUtils.extract_output_tensor(result)
+            if output_tensor is None:
+                raise RuntimeError(f"No output tensor from {slice_id}")
+            output_names = meta.dependencies.output
+            if output_names:
+                state.tensor_cache[output_names[-1]] = output_tensor
+                logging.info(f"Stored output '{output_names[-1]}' in tensor_cache")
+        else:
+            output_names = set(meta.dependencies.output)
+            stored = 0
+            for name, tensor in output_tensors.items():
+                if name in output_names:
+                    state.tensor_cache[name] = tensor
+                    stored += 1
+            logging.info(f"Stored {stored} outputs for {slice_id} in tensor_cache")
 
     def _run_tiled_onnx(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata
