@@ -78,6 +78,23 @@ class GenericInputHandler(BaseInput):
         raw = self.input_schema.get("constants", {})
         return {k: raw.get(k, v) for k, v in _POW_CONSTANT_DEFAULTS.items()}
 
+    def _inject_pow_constants(self, data: dict[str, object]) -> None:
+        if "scaling" in data:
+            return
+        scaling = self.input_schema.get("scaling", 100000000)
+        c = self._get_pow_constants()
+        data["scaling"] = scaling
+        data["RATE_OF_DECAY"] = int(c["rate_of_decay"] * scaling)
+        data["RATE_OF_RECOVERY"] = int(c["rate_of_recovery"] * scaling)
+        data["FLATTENING_COEFFICIENT"] = int(c["flattening_coefficient"] * scaling)
+        data["PROOF_SIZE_WEIGHT"] = int(c["proof_size_weight"] * scaling)
+        data["PROOF_SIZE_THRESHOLD"] = int(c["proof_size_threshold"] * scaling)
+        data["COMPETITION_WEIGHT"] = int(c["competition_weight"] * scaling)
+        data["RESPONSE_TIME_WEIGHT"] = int(c["response_time_weight"] * scaling)
+        data["MAXIMUM_RESPONSE_TIME_DECIMAL"] = int(
+            c["maximum_response_time_decimal"] * scaling
+        )
+
     def generate(self) -> dict[str, object]:
         schema_type = self.input_schema.get("type", "tensor")
         if schema_type == "pow_batch":
@@ -157,8 +174,10 @@ class GenericInputHandler(BaseInput):
         return arr.tolist()
 
     def validate(self, data: dict[str, object]) -> None:
-        self.schema(**data)
         schema_type = self.input_schema.get("type", "tensor")
+        if schema_type == "pow_batch":
+            self._inject_pow_constants(data)
+        self.schema(**data)
         if schema_type == "pow_batch":
             return
         input_data = data.get("input_data", [])
