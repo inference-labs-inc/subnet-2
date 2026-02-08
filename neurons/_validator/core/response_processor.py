@@ -75,7 +75,16 @@ class ResponseProcessor:
             return False
 
         if response.request_type == RequestType.DSLICE:
-            if response.is_incremental and response.witness:
+            is_incremental = (
+                response.dsperse_run_uid
+                and self.dsperse_manager.is_incremental_run(response.dsperse_run_uid)
+            )
+            if is_incremental:
+                if not response.witness:
+                    bt.logging.error(
+                        f"Incremental run requires witness but none provided for UID: {response.uid}"
+                    )
+                    return False
                 inputs = request.inputs
                 if inputs is not None and hasattr(inputs, "to_json"):
                     inputs = inputs.to_json()
