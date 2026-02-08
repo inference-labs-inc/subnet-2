@@ -642,8 +642,8 @@ wheels = [
 
 [[package]]
 name = "dsperse"
-version = "1.0.1"
-source = { git = "https://github.com/inference-labs-inc/dsperse.git?branch=incremental_run#c93ccc48057b3d5b00d68f5d637b3b6d01481f4a" }
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorama" },
     { name = "ezkl" },
@@ -658,6 +658,10 @@ dependencies = [
     { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
     { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6c/c6/6afebd7e700b8e0a5563a3ee0c7f5578cf93e22f4467d9e38f8df049727d/dsperse-3.2.0.tar.gz", hash = "sha256:238a8226d30e6064747eecc73c789d387a70d116c8cf6e0952fc8d4ba285c9d4", size = 1989454, upload-time = "2026-02-08T18:57:14.474Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/9b/9319369b64eaba9b4503e157daabbf946bfa70fe3fe650f016e7106e9b99/dsperse-3.2.0-py3-none-any.whl", hash = "sha256:ae5e7b8fa76f7784203e34fb6193aa649b4266af44e1fbddefe8d151fd52e5e2", size = 2003493, upload-time = "2026-02-08T18:57:12.767Z" },
 ]
 
 [[package]]
@@ -2632,7 +2636,7 @@ requires-dist = [
     { name = "bittensor", specifier = "==10.0.1" },
     { name = "boto3", specifier = ">=1.36.13" },
     { name = "botocore", specifier = ">=1.37.19" },
-    { name = "dsperse", git = "https://github.com/inference-labs-inc/dsperse.git?branch=incremental_run" },
+    { name = "dsperse", specifier = "==3.2.0" },
     { name = "fastapi", specifier = ">=0.115.6" },
     { name = "gitpython", specifier = ">=3.1.44" },
     { name = "httpx", specifier = ">=0.28.1" },
