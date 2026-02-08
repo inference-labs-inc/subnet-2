@@ -961,14 +961,13 @@ class DSperseManager:
         inputs: dict,
         outputs: dict | None,
         proof_system: ProofSystem,
-        compute_outputs: bool = False,
     ) -> dict:
         """
         Generate proof for a slice.
 
         In standard mode, both inputs and outputs are provided.
-        In incremental mode (compute_outputs=True or outputs=None), inference is run
-        to compute outputs, which are returned in the result.
+        In incremental mode (outputs=None), inference is run to compute outputs,
+        which are returned in the result.
 
         Args:
             circuit_id: The circuit identifier
@@ -976,12 +975,11 @@ class DSperseManager:
             inputs: Input tensor data
             outputs: Expected output data (None for incremental mode)
             proof_system: Proof system to use (JSTPROVE or EZKL)
-            compute_outputs: If True, compute and return outputs
 
         Returns:
             Dict with success, proof, proof_generation_time, and witness (for incremental)
         """
-        incremental_mode = compute_outputs or outputs is None
+        incremental_mode = outputs is None
         circuit = self._get_circuit_by_id(circuit_id)
         base_slice_num, tile_idx = self._parse_slice_num(slice_num)
         model_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"

@@ -619,9 +619,7 @@ class ValidatorLoop:
                 tile_idx=tile_idx,
                 success=False,
             )
-        elif queued.compute_outputs or self.dsperse_manager.is_incremental_run(
-            queued.run_uid
-        ):
+        elif self.dsperse_manager.is_incremental_run(queued.run_uid):
             self.dsperse_manager.on_incremental_slice_result(
                 run_uid=queued.run_uid,
                 slice_num=str(queued.slice_num),

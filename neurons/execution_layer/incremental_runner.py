@@ -396,7 +396,6 @@ class IncrementalRunner:
             slice_num=slice_num,
             run_uid=work_item.run_uid,
             proof_system=work_item.proof_system,
-            compute_outputs=True,
             is_tile=work_item.tile_idx is not None,
             tile_idx=work_item.tile_idx,
             task_id=work_item.task_id,
