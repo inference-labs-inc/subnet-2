@@ -120,15 +120,19 @@ class IncrementalRunner:
 
         slices_data = []
         for dslice_path in sorted(dslice_files):
-            with zipfile.ZipFile(dslice_path, "r") as zf:
-                if "metadata.json" not in zf.namelist():
-                    continue
-                with zf.open("metadata.json") as f:
-                    meta = json.load(f)
-                    if meta.get("slices"):
-                        slice_meta = meta["slices"][0]
-                        slice_meta["slice_id"] = dslice_path.stem
-                        slices_data.append(slice_meta)
+            try:
+                with zipfile.ZipFile(dslice_path, "r") as zf:
+                    if "metadata.json" not in zf.namelist():
+                        continue
+                    with zf.open("metadata.json") as f:
+                        meta = json.load(f)
+                        if meta.get("slices"):
+                            slice_meta = meta["slices"][0]
+                            slice_meta["slice_id"] = dslice_path.stem
+                            slices_data.append(slice_meta)
+            except zipfile.BadZipFile:
+                logging.warning(f"Corrupt dslice file {dslice_path}, skipping")
+                continue
 
         slices = RunnerAnalyzer.process_slices(slices_path, slices_data)
         run_meta = DsperseRunMetadata(
@@ -152,8 +156,18 @@ class IncrementalRunner:
         from dsperse.src.analyzers.runner_analyzer import RunnerAnalyzer
 
         dslice_files = list(slices_path.glob("*.dslice"))
-        if dslice_files:
-            run_metadata_dict = self._build_from_dslice_zips(slices_path, dslice_files)
+        valid_dslice_files = [f for f in dslice_files if zipfile.is_zipfile(f)]
+        if valid_dslice_files != dslice_files:
+            corrupt = set(dslice_files) - set(valid_dslice_files)
+            for path in corrupt:
+                logging.warning(
+                    f"Corrupt dslice file, removing for re-download: {path}"
+                )
+                path.unlink(missing_ok=True)
+        if valid_dslice_files:
+            run_metadata_dict = self._build_from_dslice_zips(
+                slices_path, valid_dslice_files
+            )
         elif RunnerAnalyzer._has_model_metadata(slices_path):
             slices_metadata = RunnerAnalyzer.load_slices_metadata(slices_path)
             run_metadata_dict = RunnerAnalyzer.build_run_metadata(
@@ -477,10 +491,15 @@ class IncrementalRunner:
                 return True
 
         if dslice_zip.exists():
-            with zipfile.ZipFile(dslice_zip, "r") as zf:
-                for rel in circuit_paths:
-                    if rel in zf.namelist():
-                        return True
+            try:
+                with zipfile.ZipFile(dslice_zip, "r") as zf:
+                    for rel in circuit_paths:
+                        if rel in zf.namelist():
+                            return True
+            except zipfile.BadZipFile:
+                logging.warning(
+                    f"Corrupt dslice file {dslice_zip}, skipping circuit check"
+                )
 
         return False
 
