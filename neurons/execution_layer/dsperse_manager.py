@@ -117,7 +117,8 @@ class DSperseManager:
         self._incremental_runs_lock = threading.Lock()
         if incremental_mode:
             self._incremental_runner = IncrementalRunner(
-                on_run_complete=self._on_incremental_run_complete
+                on_run_complete=self._on_incremental_run_complete,
+                on_jstprove_range_fallback=self._on_jstprove_range_fallback,
             )
         self._purge_old_runs()
 
@@ -290,7 +291,8 @@ class DSperseManager:
         """
         if not self._incremental_runner:
             self._incremental_runner = IncrementalRunner(
-                on_run_complete=self._on_incremental_run_complete
+                on_run_complete=self._on_incremental_run_complete,
+                on_jstprove_range_fallback=self._on_jstprove_range_fallback,
             )
 
         run_uid = self._incremental_runner.start_run(circuit, inputs)
@@ -352,7 +354,8 @@ class DSperseManager:
         """
         if not self._incremental_runner:
             self._incremental_runner = IncrementalRunner(
-                on_run_complete=self._on_incremental_run_complete
+                on_run_complete=self._on_incremental_run_complete,
+                on_jstprove_range_fallback=self._on_jstprove_range_fallback,
             )
 
         with self._incremental_runs_lock:
@@ -526,6 +529,24 @@ class DSperseManager:
                 if self._incremental_runner.has_pending_work(run_uid):
                     return True
         return False
+
+    def _on_jstprove_range_fallback(
+        self, run_uid: str, slice_id: str, overflow_info: dict
+    ) -> None:
+        """Callback when a JSTprove slice falls back to ONNX due to range overflow."""
+        logging.warning(
+            f"JSTprove range overflow in run {run_uid} slice {slice_id}: "
+            f"{overflow_info.get('overflow_count')}/{overflow_info.get('total_elements')} "
+            f"values exceed {overflow_info.get('n_bits')}-bit range"
+        )
+        if self.event_client:
+            self._schedule_async(
+                self.event_client.emit_jstprove_range_overflow(
+                    run_uid=run_uid,
+                    slice_num=slice_id,
+                    overflow_info=overflow_info,
+                )
+            )
 
     def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
         """Callback when an incremental run completes."""

@@ -100,9 +100,17 @@ class IncrementalRunner:
                 send_to_miner(item)
     """
 
-    def __init__(self, on_run_complete: Optional[Callable[[str, bool], None]] = None):
+    JSTPROVE_N_BITS = 32
+    JSTPROVE_RANGE_LIMIT = 2 ** (JSTPROVE_N_BITS - 1)
+
+    def __init__(
+        self,
+        on_run_complete: Optional[Callable[[str, bool], None]] = None,
+        on_jstprove_range_fallback: Optional[Callable[[str, str, dict], None]] = None,
+    ):
         self._runs: dict[str, RunState] = {}
         self._on_run_complete = on_run_complete
+        self._on_jstprove_range_fallback = on_jstprove_range_fallback
 
     def _build_from_dslice_zips(
         self, slices_path: Path, dslice_files: list[Path]
@@ -249,6 +257,21 @@ class IncrementalRunner:
             self._cleanup_extracted_slice(state, slice_id)
             state.completed_slices.append(slice_id)
             state.current_idx += 1
+            return []
+
+        overflow_info = self._preflight_jstprove_range_check(state, slice_id, meta)
+        if overflow_info:
+            logging.warning(
+                f"Slice {slice_id}: {overflow_info['overflow_count']}/{overflow_info['total_elements']} "
+                f"outputs exceed JSTprove {self.JSTPROVE_N_BITS}-bit range "
+                f"(max |val|={overflow_info['max_abs']:.0f}, limit={self.JSTPROVE_RANGE_LIMIT}), "
+                f"falling back to ONNX"
+            )
+            self._cleanup_extracted_slice(state, slice_id)
+            state.completed_slices.append(slice_id)
+            state.current_idx += 1
+            if self._on_jstprove_range_fallback:
+                self._on_jstprove_range_fallback(state.run_uid, slice_id, overflow_info)
             return []
 
         return self._create_work_items(state, slice_id, meta, is_tiled)
@@ -460,6 +483,41 @@ class IncrementalRunner:
                         return True
 
         return False
+
+    def _preflight_jstprove_range_check(
+        self, state: RunState, slice_id: str, meta: RunSliceMetadata
+    ) -> Optional[dict]:
+        """Run ONNX locally and check if outputs fit JSTprove's N_BITS range.
+
+        Returns overflow info dict if any values exceed the range, None otherwise.
+        On overflow, the ONNX results are already stored in tensor_cache
+        so the slice can be completed without miner dispatch.
+        """
+        self._run_onnx_locally(state, slice_id, meta)
+
+        output_names = meta.dependencies.output
+        for name in output_names:
+            if name not in state.tensor_cache:
+                continue
+            tensor = state.tensor_cache[name]
+            if not isinstance(tensor, torch.Tensor):
+                tensor = torch.tensor(tensor)
+            abs_vals = tensor.abs()
+            max_abs = abs_vals.max().item()
+            if max_abs >= self.JSTPROVE_RANGE_LIMIT:
+                overflow_count = int(
+                    (abs_vals >= self.JSTPROVE_RANGE_LIMIT).sum().item()
+                )
+                return {
+                    "n_bits": self.JSTPROVE_N_BITS,
+                    "limit": self.JSTPROVE_RANGE_LIMIT,
+                    "max_abs": max_abs,
+                    "overflow_count": overflow_count,
+                    "total_elements": tensor.numel(),
+                    "slice_id": slice_id,
+                    "circuit_id": state.circuit.id,
+                }
+        return None
 
     def _run_onnx_locally(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata

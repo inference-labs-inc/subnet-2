@@ -144,6 +144,26 @@ class DsperseEventClient:
             }
         )
 
+    async def emit_jstprove_range_overflow(
+        self,
+        run_uid: str,
+        slice_num: str,
+        overflow_info: dict,
+    ):
+        await self.emit(
+            {
+                "event_type": "jstprove_range_overflow",
+                "run_uid": run_uid,
+                "slice_num": slice_num,
+                "circuit_id": overflow_info.get("circuit_id"),
+                "overflow_count": overflow_info.get("overflow_count"),
+                "total_elements": overflow_info.get("total_elements"),
+                "max_abs": overflow_info.get("max_abs"),
+                "n_bits_limit": overflow_info.get("n_bits"),
+                "fallback": "onnx",
+            }
+        )
+
     async def emit_run_complete(
         self,
         run_uid: str,
