@@ -163,7 +163,10 @@ class IncrementalRunner:
                 logging.warning(
                     f"Corrupt dslice file, removing for re-download: {path}"
                 )
-                path.unlink(missing_ok=True)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as e:
+                    logging.warning(f"Failed to remove corrupt dslice {path}: {e}")
         if valid_dslice_files:
             run_metadata_dict = self._build_from_dslice_zips(
                 slices_path, valid_dslice_files
