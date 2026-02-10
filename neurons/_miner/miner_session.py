@@ -262,9 +262,6 @@ class MinerSession:
             return False
 
     def handle_capacity_request(self) -> JSONResponse:
-        """
-        Handle capacity request from validators.
-        """
         return JSONResponse(content=QueryForCapacities.from_config())
 
     def handle_competition_request(self, data: Competition) -> JSONResponse:
@@ -367,10 +364,16 @@ class MinerSession:
     ) -> JSONResponse:
         """
         Handle DSlice proof generation requests from validators.
+
+        In standard mode, both inputs and outputs are provided.
+        In incremental mode (outputs=None), the miner computes outputs during
+        witness generation and returns them.
         """
         try:
+            incremental = data.outputs is None
             bt.logging.info(
-                f"Handling DSlice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
+                f"Handling DSlice proof generation request for slice_num={data.slice_num} "
+                f"run_uid={data.run_uid} incremental={incremental}"
             )
 
             result = self.dsperse_manager.prove_slice(

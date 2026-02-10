@@ -4,7 +4,7 @@ import time
 
 import bittensor as bt
 from execution_layer.dsperse_manager import DSperseManager
-from execution_layer.base_input import BaseInput
+from execution_layer.generic_input import GenericInput
 from execution_layer.verified_model_session import VerifiedModelSession
 
 from _validator.core.exceptions import EmptyProofException, IncorrectProofException
@@ -75,18 +75,45 @@ class ResponseProcessor:
             return False
 
         if response.request_type == RequestType.DSLICE:
-            res: bool = self.dsperse_manager.verify_slice_proof(
-                run_uid=response.dsperse_run_uid,
-                slice_num=response.dsperse_slice_num,
-                proof=response.proof_content,
-                proof_system=request.data.get("proof_system"),
+            is_incremental = (
+                response.dsperse_run_uid
+                and self.dsperse_manager.is_incremental_run(response.dsperse_run_uid)
             )
+            if is_incremental:
+                if not response.witness:
+                    bt.logging.error(
+                        f"Incremental run requires witness but none provided for UID: {response.uid}"
+                    )
+                    return False
+                inputs = request.inputs
+                if inputs is not None and hasattr(inputs, "to_json"):
+                    inputs = inputs.to_json()
+                elif inputs is None:
+                    inputs = request.data.get("inputs", {})
+                res, extracted_outputs = (
+                    self.dsperse_manager.verify_incremental_slice_with_witness(
+                        circuit_id=response.circuit.id,
+                        slice_num=str(response.dsperse_slice_num),
+                        original_inputs=inputs,
+                        witness_hex=response.witness,
+                        proof_hex=response.proof_content,
+                        proof_system=request.data.get("proof_system"),
+                    )
+                )
+                if res and extracted_outputs is not None:
+                    response.computed_outputs = extracted_outputs
+            else:
+                res: bool = self.dsperse_manager.verify_slice_proof(
+                    run_uid=response.dsperse_run_uid,
+                    slice_num=response.dsperse_slice_num,
+                    proof=response.proof_content,
+                    proof_system=request.data.get("proof_system"),
+                )
         else:
             if not response.public_json:
                 raise ValueError(f"Public signals not found for UID: {response.uid}")
             inference_session = VerifiedModelSession(
-                # hardcoded request type as RWR because we don't want to regenerate inputs
-                BaseInput(RequestType.RWR, response.public_json),
+                GenericInput(RequestType.RWR, response.public_json),
                 response.circuit,
             )
             res: bool = inference_session.verify_proof(

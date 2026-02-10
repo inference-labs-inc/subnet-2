@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+import torch
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
 from dsperse.src.analyzers.schema import ExecutionInfo, ExecutionMethod, RunMetadata
@@ -19,14 +20,15 @@ from dsperse.src.backends.ezkl import EZKL
 from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.run.runner import Runner
 from dsperse.src.verify.verifier import Verifier
-from dsperse.src.slice.utils.converter import Converter
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
+import numpy as np
+
+from execution_layer.incremental_runner import IncrementalRunner
 from utils.system import capture_environment
 
 import cli_parser
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.request_type import RequestType
-from utils.pre_flight import SYNC_LOG_PREFIX
 
 from typing import TYPE_CHECKING
 
@@ -86,7 +88,21 @@ class DsperseRun:
 
 
 class DSperseManager:
-    def __init__(self, event_client: "DsperseEventClient | None" = None):
+    def __init__(
+        self,
+        event_client: "DsperseEventClient | None" = None,
+        lazy: bool = False,
+        incremental_mode: bool = True,
+    ):
+        """
+        Initialize DSperseManager.
+
+        Args:
+            event_client: Optional event client for telemetry
+            lazy: If True, extract slices on-demand
+            incremental_mode: If True, use incremental execution where miners
+                             compute outputs
+        """
         self.circuits: list[Circuit] = [
             circuit
             for circuit in circuit_store.circuits.values()
@@ -94,6 +110,17 @@ class DSperseManager:
         ]
         self.runs: dict[str, DsperseRun] = {}
         self.event_client = event_client
+        self.lazy = lazy
+        self.incremental_mode = incremental_mode
+        self._incremental_runner: IncrementalRunner | None = None
+        self._incremental_runs: set[str] = set()
+        self._incremental_run_circuits: dict[str, str] = {}
+        self._incremental_runs_lock = threading.Lock()
+        if incremental_mode:
+            self._incremental_runner = IncrementalRunner(
+                on_run_complete=self._on_incremental_run_complete,
+                on_jstprove_range_fallback=self._on_jstprove_range_fallback,
+            )
         self._purge_old_runs()
 
     @staticmethod
@@ -155,7 +182,9 @@ class DSperseManager:
         with open(input_json_path, "w") as f:
             json.dump(inputs, f)
 
-        runner = Runner(run_dir=run_dir, threads=os.cpu_count() or 4, batch=True)
+        runner = Runner(
+            run_dir=run_dir, threads=os.cpu_count() or 4, batch=True, lazy=self.lazy
+        )
         results = runner.run(
             input_json_path=input_json_path,
             slice_path=str(circuit.paths.base_path),
@@ -211,14 +240,23 @@ class DSperseManager:
 
         logging.info(f"Generated {len(requests)} DSlice requests for run {run_uid}")
 
+        total_tiles = len(slice_data_list)
+        slice_tile_counts: dict[str, int] = {}
+        for s in slice_data_list:
+            parent = f"slice_{s.slice_num.split('_tile_')[0]}"
+            slice_tile_counts[parent] = slice_tile_counts.get(parent, 0) + 1
+        total_slices = len(slice_tile_counts)
+
         if self.event_client:
             self._schedule_async(
                 self.event_client.emit_run_started(
                     run_uid=run_uid,
                     circuit_id=circuit.id,
                     circuit_name=circuit.metadata.name,
-                    total_slices=len(slice_data_list),
+                    total_slices=total_slices,
                     environment=environment,
+                    total_tiles=total_tiles,
+                    slice_tile_counts=slice_tile_counts,
                 )
             )
             for slice_data in slice_data_list:
@@ -235,11 +273,329 @@ class DSperseManager:
         return run_uid, requests
 
     def generate_dslice_requests(self) -> list[DSliceQueuedProofRequest]:
+        """Generate DSlice requests using standard (pre-computed) or incremental mode."""
         if not self.circuits:
             return []
+
+        if self.incremental_mode:
+            return self.generate_incremental_request()
+
         circuit = random.choice(self.circuits)
         _, requests = self.start_run(circuit)
         return requests
+
+    def start_incremental_run(
+        self,
+        circuit: Circuit,
+        inputs: dict | None = None,
+    ) -> str:
+        """
+        Start an incremental run where miners compute outputs.
+
+        Args:
+            circuit: The circuit to execute
+            inputs: Model inputs (generated if not provided)
+
+        Returns:
+            Run UID
+        """
+        if not self._incremental_runner:
+            self._incremental_runner = IncrementalRunner(
+                on_run_complete=self._on_incremental_run_complete,
+                on_jstprove_range_fallback=self._on_jstprove_range_fallback,
+            )
+
+        run_uid = self._incremental_runner.start_run(circuit, inputs)
+        with self._incremental_runs_lock:
+            self._incremental_runs.add(run_uid)
+            self._incremental_run_circuits[run_uid] = circuit.id
+
+        if self.event_client:
+            status = self._incremental_runner.get_run_status(run_uid)
+            self._schedule_async(
+                self.event_client.emit_run_started(
+                    run_uid=run_uid,
+                    circuit_id=circuit.id,
+                    circuit_name=circuit.metadata.name,
+                    total_slices=status["total_slices"] if status else 0,
+                    environment=capture_environment(),
+                    total_tiles=status["total_tiles"] if status else 0,
+                    slice_tile_counts=status["slice_tile_counts"] if status else None,
+                )
+            )
+
+        return run_uid
+
+    def get_next_incremental_work(self, run_uid: str) -> list[DSliceQueuedProofRequest]:
+        """
+        Get the next work items for an incremental run.
+
+        Args:
+            run_uid: The run identifier
+
+        Returns:
+            List of DSliceQueuedProofRequest. Empty list means ONNX ran locally (call again).
+            None returned as empty list means waiting or complete.
+        """
+        if not self._incremental_runner:
+            return []
+
+        work_items = self._incremental_runner.get_next_work(run_uid)
+        if work_items is None:
+            return []
+        if len(work_items) == 0:
+            return self.get_next_incremental_work(run_uid)
+
+        queued_requests = [
+            self._incremental_runner.create_queued_request(item) for item in work_items
+        ]
+        logging.info(
+            f"Converted {len(work_items)} work items to {len(queued_requests)} queued requests"
+        )
+        return queued_requests
+
+    def generate_incremental_request(self) -> list[DSliceQueuedProofRequest]:
+        """
+        Generate incremental request(s).
+
+        Returns work items for the next slice (1 for non-tiled, N for tiled).
+        If there's an active incremental run, returns the next work.
+        Otherwise starts a new run.
+
+        Returns:
+            List of DSliceQueuedProofRequest
+        """
+        if not self._incremental_runner:
+            self._incremental_runner = IncrementalRunner(
+                on_run_complete=self._on_incremental_run_complete,
+                on_jstprove_range_fallback=self._on_jstprove_range_fallback,
+            )
+
+        with self._incremental_runs_lock:
+            incremental_runs_snapshot = list(self._incremental_runs)
+            active_circuit_ids = set(self._incremental_run_circuits.values())
+
+        for run_uid in incremental_runs_snapshot:
+            if not self._incremental_runner.is_complete(run_uid):
+                requests = self.get_next_incremental_work(run_uid)
+                if requests:
+                    logging.info(
+                        f"Generating {len(requests)} work items for run {run_uid}"
+                    )
+                    return requests
+
+        available_circuits = [
+            c for c in self.circuits if c.id not in active_circuit_ids
+        ]
+        if not available_circuits:
+            return []
+        circuit = random.choice(available_circuits)
+        run_uid = self.start_incremental_run(circuit)
+
+        requests = self.get_next_incremental_work(run_uid)
+        if requests:
+            logging.info(f"Generating {len(requests)} work items for new run {run_uid}")
+            return requests
+
+        return []
+
+    def on_incremental_slice_result(
+        self,
+        run_uid: str,
+        slice_num: str,
+        success: bool,
+        computed_outputs: dict | None = None,
+        proof: str | None = None,
+        response_time_sec: float = 0.0,
+        verification_time_sec: float = 0.0,
+    ) -> tuple[bool, DSliceQueuedProofRequest | None]:
+        """
+        Handle result for an incremental slice.
+
+        Args:
+            run_uid: The run identifier
+            slice_num: The slice number
+            success: Whether the slice succeeded
+            computed_outputs: Outputs computed by the miner
+            proof: Proof generated by the miner
+            response_time_sec: Response time
+            verification_time_sec: Verification time
+
+        Returns:
+            Tuple of (is_run_complete, next_slice_request)
+        """
+        if not self._incremental_runner:
+            return True, None
+
+        task_id = (
+            f"slice_{slice_num}" if not slice_num.startswith("slice_") else slice_num
+        )
+
+        slice_complete = self._incremental_runner.apply_result(
+            run_uid=run_uid,
+            task_id=task_id,
+            success=success,
+            output=computed_outputs,
+            error=None if success else "Slice execution failed",
+        )
+
+        if self.event_client:
+            if success:
+                self._schedule_async(
+                    self.event_client.emit_verification_complete(
+                        run_uid=run_uid,
+                        slice_num=slice_num,
+                        verification_time_sec=verification_time_sec,
+                        success=True,
+                    )
+                )
+            else:
+                self._schedule_async(
+                    self.event_client.emit_slice_failed(
+                        run_uid=run_uid,
+                        slice_num=slice_num,
+                    )
+                )
+
+        is_complete = self._incremental_runner.is_complete(run_uid)
+        if is_complete:
+            return True, None
+
+        if not slice_complete:
+            return False, None
+
+        next_requests = self.get_next_incremental_work(run_uid)
+        return False, next_requests[0] if next_requests else None
+
+    def on_incremental_tile_result(
+        self,
+        run_uid: str,
+        task_id: str,
+        slice_id: str,
+        tile_idx: int,
+        success: bool,
+        computed_outputs: dict | None = None,
+        proof: str | None = None,
+        witness: str | None = None,
+        response_time_sec: float = 0.0,
+        verification_time_sec: float = 0.0,
+    ) -> tuple[bool, list[DSliceQueuedProofRequest]]:
+        """
+        Handle result for an incremental tile.
+
+        Args:
+            run_uid: The run identifier
+            task_id: The tile task identifier
+            slice_id: The parent slice identifier (e.g., "slice_0")
+            tile_idx: The tile index
+            success: Whether the tile succeeded
+            computed_outputs: Outputs computed by the miner
+            proof: Proof generated by the miner (hex string)
+            witness: Witness generated by the miner (hex string)
+            response_time_sec: Response time
+            verification_time_sec: Verification time
+
+        Returns:
+            Tuple of (is_run_complete, next_requests)
+        """
+        if not self._incremental_runner:
+            return True, []
+
+        slice_complete = self._incremental_runner.apply_result(
+            run_uid=run_uid,
+            task_id=task_id,
+            success=success,
+            output=computed_outputs,
+            error=None if success else "Tile execution failed",
+        )
+
+        if self.event_client:
+            slice_num = f"{slice_id.removeprefix('slice_')}_tile_{tile_idx}"
+            if success:
+                self._schedule_async(
+                    self.event_client.emit_verification_complete(
+                        run_uid=run_uid,
+                        slice_num=slice_num,
+                        verification_time_sec=verification_time_sec,
+                        success=True,
+                    )
+                )
+            else:
+                self._schedule_async(
+                    self.event_client.emit_slice_failed(
+                        run_uid=run_uid,
+                        slice_num=slice_num,
+                    )
+                )
+
+        is_complete = self._incremental_runner.is_complete(run_uid)
+        if is_complete:
+            return True, []
+
+        if not slice_complete:
+            return False, []
+
+        return False, self.get_next_incremental_work(run_uid)
+
+    def has_work_in_flight(self) -> bool:
+        """Check if any run has work currently being processed by miners."""
+        if not self._incremental_runner:
+            return False
+        with self._incremental_runs_lock:
+            for run_uid in self._incremental_runs:
+                if self._incremental_runner.has_pending_work(run_uid):
+                    return True
+        return False
+
+    def _on_jstprove_range_fallback(
+        self, run_uid: str, slice_id: str, overflow_info: dict
+    ) -> None:
+        """Callback when a JSTprove slice falls back to ONNX due to range overflow."""
+        logging.warning(
+            f"JSTprove range overflow in run {run_uid} slice {slice_id}: "
+            f"{overflow_info.get('overflow_count')}/{overflow_info.get('total_elements')} "
+            f"values exceed {overflow_info.get('n_bits')}-bit range"
+        )
+        if self.event_client:
+            self._schedule_async(
+                self.event_client.emit_jstprove_range_overflow(
+                    run_uid=run_uid,
+                    slice_num=slice_id,
+                    overflow_info=overflow_info,
+                )
+            )
+
+    def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
+        """Callback when an incremental run completes."""
+        logging.info(f"Incremental run {run_uid} completed, success={success}")
+
+        with self._incremental_runs_lock:
+            self._incremental_runs.discard(run_uid)
+            self._incremental_run_circuits.pop(run_uid, None)
+
+            if self.event_client:
+                status = (
+                    self._incremental_runner.get_run_status(run_uid)
+                    if self._incremental_runner
+                    else None
+                )
+                self._schedule_async(
+                    self.event_client.emit_run_complete(
+                        run_uid=run_uid,
+                        all_successful=success,
+                        total_run_time_sec=(
+                            status.get("elapsed_time", 0) if status else 0
+                        ),
+                    )
+                )
+
+            if self._incremental_runner:
+                self._incremental_runner.cleanup_run(run_uid)
+
+    def is_incremental_run(self, run_uid: str) -> bool:
+        """Check if a run is an incremental run."""
+        with self._incremental_runs_lock:
+            return run_uid in self._incremental_runs
 
     def on_slice_result(
         self,
@@ -508,6 +864,15 @@ class DSperseManager:
                             tile_output,
                         )
 
+                    proof_system = DSperseManager._method_to_proof_system(
+                        tile_result.method
+                    )
+                    if proof_system is None:
+                        logging.error(
+                            f"Skipping tile {tile_idx} of slice {slice_num}: unknown method"
+                        )
+                        continue
+
                     timing = SliceTimingData(
                         slice_num=f"{base_slice_num}_tile_{tile_idx}",
                         proof_system=(
@@ -530,9 +895,7 @@ class DSperseManager:
                             output_file=tile_output,
                             witness_file=tile_run_dir / "output_witness.bin",
                             circuit_id=circuit_id,
-                            proof_system=DSperseManager._method_to_proof_system(
-                                tile_result.method
-                            ),
+                            proof_system=proof_system,
                             timing=timing,
                         )
                     )
@@ -544,12 +907,19 @@ class DSperseManager:
                     logging.warning(f"Slice {slice_num} missing input/output files")
                     continue
 
+                proof_system = DSperseManager._method_to_proof_system(method)
+                if proof_system is None:
+                    logging.error(
+                        f"Skipping slice {slice_num}: unknown method '{method}'"
+                    )
+                    continue
+
                 timing = SliceTimingData(
                     slice_num=base_slice_num,
                     proof_system=method,
                     backend_used=method,
-                    witness_time_sec=exec_info.witness_time_sec,
-                    memory_peak_mb=exec_info.memory_peak_mb,
+                    witness_time_sec=getattr(exec_info, "time_sec", 0.0),
+                    memory_peak_mb=getattr(exec_info, "memory_peak_mb", 0.0),
                     is_tiled=False,
                     success=exec_info.success,
                     error=exec_info.error,
@@ -562,7 +932,7 @@ class DSperseManager:
                         output_file=slice_output,
                         witness_file=slice_run_dir / "output_witness.bin",
                         circuit_id=circuit_id,
-                        proof_system=DSperseManager._method_to_proof_system(method),
+                        proof_system=proof_system,
                         timing=timing,
                     )
                 )
@@ -611,25 +981,44 @@ class DSperseManager:
         )
 
     @staticmethod
-    def _method_to_proof_system(method: str | None) -> ProofSystem:
+    def _method_to_proof_system(method: str | None) -> ProofSystem | None:
         if not method:
-            return ProofSystem.JSTPROVE
+            logging.error("No proof method specified")
+            return None
         method_lower = str(method).lower()
         if "ezkl" in method_lower:
             return ProofSystem.EZKL
         if "jstprove" in method_lower or "jst" in method_lower:
             return ProofSystem.JSTPROVE
-        logging.warning(f"Unknown proof method '{method}', defaulting to JSTPROVE")
-        return ProofSystem.JSTPROVE
+        logging.error(f"Unknown proof method '{method}'")
+        return None
 
     def prove_slice(
         self,
         circuit_id: str,
         slice_num: str,
         inputs: dict,
-        outputs: dict,
+        outputs: dict | None,
         proof_system: ProofSystem,
     ) -> dict:
+        """
+        Generate proof for a slice.
+
+        In standard mode, both inputs and outputs are provided.
+        In incremental mode (outputs=None), inference is run to compute outputs,
+        which are returned in the result.
+
+        Args:
+            circuit_id: The circuit identifier
+            slice_num: Slice number (may include tile suffix like "0_tile_1")
+            inputs: Input tensor data
+            outputs: Expected output data (None for incremental mode)
+            proof_system: Proof system to use (JSTPROVE or EZKL)
+
+        Returns:
+            Dict with success, proof, proof_generation_time, and witness (for incremental)
+        """
+        incremental_mode = outputs is None
         circuit = self._get_circuit_by_id(circuit_id)
         base_slice_num, tile_idx = self._parse_slice_num(slice_num)
         model_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
@@ -659,6 +1048,7 @@ class DSperseManager:
                     tmp_path,
                     proof_system,
                     result,
+                    incremental_mode=incremental_mode,
                 )
 
             slice_copy = tmp_path / "slices"
@@ -676,19 +1066,21 @@ class DSperseManager:
             prove_start = time.time()
 
             if proof_system == ProofSystem.JSTPROVE:
-                jst_model_path = (
-                    model_dir
-                    / "payload"
-                    / "jstprove"
-                    / f"slice_{base_slice_num}_circuit.txt"
+                jst_model_path = self._find_jstprove_circuit(
+                    model_dir, base_slice_num, is_tiled=False
                 )
-                success, proof_data = self._jstprove_witness_and_prove(
+                if jst_model_path is None or not jst_model_path.exists():
+                    logging.error(f"JSTprove circuit not found for slice {slice_num}")
+                    return result
+                success, proof_data, witness_data, _ = self._jstprove_witness_and_prove(
                     jst_model_path,
                     input_file,
                     output_file,
                     tmp_path,
                     f"slice {slice_num}",
                 )
+                if incremental_mode and witness_data is not None:
+                    result["witness"] = witness_data
                 if not success and proof_data is None:
                     return result
 
@@ -768,7 +1160,20 @@ class DSperseManager:
         output_file: Path,
         tmp_path: Path,
         label: str,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str | None, str | None, None]:
+        """
+        Generate witness and proof using JSTprove.
+
+        Args:
+            circuit_path: Path to the circuit file
+            input_file: Path to input JSON
+            output_file: Path to write output JSON
+            tmp_path: Temporary directory for artifacts
+            label: Label for logging
+
+        Returns:
+            Tuple of (success, proof_hex, witness_hex, None)
+        """
         jstprover = JSTprove()
         success, res = jstprover.generate_witness(
             input_file=input_file,
@@ -777,7 +1182,7 @@ class DSperseManager:
         )
         if not success:
             logging.error(f"Failed to generate witness for {label}: {res}")
-            return False, None
+            return False, None, None, None
 
         witness_path = tmp_path / "output_witness.bin"
         proof_path = tmp_path / "proof.bin"
@@ -788,10 +1193,14 @@ class DSperseManager:
         )
 
         proof_data = None
+        witness_data = None
         if success and proof_path.exists():
             with open(proof_path, "rb") as pf:
                 proof_data = pf.read().hex()
-        return success, proof_data
+        if success and witness_path.exists():
+            with open(witness_path, "rb") as wf:
+                witness_data = wf.read().hex()
+        return success, proof_data, witness_data, None
 
     def _prove_tile(
         self,
@@ -803,19 +1212,28 @@ class DSperseManager:
         tmp_path: Path,
         proof_system: ProofSystem,
         result: dict,
+        incremental_mode: bool = False,
     ) -> dict:
         prove_start = time.time()
         slice_num = f"{base_slice_num}_tile_{tile_idx}"
 
         if proof_system == ProofSystem.JSTPROVE:
-            jst_tile_circuit = model_dir / "jstprove" / "tiles" / "tile_circuit.txt"
-            if not jst_tile_circuit.exists():
-                logging.error(f"Tile JSTprove circuit not found: {jst_tile_circuit}")
+            jst_tile_circuit = self._find_jstprove_circuit(
+                model_dir, base_slice_num, is_tiled=True
+            )
+            if jst_tile_circuit is None or not jst_tile_circuit.exists():
+                logging.error(f"Tile JSTprove circuit not found for slice {slice_num}")
                 return result
 
-            success, proof_data = self._jstprove_witness_and_prove(
-                jst_tile_circuit, input_file, output_file, tmp_path, f"tile {slice_num}"
+            success, proof_data, witness_data, _ = self._jstprove_witness_and_prove(
+                jst_tile_circuit,
+                input_file,
+                output_file,
+                tmp_path,
+                f"tile {slice_num}",
             )
+            if incremental_mode and witness_data is not None:
+                result["witness"] = witness_data
         else:
             logging.error(f"Proof system {proof_system} not supported for tiles")
             return result
@@ -831,6 +1249,26 @@ class DSperseManager:
             parts = slice_num.split("_tile_")
             return parts[0], int(parts[1])
         return slice_num, None
+
+    def _find_jstprove_circuit(
+        self, model_dir: Path, base_slice_num: str, is_tiled: bool
+    ) -> Path | None:
+        """Find JSTprove circuit path, checking both current and legacy locations."""
+        if is_tiled:
+            paths = [
+                model_dir / "jstprove" / "tiles" / "tile_circuit.txt",
+                model_dir / "payload" / "jstprove" / "tiles" / "tile_circuit.txt",
+            ]
+        else:
+            slice_id = f"slice_{base_slice_num}"
+            paths = [
+                model_dir / "jstprove" / f"{slice_id}_circuit.txt",
+                model_dir / "payload" / "jstprove" / f"{slice_id}_circuit.txt",
+            ]
+        for p in paths:
+            if p.exists():
+                return p
+        return None
 
     def verify_slice_proof(
         self, run_uid: str, slice_num: str, proof: dict | str, proof_system: ProofSystem
@@ -871,15 +1309,12 @@ class DSperseManager:
 
         if proof_system == ProofSystem.JSTPROVE:
             slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
-            if tile_idx is not None:
-                circuit_path = slice_dir / "jstprove" / "tiles" / "tile_circuit.txt"
-            else:
-                circuit_path = (
-                    slice_dir
-                    / "payload"
-                    / "jstprove"
-                    / f"slice_{base_slice_num}_circuit.txt"
-                )
+            circuit_path = self._find_jstprove_circuit(
+                slice_dir, base_slice_num, is_tiled=(tile_idx is not None)
+            )
+            if circuit_path is None or not circuit_path.exists():
+                logging.error(f"JSTprove circuit not found for slice {slice_num}")
+                return False
             witness_path = slice_data.witness_file or (
                 slice_data.input_file.parent / "output_witness.bin"
             )
@@ -907,6 +1342,179 @@ class DSperseManager:
 
         slice_data.success = success
         return success
+
+    def verify_incremental_slice_with_witness(
+        self,
+        circuit_id: str,
+        slice_num: str,
+        original_inputs: dict,
+        witness_hex: str,
+        proof_hex: str,
+        proof_system: ProofSystem,
+    ) -> tuple[bool, Optional[torch.Tensor]]:
+        """
+        Verify a proof using the witness, extracting and validating inputs/outputs.
+
+        Delegates to dsperse's JSTprove.verify_with_io_extraction for trustless
+        verification where inputs/outputs are extracted from the cryptographically
+        bound witness rather than trusting miner-provided values.
+
+        Args:
+            circuit_id: The circuit identifier
+            slice_num: The slice number
+            original_inputs: The inputs that were sent to the miner
+            witness_hex: Hex-encoded witness from miner
+            proof_hex: Hex-encoded proof from miner
+            proof_system: The proof system used
+
+        Returns:
+            Tuple of (success, output_tensor)
+        """
+        if proof_system != ProofSystem.JSTPROVE:
+            logging.error("Trustless verification only implemented for JSTPROVE")
+            return False, None
+
+        circuit = self._get_circuit_by_id(circuit_id)
+        base_slice_num, tile_idx = self._parse_slice_num(slice_num)
+        slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
+        metadata_path = slice_dir / "metadata.json"
+
+        if not metadata_path.exists():
+            logging.error(f"Slice metadata not found: {metadata_path}")
+            return False, None
+
+        with open(metadata_path, "r") as f:
+            slice_metadata = json.load(f)
+
+        output_shape = None
+        if tile_idx is not None:
+            slices_list = slice_metadata.get("slices", [])
+            tiling = (
+                slices_list[0].get("tiling", {})
+                if slices_list
+                else slice_metadata.get("tiling", {})
+            )
+            tile_size = tiling.get("tile_size", 0)
+            raw_halo = tiling.get("halo", 0)
+            if isinstance(raw_halo, int):
+                halo = (raw_halo, raw_halo)
+            elif isinstance(raw_halo, (list, tuple)):
+                if len(raw_halo) == 0:
+                    halo = (0, 0)
+                elif len(raw_halo) == 1:
+                    halo = (int(raw_halo[0]), int(raw_halo[0]))
+                else:
+                    halo = (int(raw_halo[0]), int(raw_halo[1]))
+            else:
+                halo = (0, 0)
+            c_in = tiling.get("c_in", 1)
+            tile_h = tile_size + 2 * halo[0]
+            tile_w = tile_size + 2 * halo[1]
+            num_inputs = c_in * tile_h * tile_w
+            c_out = tiling.get("c_out", 1)
+            out_tile = tiling.get("out_tile", [tile_size, tile_size])
+            output_shape = [1, c_out, out_tile[0], out_tile[1]]
+        else:
+            slices_meta = slice_metadata.get("slices", [])
+            if not isinstance(slices_meta, list) or not slices_meta:
+                logging.error(
+                    f"Slice {slice_num}: slices_meta is not a non-empty list: {slices_meta}"
+                )
+                return False, None
+            if not isinstance(slices_meta[0], dict):
+                logging.error(
+                    f"Slice {slice_num}: slices_meta[0] is not a dict: {slices_meta[0]}"
+                )
+                return False, None
+            tensor_shapes = (
+                slices_meta[0].get("shape", {}).get("tensor_shape", {}).get("input", [])
+            )
+            output_shapes = (
+                slices_meta[0]
+                .get("shape", {})
+                .get("tensor_shape", {})
+                .get("output", [])
+            )
+            if output_shapes:
+                output_shape = [d for d in output_shapes[0] if isinstance(d, int)]
+            filtered_inputs = (
+                slices_meta[0].get("dependencies", {}).get("filtered_inputs", [])
+            )
+            n_filtered = len(filtered_inputs)
+            if tensor_shapes and n_filtered > 0:
+                runtime_shapes = tensor_shapes[-n_filtered:]
+            else:
+                runtime_shapes = tensor_shapes
+            num_inputs = 0
+            for shape in runtime_shapes:
+                int_dims = [d for d in shape if isinstance(d, int)]
+                if int_dims:
+                    num_inputs += int(np.prod(int_dims))
+            logging.debug(
+                f"Slice {slice_num}: runtime_shapes={runtime_shapes} -> num_inputs={num_inputs}"
+            )
+
+        try:
+            witness_bytes = bytes.fromhex(witness_hex)
+            proof_bytes = bytes.fromhex(proof_hex)
+        except ValueError as e:
+            logging.error(f"Invalid hex encoding: {e}")
+            return False, None
+
+        circuit_path = self._find_jstprove_circuit(
+            slice_dir, base_slice_num, is_tiled=(tile_idx is not None)
+        )
+        if circuit_path is None or not circuit_path.exists():
+            logging.error(f"JSTprove circuit not found for slice {slice_num}")
+            return False, None
+
+        flat_inputs = self._flatten_inputs(original_inputs)
+
+        jstprove = JSTprove()
+        success, extracted_io = jstprove.verify_with_io_extraction(
+            circuit_path=circuit_path,
+            witness_bytes=witness_bytes,
+            proof_bytes=proof_bytes,
+            num_inputs=num_inputs,
+            expected_inputs=flat_inputs,
+        )
+
+        if not success or extracted_io is None:
+            return False, None
+
+        logging.debug("Input verification passed")
+        output_tensor = torch.tensor(extracted_io["rescaled_outputs"])
+        if output_shape is not None:
+            output_tensor = output_tensor.reshape(output_shape)
+        return True, output_tensor
+
+    def _flatten_inputs(self, inputs: dict) -> list:
+        """Flatten input dict to a list of values.
+
+        Handles:
+        - Single input with "input_data" key
+        - Single input with arbitrary key
+        - Multiple inputs with tensor name keys (concatenated in sorted order)
+        """
+
+        def flatten(x):
+            if isinstance(x, (list, tuple)):
+                result = []
+                for item in x:
+                    result.extend(flatten(item))
+                return result
+            return [x]
+
+        if "input_data" in inputs:
+            return flatten(inputs["input_data"])
+
+        if len(inputs) == 1:
+            return flatten(list(inputs.values())[0])
+
+        result = []
+        for key in sorted(inputs.keys()):
+            result.extend(flatten(inputs[key]))
+        return result
 
     def cleanup_run(self, run_uid: str):
         if run_uid not in self.runs:
@@ -941,40 +1549,3 @@ class DSperseManager:
             execution = {}
 
         return slice_id, execution
-
-    @classmethod
-    def extract_dslices(cls, model_path: Path | str) -> None:
-        model_path = Path(model_path)
-        dslice_files = list(model_path.glob("slice_*.dslice"))
-        if not dslice_files:
-            return
-        logging.debug(SYNC_LOG_PREFIX + f"Extracting DSlices for model {model_path}...")
-        for dslice_file in dslice_files:
-            extracted_path = dslice_file.with_suffix("")
-            if extracted_path.exists():
-                shutil.rmtree(extracted_path)
-            logging.info(
-                SYNC_LOG_PREFIX
-                + f"Extracting DSlice file {dslice_file} to {extracted_path}..."
-            )
-            try:
-                Converter.convert(
-                    path=dslice_file,
-                    output_type="dirs",
-                    output_path=extracted_path,
-                    cleanup=True,
-                )
-            except Exception:
-                if extracted_path.exists():
-                    shutil.rmtree(extracted_path, ignore_errors=True)
-                raise
-            contents = list(extracted_path.iterdir())
-            if (
-                len(contents) == 1
-                and contents[0].is_dir()
-                and (contents[0] / "payload").is_dir()
-            ):
-                for item in contents[0].iterdir():
-                    shutil.move(str(item), str(extracted_path / item.name))
-                contents[0].rmdir()
-            dslice_file.unlink(missing_ok=True)

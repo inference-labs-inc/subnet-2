@@ -1,23 +1,17 @@
 from __future__ import annotations
 
 import copy
+import os
 import random
 import traceback
 
 import bittensor as bt
 from bittensor.core.chain_data import AxonInfo
-from deployment_layer.circuit_store import circuit_store
-from execution_layer.circuit import Circuit, CircuitType
-from execution_layer.base_input import BaseInput
-from protocol import (
-    DSliceProofGenerationDataModel,
-    ProofOfWeightsDataModel,
-    QueryZkProof,
-)
 
 from _validator.api import RelayManager
 from _validator.config import ValidatorConfig
 from _validator.core.request import Request
+from _validator.models.base_rpc_request import QueuedRequestDataModel
 from _validator.models.request_type import RequestType
 from _validator.pow.proof_of_weights_handler import prepare_pow_request
 from _validator.scoring.score_manager import ScoreManager
@@ -26,7 +20,34 @@ from constants import (
     BATCHED_PROOF_OF_WEIGHTS_MODEL_ID,
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
 )
+from deployment_layer.circuit_store import circuit_store
+from execution_layer.circuit import Circuit, CircuitType
+from execution_layer.base_input import BaseInput
+from protocol import (
+    DSliceProofGenerationDataModel,
+    ProofOfWeightsDataModel,
+    QueryZkProof,
+)
 from utils.wandb_logger import safe_log
+
+
+def _get_local_miner_overrides() -> dict[int, tuple[str, int]]:
+    """Parse LOCAL_MINER_OVERRIDE env var: 'uid:ip:port,uid:ip:port,...'"""
+    override_str = os.environ.get("LOCAL_MINER_OVERRIDE", "")
+    if not override_str:
+        return {}
+    overrides = {}
+    for entry in override_str.split(","):
+        parts = entry.strip().split(":")
+        if len(parts) == 3:
+            try:
+                uid = int(parts[0])
+                ip = parts[1]
+                port = int(parts[2])
+                overrides[uid] = (ip, port)
+            except ValueError:
+                pass
+    return overrides
 
 
 class RequestPipeline:
@@ -71,10 +92,16 @@ class RequestPipeline:
 
         axon: AxonInfo = self.config.metagraph.axons[uid]
 
+        overrides = _get_local_miner_overrides()
+        if uid in overrides:
+            override_ip, override_port = overrides[uid]
+        else:
+            override_ip, override_port = axon.ip, axon.port
+
         request = Request(
             uid=uid,
-            ip=axon.ip,
-            port=axon.port,
+            ip=override_ip,
+            port=override_port,
             hotkey=axon.hotkey,
             coldkey=axon.coldkey,
             data=request_data.model_dump(),
@@ -96,8 +123,17 @@ class RequestPipeline:
 
         return request
 
-    def _prepare_queued_request(self, uid: int) -> Request:
-        external_request = self.relay.stacked_requests_queue.pop()
+    def _prepare_queued_request(
+        self, uid: int, queued_request: QueuedRequestDataModel | None = None
+    ) -> Request | None:
+        external_request = (
+            queued_request or self.relay.stacked_requests_queue.get_nowait()
+        )
+        if hasattr(external_request, "slice_num"):
+            remaining = self.relay.stacked_requests_queue.qsize()
+            bt.logging.debug(
+                f"Popped slice_num={external_request.slice_num} (remaining: {remaining})"
+            )
         request = None
 
         try:
@@ -128,7 +164,7 @@ class RequestPipeline:
 
     def _prepare_benchmark_request(
         self, uid: int, circuit: Circuit | None = None
-    ) -> Request:
+    ) -> Request | None:
         circuit = circuit or self.select_circuit_for_benchmark()
         if circuit is None:
             bt.logging.error("No circuit selected")

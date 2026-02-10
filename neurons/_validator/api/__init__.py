@@ -21,7 +21,6 @@ from jsonrpcserver import (
 from websockets.exceptions import ConnectionClosed
 
 from _validator.config import ValidatorConfig
-from _validator.models.base_rpc_request import QueuedRequestDataModel
 from _validator.models.poc_rpc_request import ProofOfComputationRPCRequest
 from constants import (
     EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
@@ -54,7 +53,8 @@ class RelayManager:
 
     def __init__(self, config: ValidatorConfig):
         self.config = config
-        self.stacked_requests_queue: list[QueuedRequestDataModel] = []
+        self.stacked_requests_queue: asyncio.Queue = asyncio.Queue()
+        self.rwr_queue: asyncio.Queue = asyncio.Queue()
         self.pending_requests: dict[str, asyncio.Event] = {}
         self.request_results: dict[str, dict] = {}
         self.is_testnet = config.bt_config.subtensor.network == "test"
@@ -294,37 +294,6 @@ class RelayManager:
             bt.logging.error(f"Error reading proof file {proof_file}: {e}")
             return None
 
-    async def _enqueue_and_await(self, external_request: QueuedRequestDataModel):
-        self.pending_requests[external_request.hash] = asyncio.Event()
-        self.stacked_requests_queue.insert(0, external_request)
-        bt.logging.success(
-            f"External request with hash {external_request.hash} added to queue"
-        )
-        try:
-            await asyncio.wait_for(
-                self.pending_requests[external_request.hash].wait(),
-                timeout=external_request.circuit.timeout
-                + EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
-            )
-            result = self.request_results.pop(external_request.hash, None)
-
-            if result and result.get("success"):
-                bt.logging.success(
-                    f"External request with hash {external_request.hash} processed successfully"
-                )
-                return Success(result)
-            bt.logging.error(
-                f"External request with hash {external_request.hash} failed to process"
-            )
-            return Error(9, "Request processing failed")
-        except asyncio.TimeoutError:
-            bt.logging.error(
-                f"External request with hash {external_request.hash} timed out"
-            )
-            return Error(9, "Request processing failed", "Request timed out")
-        finally:
-            self.pending_requests.pop(external_request.hash, None)
-
     async def handle_proof_of_computation(self, **params: dict) -> dict:
         """
         Handle subnet-2.proof_of_computation RPC method.
@@ -352,7 +321,36 @@ class RelayManager:
                 )
                 return InvalidParams(str(e))
 
-            return await self._enqueue_and_await(external_request)
+            self.pending_requests[external_request.hash] = asyncio.Event()
+            self.rwr_queue.put_nowait(external_request)
+            bt.logging.success(
+                f"External request with hash {external_request.hash} added to queue"
+            )
+
+            try:
+                await asyncio.wait_for(
+                    self.pending_requests[external_request.hash].wait(),
+                    timeout=external_request.circuit.timeout
+                    + EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
+                )
+                result = self.request_results.pop(external_request.hash, None)
+
+                if result and result.get("success"):
+                    bt.logging.success(
+                        f"External request with hash {external_request.hash} processed successfully"
+                    )
+                    return Success(result)
+                bt.logging.error(
+                    f"External request with hash {external_request.hash} failed to process"
+                )
+                return Error(9, "Request processing failed")
+            except asyncio.TimeoutError:
+                bt.logging.error(
+                    f"External request with hash {external_request.hash} timed out"
+                )
+                return Error(9, "Request processing failed", "Request timed out")
+            finally:
+                self.pending_requests.pop(external_request.hash, None)
 
         except Exception as e:
             bt.logging.error(f"Error processing request: {str(e)}")
@@ -383,7 +381,7 @@ class RelayManager:
             )
 
             for request in requests:
-                self.stacked_requests_queue.append(request)
+                self.stacked_requests_queue.put_nowait(request)
 
             status = self.dsperse_manager.get_run_status(run_uid)
             bt.logging.success(

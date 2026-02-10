@@ -115,6 +115,12 @@ def init_config(role: str | None = None):
         action="store_true",
         help="Download all circuits from API during startup (default: False)",
     )
+    parser.add_argument(
+        "--additional-circuits",
+        type=lambda s: [x.strip() for x in s.split(",") if x.strip()],
+        default=[],
+        help="Comma-separated list of circuit IDs to include in addition to active circuits",
+    )
     if role == Roles.VALIDATOR:
         # CLI arguments specific to the validator
         _validator_config()

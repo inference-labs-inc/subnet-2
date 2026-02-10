@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "subnet-2"
-dynamic = ["version"]
+version = "0.0.0"
 description = ""
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -15,8 +15,8 @@ dependencies = [
   "bittensor==10.0.1",
   "boto3>=1.36.13",
   "botocore>=1.37.19",
-  "dsperse==3.0.0",
-  "jstprove==2.3.1",
+  "dsperse==3.2.0",
+  "jstprove==2.4.0",
   "fastapi>=0.115.6",
   "gitpython>=3.1.44",
   "httpx>=0.28.1",
@@ -61,8 +61,6 @@ dev = [
 package-dir = { "subnet-2" = "neurons" }
 packages = ["subnet-2"]
 
-[tool.setuptools.dynamic]
-version = { attr = "neurons.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

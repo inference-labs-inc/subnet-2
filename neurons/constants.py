@@ -158,6 +158,10 @@ MAX_EVALUATION_ITEMS = 1024
 
 # Maximum circuit size in GB for competitions
 MAX_CIRCUIT_SIZE_GB = 50
+IDLE_BENCHMARK_PROBABILITY = 0.1
+EMA_BOOST_FACTOR = 1.2
+EMA_ENABLED = False
+
 CIRCUIT_API_URL = os.getenv("CIRCUIT_API_URL", "https://repository.inferencelabs.com")
 CIRCUIT_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".bittensor", "subnet-2", "circuit_cache"
