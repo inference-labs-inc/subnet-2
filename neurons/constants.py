@@ -171,6 +171,7 @@ MAX_EVALUATION_ITEMS = 1024
 
 # Maximum circuit size in GB for competitions
 MAX_CIRCUIT_SIZE_GB = 50
+# Probability of issuing a circom benchmark when all queues are empty
 IDLE_BENCHMARK_PROBABILITY = 0.1
 # EMA boost factor
 EMA_BOOST_FACTOR = 1.2
