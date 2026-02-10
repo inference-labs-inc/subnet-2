@@ -1,3 +1,4 @@
+import os
 import traceback
 
 # isort: off
@@ -10,14 +11,16 @@ import bittensor as bt
 from _validator.validator_session import ValidatorSession
 from constants import Roles
 from utils import run_shared_preflight_checks, run_auto_update_check
-from utils.memory_profiler import start as start_memory_profiler
 
 if __name__ == "__main__":
     cli_parser.init_config(Roles.VALIDATOR)
     run_auto_update_check()
     run_shared_preflight_checks(Roles.VALIDATOR)
 
-    start_memory_profiler()
+    if os.environ.get("ENABLE_MEMORY_PROFILER"):
+        from utils.memory_profiler import start as start_memory_profiler
+
+        start_memory_profiler()
 
     try:
         from deployment_layer.circuit_store import circuit_store

@@ -15,6 +15,7 @@ SNAPSHOT_COMPARE_INTERVAL = 600
 _prev_snapshot = None
 _prev_snapshot_time = 0
 _process = psutil.Process(os.getpid())
+_started = False
 
 
 def _get_rss_mb():
@@ -167,8 +168,8 @@ def _type_census():
         type_counts[t] = type_counts.get(t, 0) + 1
         try:
             type_sizes[t] = type_sizes.get(t, 0) + sys.getsizeof(obj)
-        except Exception:
-            pass
+        except (TypeError, OverflowError):
+            continue
     by_count = sorted(type_counts.items(), key=lambda x: x[1], reverse=True)[:20]
     by_size = sorted(type_sizes.items(), key=lambda x: x[1], reverse=True)[:20]
     lines = ["  Top by count:"]
@@ -246,6 +247,11 @@ def _profiler_loop():
 
 
 def start():
-    tracemalloc.start(10)
+    global _started
+    if _started:
+        return
+    _started = True
+    if not tracemalloc.is_tracing():
+        tracemalloc.start(10)
     t = threading.Thread(target=_profiler_loop, daemon=True, name="memory-profiler")
     t.start()

@@ -320,9 +320,7 @@ class DSperseManager:
                     total_slices=status["total_slices"] if status else 0,
                     environment=capture_environment(),
                     total_tiles=status["total_tiles"] if status else 0,
-                    slice_tile_counts=(
-                        status.get("slice_tile_counts") if status else None
-                    ),
+                    slice_tile_counts=status["slice_tile_counts"] if status else None,
                 )
             )
 
