@@ -39,11 +39,11 @@ IGNORED_MODEL_HASHES = [
 # The maximum timespan allowed for miners to respond to a query
 VALIDATOR_REQUEST_TIMEOUT_SECONDS = 120
 # The maximum timespan allowed for miners to process through a circuit
-CIRCUIT_TIMEOUT_SECONDS = 60
+CIRCUIT_TIMEOUT_SECONDS = 180
 # An additional queueing time for external requests
 EXTERNAL_REQUEST_QUEUE_TIME_SECONDS = 10
 # Maximum number of concurrent requests that the validator will handle
-MAX_CONCURRENT_REQUESTS = 128
+MAX_CONCURRENT_REQUESTS = 32
 # Default proof size when we're unable to determine the actual size
 DEFAULT_PROOF_SIZE = 5000
 # Size in percent of the sample to be used for the maximum score median
