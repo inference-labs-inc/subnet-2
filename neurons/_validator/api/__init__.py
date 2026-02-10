@@ -333,15 +333,16 @@ class RelayManager:
                 )
                 return InvalidParams(str(e))
 
-            try:
-                external_request.circuit.input_handler(
-                    RequestType.RWR, copy.deepcopy(external_request.inputs)
-                )
-            except (ValueError, TypeError) as e:
-                bt.logging.warning(
-                    f"Input validation failed for circuit {circuit_id}: {e}"
-                )
-                return InvalidParams(f"Invalid input shape: {e}")
+            if external_request.circuit.metadata.input_schema:
+                try:
+                    external_request.circuit.input_handler(
+                        RequestType.RWR, copy.deepcopy(external_request.inputs)
+                    )
+                except (ValueError, TypeError) as e:
+                    bt.logging.warning(
+                        f"Input validation failed for circuit {circuit_id}: {e}"
+                    )
+                    return InvalidParams(f"Invalid input shape: {e}")
 
             self.pending_requests[external_request.hash] = asyncio.Event()
             self.rwr_queue.put_nowait(external_request)
