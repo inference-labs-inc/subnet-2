@@ -114,6 +114,7 @@ class DSperseManager:
         self.incremental_mode = incremental_mode
         self._incremental_runner: IncrementalRunner | None = None
         self._incremental_runs: set[str] = set()
+        self._incremental_run_circuits: dict[str, str] = {}
         self._incremental_runs_lock = threading.Lock()
         if incremental_mode:
             self._incremental_runner = IncrementalRunner(
@@ -298,6 +299,7 @@ class DSperseManager:
         run_uid = self._incremental_runner.start_run(circuit, inputs)
         with self._incremental_runs_lock:
             self._incremental_runs.add(run_uid)
+            self._incremental_run_circuits[run_uid] = circuit.id
 
         if self.event_client:
             status = self._incremental_runner.get_run_status(run_uid)
@@ -360,11 +362,10 @@ class DSperseManager:
 
         with self._incremental_runs_lock:
             incremental_runs_snapshot = list(self._incremental_runs)
+            active_circuit_ids = set(self._incremental_run_circuits.values())
 
-        has_active_runs = False
         for run_uid in incremental_runs_snapshot:
             if not self._incremental_runner.is_complete(run_uid):
-                has_active_runs = True
                 requests = self.get_next_incremental_work(run_uid)
                 if requests:
                     logging.info(
@@ -372,12 +373,12 @@ class DSperseManager:
                     )
                     return requests
 
-        if has_active_runs:
+        available_circuits = [
+            c for c in self.circuits if c.id not in active_circuit_ids
+        ]
+        if not available_circuits:
             return []
-
-        if not self.circuits:
-            return []
-        circuit = random.choice(self.circuits)
+        circuit = random.choice(available_circuits)
         run_uid = self.start_incremental_run(circuit)
 
         requests = self.get_next_incremental_work(run_uid)
@@ -559,6 +560,7 @@ class DSperseManager:
 
         with self._incremental_runs_lock:
             self._incremental_runs.discard(run_uid)
+            self._incremental_run_circuits.pop(run_uid, None)
 
             if self.event_client:
                 status = (
