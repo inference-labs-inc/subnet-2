@@ -573,7 +573,10 @@ class ValidatorLoop:
         )
 
         self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
-        self.relay.stacked_requests_queue.put_nowait(queued)
+        if request.request_type == RequestType.RWR:
+            self.relay.rwr_queue.put_nowait(queued)
+        else:
+            self.relay.stacked_requests_queue.put_nowait(queued)
 
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
         if getattr(queued, "is_tile", False):
