@@ -300,7 +300,7 @@ def _validator_config():
     parser.add_argument(
         "--ignore-external-requests",
         type=lambda x: x.lower() == "true",
-        default=True,
+        default=False,
         help="Whether to ignore external requests.",
     )
 
