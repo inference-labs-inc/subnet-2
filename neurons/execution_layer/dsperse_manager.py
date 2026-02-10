@@ -361,14 +361,19 @@ class DSperseManager:
         with self._incremental_runs_lock:
             incremental_runs_snapshot = list(self._incremental_runs)
 
+        has_active_runs = False
         for run_uid in incremental_runs_snapshot:
             if not self._incremental_runner.is_complete(run_uid):
+                has_active_runs = True
                 requests = self.get_next_incremental_work(run_uid)
                 if requests:
                     logging.info(
                         f"Generating {len(requests)} work items for run {run_uid}"
                     )
                     return requests
+
+        if has_active_runs:
+            return []
 
         if not self.circuits:
             return []
