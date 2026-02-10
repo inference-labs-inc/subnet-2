@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import os
 from typing import Any, ClassVar, Optional
 
-import bittensor as bt
-import toml
 from execution_layer.circuit import ProofSystem
 from pydantic import BaseModel
 
@@ -79,43 +76,13 @@ class Competition(BaseModel):
         }
 
 
-# Note these are going to need to change to lighting.Synapse
-class QueryForCapacities(BaseModel):
-    """
-    Query for capacities allocated to each circuit
-    """
-
-    name: ClassVar = "capacities"
-    capacities: Optional[dict[str, int]] = None
-
-    def deserialize(self) -> Optional[dict[str, int]]:
-        """
-        Return the capacities
-        """
-        return self.capacities
-
-    @staticmethod
-    def from_config(config_path: str | None = None) -> dict[str, int]:
-        if config_path is None:
-            # Use env var if available, otherwise fall back to default config path
-            config_path = os.environ.get("MINER_CIRCUITS_CONFIG", "miner.config.toml")
-        try:
-            with open(config_path, "r") as f:
-                config = toml.load(f)
-                circuits = config.get("miner", {}).get("circuits", [])
-                return {
-                    circuit.get("id"): circuit.get("compute_units", 0)
-                    for circuit in circuits
-                    if "id" in circuit
-                }
-        except Exception as e:
-            bt.logging.error(f"Error loading capacities from config: {e}")
-            return {}
-
-
 class DSliceProofGenerationDataModel(BaseModel):
     """
-    Data model for conveying DSPERSE proof generation messages
+    Data model for conveying DSPERSE proof generation messages.
+
+    In standard mode, both inputs and outputs are provided by the validator.
+    In incremental mode (outputs=None), the miner computes outputs during
+    witness generation and returns them.
     """
 
     name: ClassVar = "dsperse-proof-generation"

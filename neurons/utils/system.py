@@ -147,10 +147,28 @@ def capture_environment() -> dict:
         ):
             return False
 
+    def get_sn2_version() -> Optional[str]:
+        try:
+            from utils.auto_update import get_version
+
+            return get_version()
+        except Exception:
+            return None
+
+    def get_dsperse_version() -> Optional[str]:
+        try:
+            import importlib.metadata
+
+            return importlib.metadata.version("dsperse")
+        except Exception:
+            return None
+
     jst_version = get_jst_version()
     ezkl_version = get_ezkl_version()
 
     env = {
+        "sn2_version": get_sn2_version(),
+        "dsperse_version": get_dsperse_version(),
         "jst_installed": jst_version is not None
         or shutil.which("jstprove") is not None,
         "jst_version": jst_version,

@@ -1,3 +1,4 @@
+import os
 import traceback
 
 # isort: off
@@ -16,8 +17,12 @@ if __name__ == "__main__":
     run_auto_update_check()
     run_shared_preflight_checks(Roles.VALIDATOR)
 
+    if os.environ.get("ENABLE_MEMORY_PROFILER"):
+        from utils.memory_profiler import start as start_memory_profiler
+
+        start_memory_profiler()
+
     try:
-        # Initialize the circuit store and load external models
         from deployment_layer.circuit_store import circuit_store
 
         circuit_store.load_circuits()

@@ -34,6 +34,9 @@ class MinerResponse:
     raw: dict | None = None
     error: str | None = None
     save: bool = False
+    computed_outputs: dict | None = None
+    is_incremental: bool = False
+    witness: str | None = None
 
     @classmethod
     def from_raw_response(
@@ -85,7 +88,6 @@ class MinerResponse:
             else:
                 proof_size = DEFAULT_PROOF_SIZE
         else:
-            # capacity requests don't have circuit associated
             proof_size = 0
 
         public_signals = deserialized_response.get("public_signals", "[]")
@@ -98,6 +100,10 @@ class MinerResponse:
         else:
             bt.logging.debug(f"Miner at {request.uid} did not return public signals.")
             public_json = None
+
+        witness_raw = deserialized_response.get("witness")
+        witness = witness_raw if isinstance(witness_raw, str) and witness_raw else None
+        is_incremental = witness is not None
 
         return cls(
             uid=request.uid,
@@ -115,6 +121,8 @@ class MinerResponse:
             save=request.save,
             dsperse_slice_num=request.dsperse_slice_num,
             dsperse_run_uid=request.dsperse_run_uid,
+            is_incremental=is_incremental,
+            witness=witness,
         )
 
     def to_log_dict(self, metagraph: bt.Metagraph) -> dict:  # type: ignore
@@ -125,9 +133,7 @@ class MinerResponse:
             "miner_key": metagraph.hotkeys[self.uid],
             "miner_uid": self.uid,
             "proof_model": (
-                self.circuit.metadata.name
-                if self.circuit is not None
-                else str(self.circuit.id)
+                self.circuit.metadata.name if self.circuit is not None else "Unknown"
             ),
             "proof_system": (
                 self.circuit.metadata.proof_system
@@ -138,7 +144,9 @@ class MinerResponse:
             "response_duration": self.response_time,
             "is_verified": self.verification_result,
             "external_request_hash": self.external_request_hash,
-            "request_type": self.request_type.value,
+            "request_type": (
+                self.request_type.value if self.request_type is not None else None
+            ),
             "error": self.error,
             "save": self.save,
         }

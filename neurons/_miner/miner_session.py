@@ -18,7 +18,6 @@ from protocol import (
     Competition,
     DSliceProofGenerationDataModel,
     ProofOfWeightsDataModel,
-    QueryForCapacities,
     QueryZkProof,
 )
 from rich.console import Console
@@ -73,9 +72,6 @@ class MinerSession:
         )
         self.server.register_route(
             path=f"/{Competition.name}", endpoint=self.handleCompetitionRequest
-        )
-        self.server.register_route(
-            path=f"/{QueryForCapacities.name}", endpoint=self.handleCapacityRequest
         )
         self.server.register_route(
             path=f"/{DSliceProofGenerationDataModel.name}",
@@ -247,12 +243,6 @@ class MinerSession:
             bt.logging.warning(f"Failed to sync metagraph: {e}")
             return False
 
-    def handleCapacityRequest(self) -> JSONResponse:
-        """
-        Handle capacity request from validators.
-        """
-        return JSONResponse(content=QueryForCapacities.from_config())
-
     def handleCompetitionRequest(self, data: Competition) -> JSONResponse:
         """
         Handle competition circuit requests from validators.
@@ -351,10 +341,16 @@ class MinerSession:
     def handleDSliceRequest(self, data: DSliceProofGenerationDataModel) -> JSONResponse:
         """
         Handle DSlice proof generation requests from validators.
+
+        In standard mode, both inputs and outputs are provided.
+        In incremental mode (outputs=None), the miner computes outputs during
+        witness generation and returns them.
         """
         try:
+            incremental = data.outputs is None
             bt.logging.info(
-                f"Handling DSlice proof generation request for slice_num={data.slice_num} run_uid={data.run_uid}"
+                f"Handling DSlice proof generation request for slice_num={data.slice_num} "
+                f"run_uid={data.run_uid} incremental={incremental}"
             )
 
             result = self.dsperse_manager.prove_slice(

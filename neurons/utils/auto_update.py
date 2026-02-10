@@ -14,6 +14,15 @@ import cli_parser
 TARGET_BRANCH = "main"
 
 
+def get_version() -> Optional[str]:
+    try:
+        repo = git.Repo(search_parent_directories=True)
+        tags = sorted(repo.tags, key=lambda t: t.commit.committed_datetime)
+        return tags[-1].name if tags else None
+    except Exception:
+        return None
+
+
 def run_auto_update_check():
     """
     Run auto-update check before preflight to avoid crash loops from broken preflight code.
