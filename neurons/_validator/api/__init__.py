@@ -52,6 +52,7 @@ class RelayManager:
         self.config = config
         # Queue of requests to be sent to miners (consumed by ValidatorLoop)
         self.stacked_requests_queue: asyncio.Queue = asyncio.Queue()
+        self.rwr_queue: asyncio.Queue = asyncio.Queue()
         self.pending_requests: dict[str, asyncio.Event] = {}
         self.request_results: dict[str, dict] = {}
         self.is_testnet = config.bt_config.subtensor.network == "test"
@@ -330,7 +331,7 @@ class RelayManager:
                 return InvalidParams(str(e))
 
             self.pending_requests[external_request.hash] = asyncio.Event()
-            self.stacked_requests_queue.put_nowait(external_request)
+            self.rwr_queue.put_nowait(external_request)
             bt.logging.success(
                 f"External request with hash {external_request.hash} added to queue"
             )

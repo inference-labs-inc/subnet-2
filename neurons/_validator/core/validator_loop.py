@@ -264,10 +264,7 @@ class ValidatorLoop:
                     await asyncio.sleep(1)
                     continue
 
-                if (
-                    self.relay.stacked_requests_queue.empty()
-                    and not self.dsperse_manager.has_work_in_flight()
-                ):
+                if self.relay.stacked_requests_queue.empty():
                     new_requests = list(self.dsperse_manager.generate_dslice_requests())
                     if new_requests:
                         bt.logging.info(
@@ -311,12 +308,19 @@ class ValidatorLoop:
                                 uid,
                                 pow_circuit,
                             )
+                        elif not self.relay.rwr_queue.empty():
+                            rwr_req = self.relay.rwr_queue.get_nowait()
+                            request = self.request_pipeline._prepare_queued_request(
+                                uid, rwr_req
+                            )
                         elif not self.relay.stacked_requests_queue.empty():
                             request = self.request_pipeline._prepare_queued_request(uid)
-                        else:
+                        elif random.random() < 0.1:
                             request = self.request_pipeline._prepare_benchmark_request(
                                 uid
                             )
+                        else:
+                            break
 
                         if not request:
                             bt.logging.warning(
