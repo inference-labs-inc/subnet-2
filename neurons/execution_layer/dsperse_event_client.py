@@ -65,6 +65,8 @@ class DsperseEventClient:
         circuit_name: str | None,
         total_slices: int,
         environment: dict | None,
+        total_tiles: int | None = None,
+        slice_tile_counts: dict[str, int] | None = None,
     ):
         await self.emit(
             {
@@ -73,6 +75,8 @@ class DsperseEventClient:
                 "circuit_id": circuit_id,
                 "circuit_name": circuit_name,
                 "total_slices": total_slices,
+                "total_tiles": total_tiles,
+                "slice_tile_counts": slice_tile_counts,
                 "environment": environment,
             }
         )

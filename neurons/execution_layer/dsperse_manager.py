@@ -240,14 +240,23 @@ class DSperseManager:
 
         logging.info(f"Generated {len(requests)} DSlice requests for run {run_uid}")
 
+        total_tiles = len(slice_data_list)
+        slice_tile_counts: dict[str, int] = {}
+        for s in slice_data_list:
+            parent = f"slice_{s.slice_num.split('_tile_')[0]}"
+            slice_tile_counts[parent] = slice_tile_counts.get(parent, 0) + 1
+        total_slices = len(slice_tile_counts)
+
         if self.event_client:
             self._schedule_async(
                 self.event_client.emit_run_started(
                     run_uid=run_uid,
                     circuit_id=circuit.id,
                     circuit_name=circuit.metadata.name,
-                    total_slices=len(slice_data_list),
+                    total_slices=total_slices,
                     environment=environment,
+                    total_tiles=total_tiles,
+                    slice_tile_counts=slice_tile_counts,
                 )
             )
             for slice_data in slice_data_list:
@@ -310,6 +319,10 @@ class DSperseManager:
                     circuit_name=circuit.metadata.name,
                     total_slices=status["total_slices"] if status else 0,
                     environment=capture_environment(),
+                    total_tiles=status["total_tiles"] if status else 0,
+                    slice_tile_counts=(
+                        status.get("slice_tile_counts") if status else None
+                    ),
                 )
             )
 

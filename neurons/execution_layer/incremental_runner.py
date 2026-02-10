@@ -57,6 +57,8 @@ class RunState:
     tensor_cache: dict[str, Any]
     execution_order: list[str]
     slice_metadata: dict[str, RunSliceMetadata]
+    total_tiles: int = 0
+    slice_tile_counts: dict[str, int] = field(default_factory=dict)
     current_idx: int = 0
     pending_work: dict[str, bool] = field(default_factory=dict)
     completed_slices: list[str] = field(default_factory=list)
@@ -206,6 +208,20 @@ class IncrementalRunner:
             if input_names:
                 tensor_cache[input_names[0]] = input_tensor
 
+        total_tiles = 0
+        slice_tile_counts: dict[str, int] = {}
+        for slice_id in execution_order:
+            node = run_metadata.execution_chain.nodes.get(slice_id)
+            meta = run_metadata.slices.get(slice_id)
+            if node and node.use_circuit:
+                count = (
+                    meta.tiling.num_tiles
+                    if meta and meta.tiling and meta.tiling.num_tiles > 1
+                    else 1
+                )
+                slice_tile_counts[slice_id] = count
+                total_tiles += count
+
         state = RunState(
             run_uid=run_uid,
             circuit=circuit,
@@ -213,11 +229,15 @@ class IncrementalRunner:
             tensor_cache=tensor_cache,
             execution_order=execution_order,
             slice_metadata={k: v for k, v in run_metadata.slices.items()},
+            total_tiles=total_tiles,
+            slice_tile_counts=slice_tile_counts,
             start_time=time.perf_counter(),
         )
 
         self._runs[run_uid] = state
-        logging.info(f"Run {run_uid} initialized with {len(execution_order)} slices")
+        logging.info(
+            f"Run {run_uid} initialized with {len(execution_order)} slices, {total_tiles} tiles"
+        )
         return run_uid
 
     def get_next_work(self, run_uid: str) -> Optional[list[WorkItem]]:
@@ -351,6 +371,7 @@ class IncrementalRunner:
             try:
                 if meta and meta.tiling and meta.tiling.num_tiles > 1:
                     self._reconstruct_from_tiles(state, slice_id, meta.tiling)
+                    self._cleanup_tile_cache(state, meta.tiling)
                 self._cleanup_extracted_slice(state, slice_id)
                 state.completed_slices.append(slice_id)
                 state.current_idx += 1
@@ -377,6 +398,8 @@ class IncrementalRunner:
             "run_uid": run_uid,
             "circuit_name": state.circuit.metadata.name,
             "total_slices": len(state.execution_order),
+            "total_tiles": state.total_tiles,
+            "slice_tile_counts": state.slice_tile_counts,
             "current_slice": state.current_slice_id,
             "completed": len(state.completed_slices),
             "failed": len(state.failed_slices),
@@ -630,6 +653,7 @@ class IncrementalRunner:
         )
 
         tile_executor.reconstruct_from_tiles(slice_id, tiling)
+        self._cleanup_tile_cache(state, tiling)
         logging.info(f"Completed {tiling.num_tiles} tiles for {slice_id}")
 
     def _create_work_items(
@@ -723,6 +747,24 @@ class IncrementalRunner:
         """Reconstruct full output from tile outputs."""
         tile_executor = TileExecutor(state.slices_path, state.tensor_cache)
         tile_executor.reconstruct_from_tiles(slice_id, tiling)
+
+    def _cleanup_tile_cache(self, state: RunState, tiling: TilingInfo) -> None:
+        """Remove tile_X_Y_in and tile_X_Y_out entries from tensor_cache after reconstruction."""
+        slice_idx = tiling.slice_idx
+        prefix_in = f"tile_{slice_idx}_"
+        removed = 0
+        keys_to_remove = [
+            k
+            for k in state.tensor_cache
+            if k.startswith(prefix_in) and (k.endswith("_in") or k.endswith("_out"))
+        ]
+        for k in keys_to_remove:
+            del state.tensor_cache[k]
+            removed += 1
+        if removed:
+            logging.info(
+                f"Cleaned {removed} tile cache entries for slice_idx={slice_idx}"
+            )
 
     def _on_complete(self, state: RunState) -> None:
         """Handle run completion."""
