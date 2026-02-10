@@ -24,6 +24,7 @@ from execution_layer.circuit import Circuit, CircuitType, ProofSystem
 import numpy as np
 
 from execution_layer.incremental_runner import IncrementalRunner
+from execution_layer.proof_uploader import upload_run_proofs
 from utils.system import capture_environment
 
 import cli_parser
@@ -677,7 +678,9 @@ class DSperseManager:
                     run.callback(run)
                 except Exception as e:
                     logging.error(f"Run callback failed: {e}")
-            self.cleanup_run(run_uid)
+            run_dir = run.run_dir
+            del self.runs[run_uid]
+            self._upload_proofs(run, run_dir)
 
         return run.is_complete
 
@@ -792,6 +795,37 @@ class DSperseManager:
             return signature.hex()
         except Exception:
             return ""
+
+    def _upload_proofs(self, run: DsperseRun, run_dir: Path):
+        api_url = getattr(cli_parser.config, "sn2_api_url", None)
+        if not api_url:
+            api_url = "https://sn2-api.inferencelabs.com"
+        hotkey = self._get_validator_hotkey()
+        if hotkey == "unknown":
+            if run_dir.exists():
+                shutil.rmtree(run_dir)
+            return
+
+        def sign_fn(body: str) -> str:
+            import base64
+
+            try:
+                wallet = cli_parser.config.wallet
+                sig = wallet.hotkey.sign(body.encode())
+                return base64.b64encode(sig).decode()
+            except Exception:
+                return ""
+
+        upload_run_proofs(
+            run_uid=run.run_uid,
+            circuit_id=run.circuit_id,
+            circuit_name=run.circuit_name,
+            slices=run.slices,
+            validator_key=hotkey,
+            sign_fn=sign_fn,
+            api_url=api_url,
+            run_dir=run_dir,
+        )
 
     def get_run_status(self, run_uid: str) -> dict | None:
         if run_uid not in self.runs:

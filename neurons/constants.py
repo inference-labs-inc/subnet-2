@@ -191,6 +191,9 @@ CIRCUIT_METADATA_FILENAME = "circuit_metadata.json"
 # SN2 Relay WebSocket URLs
 SN2_RELAY_URL = os.getenv("SN2_RELAY_URL", "wss://sn2-relay.inferencelabs.com:8443")
 
+GCS_PROOF_BUCKET = os.getenv("GCS_PROOF_BUCKET", "sn2-dsperse-proofs")
+GCS_PROOF_CREDENTIALS = os.getenv("GCS_PROOF_CREDENTIALS", "")
+
 # Relay reconnection settings
 RELAY_RECONNECT_BASE_DELAY = 1  # seconds
 RELAY_RECONNECT_MAX_DELAY = 60  # seconds
