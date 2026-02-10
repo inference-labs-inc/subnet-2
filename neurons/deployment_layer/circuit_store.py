@@ -235,6 +235,11 @@ class CircuitStore:
     def refresh_circuits(self):
         try:
             circuits_data = self._fetch_circuits_from_api()
+            active_ids = {c["id"] for c in circuits_data if c.get("id")}
+
+            additional = getattr(cli_parser.config, "additional_circuits", None) or []
+            active_ids.update(additional)
+
             existing_ids = set(self.circuits.keys())
             self._load_from_api(circuits_data)
             new_ids = set(self.circuits.keys()) - existing_ids
@@ -247,6 +252,13 @@ class CircuitStore:
                         break
                 bt.logging.info(
                     f"Found new circuit: {circuit.metadata.name} v{circuit.metadata.version} ({file_count} files)"
+                )
+
+            removed_ids = set(self.circuits.keys()) - active_ids
+            for circuit_id in removed_ids:
+                circuit = self.circuits.pop(circuit_id)
+                bt.logging.info(
+                    f"Removed deactivated circuit: {circuit.metadata.name} v{circuit.metadata.version} ({circuit_id})"
                 )
         except Exception as e:
             bt.logging.warning(f"Failed to refresh circuits from API: {e}")
