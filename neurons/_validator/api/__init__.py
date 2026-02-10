@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import copy
 import json
 import traceback
 from pathlib import Path
@@ -22,6 +23,7 @@ from websockets.exceptions import ConnectionClosed
 
 from _validator.config import ValidatorConfig
 from _validator.models.poc_rpc_request import ProofOfComputationRPCRequest
+from _validator.models.request_type import RequestType
 from constants import (
     EXTERNAL_REQUEST_QUEUE_TIME_SECONDS,
     RELAY_AUTH_TIMEOUT,
@@ -331,6 +333,16 @@ class RelayManager:
                 )
                 return InvalidParams(str(e))
 
+            try:
+                external_request.circuit.input_handler(
+                    RequestType.RWR, copy.deepcopy(external_request.inputs)
+                )
+            except (ValueError, TypeError) as e:
+                bt.logging.warning(
+                    f"Input validation failed for circuit {circuit_id}: {e}"
+                )
+                return InvalidParams(f"Invalid input shape: {e}")
+
             self.pending_requests[external_request.hash] = asyncio.Event()
             self.rwr_queue.put_nowait(external_request)
             bt.logging.success(
@@ -380,6 +392,15 @@ class RelayManager:
             circuit = circuit_store.ensure_circuit(circuit_id)
             if not self.dsperse_manager:
                 return Error(10, "DSperse manager not initialized")
+
+            if circuit.metadata.input_schema:
+                try:
+                    circuit.input_handler(RequestType.RWR, copy.deepcopy(inputs))
+                except (ValueError, TypeError) as e:
+                    bt.logging.warning(
+                        f"Input validation failed for circuit {circuit_id}: {e}"
+                    )
+                    return InvalidParams(f"Invalid input shape: {e}")
 
             bt.logging.info(f"Starting DSperse run for circuit {circuit_id}")
 
