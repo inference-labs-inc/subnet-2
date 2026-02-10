@@ -208,20 +208,6 @@ class IncrementalRunner:
             if input_names:
                 tensor_cache[input_names[0]] = input_tensor
 
-        total_tiles = 0
-        slice_tile_counts: dict[str, int] = {}
-        for slice_id in execution_order:
-            node = run_metadata.execution_chain.nodes.get(slice_id)
-            meta = run_metadata.slices.get(slice_id)
-            if node and node.use_circuit:
-                count = (
-                    meta.tiling.num_tiles
-                    if meta and meta.tiling and meta.tiling.num_tiles > 1
-                    else 1
-                )
-                slice_tile_counts[slice_id] = count
-                total_tiles += count
-
         state = RunState(
             run_uid=run_uid,
             circuit=circuit,
@@ -229,10 +215,23 @@ class IncrementalRunner:
             tensor_cache=tensor_cache,
             execution_order=execution_order,
             slice_metadata={k: v for k, v in run_metadata.slices.items()},
-            total_tiles=total_tiles,
-            slice_tile_counts=slice_tile_counts,
             start_time=time.perf_counter(),
         )
+
+        total_tiles = 0
+        slice_tile_counts: dict[str, int] = {}
+        for slice_id in execution_order:
+            meta = run_metadata.slices.get(slice_id)
+            if meta and self._has_circuits(state, slice_id, meta):
+                count = (
+                    meta.tiling.num_tiles
+                    if meta.tiling and meta.tiling.num_tiles > 1
+                    else 1
+                )
+                slice_tile_counts[slice_id] = count
+                total_tiles += count
+        state.total_tiles = total_tiles
+        state.slice_tile_counts = slice_tile_counts
 
         self._runs[run_uid] = state
         logging.info(
