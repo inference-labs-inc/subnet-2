@@ -622,6 +622,7 @@ class DSperseManager:
 
         output_tensor = None
         circuit_id = None
+        run_source = None
         with self._incremental_runs_lock:
             circuit_id = self._incremental_run_circuits.get(run_uid)
             self._incremental_runs.discard(run_uid)
@@ -645,11 +646,12 @@ class DSperseManager:
 
             if self._incremental_runner and success:
                 output_tensor = self._incremental_runner.get_final_output(run_uid)
+                run_source = self._incremental_runner.get_run_source(run_uid)
 
             if self._incremental_runner:
                 self._incremental_runner.cleanup_run(run_uid)
 
-        if output_tensor is not None and circuit_id:
+        if output_tensor is not None and circuit_id and run_source == RunSource.API:
             from execution_layer.proof_uploader import upload_final_output
 
             final_output = (

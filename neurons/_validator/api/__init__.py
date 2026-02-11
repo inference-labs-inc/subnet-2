@@ -284,7 +284,7 @@ class RelayManager:
                         }
                     )
 
-        if proof_artifacts:
+        if proof_artifacts and run.run_source == RunSource.API:
             import threading
             from execution_layer.proof_uploader import upload_run_proofs
 
