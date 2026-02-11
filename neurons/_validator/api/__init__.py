@@ -58,6 +58,7 @@ class RelayManager:
         self.request_results: dict[str, dict] = {}
         self.is_testnet = config.bt_config.subtensor.network == "test"
         self.dsperse_manager: DSperseManager | None = None
+        self.dispatch_event: asyncio.Event | None = None
 
         # WebSocket client state
         self._ws: websockets.WebSocketClientProtocol | None = None
@@ -416,6 +417,8 @@ class RelayManager:
 
             for request in requests:
                 self.stacked_requests_queue.put_nowait(request)
+            if self.dispatch_event:
+                self.dispatch_event.set()
 
             status = self.dsperse_manager.get_run_status(run_uid)
             bt.logging.success(

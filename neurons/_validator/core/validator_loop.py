@@ -109,6 +109,7 @@ class ValidatorLoop:
         self.last_pow_commit_block = 0
         self.relay = RelayManager(self.config)
         self.relay.dsperse_manager = self.dsperse_manager
+        self.relay.dispatch_event = self._dispatch_event
         self.request_pipeline = RequestPipeline(
             self.config, self.score_manager, self.relay
         )
@@ -122,6 +123,7 @@ class ValidatorLoop:
         self.last_periodic_task_time = time.time()
         self._task_counter = 0
 
+        self._dispatch_event = asyncio.Event()
         self._should_run = True
 
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=16)
@@ -261,7 +263,11 @@ class ValidatorLoop:
                 slots_available = self.current_concurrency - len(self.active_tasks)
 
                 if not slots_available:
-                    await asyncio.sleep(1)
+                    self._dispatch_event.clear()
+                    try:
+                        await asyncio.wait_for(self._dispatch_event.wait(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        pass
                     continue
 
                 if self.relay.stacked_requests_queue.empty():
@@ -352,7 +358,14 @@ class ValidatorLoop:
 
                         requests_sent += 1
 
-                await asyncio.sleep(0)
+                if requests_sent == 0:
+                    self._dispatch_event.clear()
+                    try:
+                        await asyncio.wait_for(self._dispatch_event.wait(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    await asyncio.sleep(0)
             except Exception as e:
                 bt.logging.error(f"Error maintaining request pool: {e}")
                 traceback.print_exc()
@@ -369,6 +382,8 @@ class ValidatorLoop:
 
         if uid in self.miner_active_count:
             self.miner_active_count[uid] = max(0, self.miner_active_count[uid] - 1)
+
+        self._dispatch_event.set()
 
     async def run_periodic_tasks(self):
         while self._should_run:
