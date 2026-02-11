@@ -342,16 +342,16 @@ class IncrementalRunner:
         if not success:
             logging.warning(f"Task {task_id} failed from miner: {error}")
             try:
-                fallback_output = self._run_onnx_for_failed_task(state, task_id)
+                self._run_onnx_for_failed_task(state, task_id)
                 state.onnx_fallback_tasks.add(task_id)
                 logging.warning(f"ONNX fallback succeeded for {task_id}")
-                output = fallback_output
-                slice_id = state.current_slice_id
                 if self._on_tile_onnx_fallback:
                     tile_idx = (
                         int(task_id.split("_tile_")[1]) if "_tile_" in task_id else -1
                     )
-                    self._on_tile_onnx_fallback(run_uid, slice_id, task_id, tile_idx)
+                    self._on_tile_onnx_fallback(
+                        run_uid, state.current_slice_id, task_id, tile_idx
+                    )
             except Exception as onnx_err:
                 logging.error(f"ONNX fallback also failed for {task_id}: {onnx_err}")
                 state.failed_tasks.add(task_id)
@@ -591,6 +591,8 @@ class IncrementalRunner:
             raise ValueError(f"No metadata for {slice_id}")
 
         if "_tile_" in task_id:
+            if not meta.tiling:
+                raise ValueError(f"Missing tiling metadata for slice {slice_id}")
             tile_idx = int(task_id.split("_tile_")[1])
             cache_name = f"tile_{meta.tiling.slice_idx}_{tile_idx}_in"
             tile_input = state.tensor_cache.get(cache_name)
