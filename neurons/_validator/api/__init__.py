@@ -259,7 +259,7 @@ class RelayManager:
 
     def _on_run_complete(self, run: DsperseRun) -> None:
         """Callback invoked by DSperseManager when all slices finish (before cleanup)."""
-        proofs = []
+        proof_artifacts = []
         for slice_num, slice_data in run.slices.items():
             if not slice_data.success:
                 continue
@@ -268,13 +268,31 @@ class RelayManager:
                     slice_data.proof_file, slice_data.proof_system
                 )
                 if proof_content is not None:
-                    proofs.append(
+                    parent_slice = None
+                    tile_idx = None
+                    if "_tile_" in slice_num:
+                        parts = slice_num.split("_tile_")
+                        parent_slice = parts[0]
+                        tile_idx = int(parts[1])
+                    proof_artifacts.append(
                         {
                             "slice_num": slice_data.slice_num,
                             "proof_system": slice_data.proof_system.value,
-                            "proof": proof_content,
+                            "proof_data": proof_content,
+                            "parent_slice": parent_slice,
+                            "tile_idx": tile_idx,
                         }
                     )
+
+        if proof_artifacts:
+            import threading
+            from execution_layer.proof_uploader import upload_run_proofs
+
+            threading.Thread(
+                target=upload_run_proofs,
+                args=(run.run_uid, run.circuit_id, run.circuit_name, proof_artifacts),
+                daemon=True,
+            ).start()
 
         notification = {
             "jsonrpc": "2.0",
@@ -283,7 +301,6 @@ class RelayManager:
                 "run_uid": run.run_uid,
                 "circuit_id": run.circuit_id,
                 "status": "completed" if not run.failed else "completed_with_errors",
-                "proofs": proofs,
                 "completed": len(run.completed),
                 "failed": len(run.failed),
                 "total": len(run.slices),
