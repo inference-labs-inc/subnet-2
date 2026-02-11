@@ -144,7 +144,11 @@ def upload_run_proofs(
         logger.error(f"Failed to request upload URLs for run {run_uid}: {e}")
         return False
 
-    url_map = {(u["slice_num"], u["artifact_type"]): u for u in url_responses}
+    try:
+        url_map = {(u["slice_num"], u["artifact_type"]): u for u in url_responses}
+    except (KeyError, TypeError) as e:
+        logger.error(f"Malformed upload URL response for run {run_uid}: {e}")
+        return False
 
     confirm_artifacts = []
     ok = True
@@ -169,6 +173,7 @@ def upload_run_proofs(
                     logger.warning(
                         f"Unknown proof data type for {key}: {type(proof_data)}"
                     )
+                    ok = False
                     continue
 
                 uploaded = upload_artifact_bytes(
