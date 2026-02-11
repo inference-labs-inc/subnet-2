@@ -1,8 +1,14 @@
 from __future__ import annotations
+from collections import deque
 from dataclasses import dataclass, field
+import json
+import os
 import torch
 import bittensor as bt
 from constants import (
+    PERFORMANCE_CURVE_POWER,
+    PERFORMANCE_MIN_SAMPLES,
+    PERFORMANCE_WINDOW_SIZE,
     WEIGHT_RATE_LIMIT,
     WEIGHTS_VERSION,
     ONE_MINUTE,
@@ -14,6 +20,58 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from _validator.scoring.score_manager import ScoreManager
+
+
+class PerformanceTracker:
+    def __init__(
+        self,
+        window_size: int = PERFORMANCE_WINDOW_SIZE,
+        persistence_path: str | None = None,
+    ):
+        self.window_size = window_size
+        self.windows: dict[int, deque[bool]] = {}
+        self.persistence_path = persistence_path
+        self._load()
+
+    def record(self, uid: int, success: bool) -> None:
+        if uid not in self.windows:
+            self.windows[uid] = deque(maxlen=self.window_size)
+        self.windows[uid].append(success)
+
+    def success_rate(self, uid: int) -> float:
+        if uid not in self.windows or len(self.windows[uid]) == 0:
+            return 0.0
+        return sum(self.windows[uid]) / len(self.windows[uid])
+
+    def sample_count(self, uid: int) -> int:
+        if uid not in self.windows:
+            return 0
+        return len(self.windows[uid])
+
+    def save(self) -> None:
+        if not self.persistence_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.persistence_path), exist_ok=True)
+            with open(self.persistence_path, "w") as f:
+                json.dump(
+                    {str(uid): list(window) for uid, window in self.windows.items()},
+                    f,
+                )
+        except Exception as e:
+            bt.logging.error(f"Failed to save performance tracker: {e}")
+
+    def _load(self) -> None:
+        if not self.persistence_path or not os.path.exists(self.persistence_path):
+            return
+        try:
+            with open(self.persistence_path, "r") as f:
+                data = json.load(f)
+            for uid_str, results in data.items():
+                self.windows[int(uid_str)] = deque(results, maxlen=self.window_size)
+            bt.logging.info(f"Loaded performance tracker with {len(self.windows)} UIDs")
+        except Exception as e:
+            bt.logging.error(f"Failed to load performance tracker: {e}")
 
 
 @dataclass
@@ -39,6 +97,17 @@ class WeightsManager:
     last_update_weights_block: int = 0
     proof_of_weights_queue: list[ProofOfWeightsItem] = field(default_factory=list)
     score_manager: "ScoreManager" = None
+    performance_tracker: PerformanceTracker = field(default=None)
+
+    def __post_init__(self):
+        if self.performance_tracker is None:
+            tracker_path = os.path.join(
+                os.path.expanduser("~"),
+                ".bittensor",
+                "subnet-2",
+                "performance_tracker.json",
+            )
+            self.performance_tracker = PerformanceTracker(persistence_path=tracker_path)
 
     def set_weights(self, netuid, wallet, uids, weights, version_key):
         return self.subtensor.set_weights(
@@ -46,7 +115,7 @@ class WeightsManager:
             wallet=wallet,
             uids=uids,
             weights=weights,
-            wait_for_inclusion=False,  # Don't block waiting for blockchain confirmation
+            wait_for_inclusion=False,
             version_key=version_key,
         )
 
@@ -66,6 +135,24 @@ class WeightsManager:
 
         return True, ""
 
+    def _compute_performance_weights(self, scores: torch.Tensor) -> torch.Tensor:
+        n = self.metagraph.n
+        weights = torch.zeros(n)
+
+        for uid in range(n):
+            samples = self.performance_tracker.sample_count(uid)
+            if samples >= PERFORMANCE_MIN_SAMPLES:
+                rate = self.performance_tracker.success_rate(uid)
+                weights[uid] = rate**PERFORMANCE_CURVE_POWER
+            elif uid < len(scores) and scores[uid] > 0:
+                weights[uid] = float(scores[uid])
+
+        total = weights.sum()
+        if total > 0:
+            weights = weights / total
+
+        return weights
+
     def update_weights(self, scores: torch.Tensor) -> bool:
         """Updates the weights based on the given scores and sets them on the chain."""
         should_update, message = self.should_update_weights()
@@ -75,13 +162,21 @@ class WeightsManager:
 
         bt.logging.info("Updating weights")
 
-        weights = torch.zeros(self.metagraph.n)
-        nonzero_indices = scores.nonzero()
-        bt.logging.debug(
-            f"Weights: {weights}, Nonzero indices: {nonzero_indices}, Scores: {scores}"
-        )
-        if nonzero_indices.sum() > 0:
-            weights[nonzero_indices] = scores[nonzero_indices]
+        weights = self._compute_performance_weights(scores)
+
+        tracker = self.performance_tracker
+        tracked_uids = [
+            uid
+            for uid in range(self.metagraph.n)
+            if tracker.sample_count(uid) >= PERFORMANCE_MIN_SAMPLES
+        ]
+        if tracked_uids:
+            rates = {uid: tracker.success_rate(uid) for uid in tracked_uids}
+            top = sorted(rates.items(), key=lambda x: x[1], reverse=True)[:5]
+            bt.logging.info(
+                f"Performance tracker: {len(tracked_uids)} UIDs tracked, "
+                f"top 5: {[(uid, f'{rate:.2%}') for uid, rate in top]}"
+            )
 
         owner_hotkey = self.subtensor.get_subnet_owner_hotkey(self.metagraph.netuid)
         if owner_hotkey and owner_hotkey in self.metagraph.hotkeys:
@@ -105,6 +200,7 @@ class WeightsManager:
                 bt.logging.success("Weights were set successfully")
                 log_weights(weights)
                 self.last_update_weights_block = int(self.metagraph.block.item())
+                self.performance_tracker.save()
                 return True
             return False
 

@@ -542,6 +542,8 @@ class ValidatorLoop:
         finally:
             if response:
                 await self._handle_response(response)
+            else:
+                self.weights_manager.performance_tracker.record(request.uid, False)
 
     def _reschedule_request(self, request: Request) -> None:
         """
@@ -742,6 +744,10 @@ class ValidatorLoop:
                     is_testnet=self.config.subnet_uid == 118,
                     proof_filename=request_hash,
                 )
+
+            self.weights_manager.performance_tracker.record(
+                response.uid, response.verification_result
+            )
 
             old_score = self.score_manager._get_safe_score(response.uid)
             self.score_manager.update_single_score(response, self.queryable_uids)

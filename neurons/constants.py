@@ -184,6 +184,10 @@ EMA_BOOST_FACTOR = 1.2
 # EMA enabled flag
 EMA_ENABLED = False
 
+PERFORMANCE_WINDOW_SIZE = 20
+PERFORMANCE_CURVE_POWER = 2.0
+PERFORMANCE_MIN_SAMPLES = 5
+
 CIRCUIT_API_URL = os.getenv("CIRCUIT_API_URL", "https://repository.inferencelabs.com")
 CIRCUIT_R2_BASE_URL = os.getenv(
     "CIRCUIT_R2_BASE_URL", "https://dsperse.inferencelabs.com"
