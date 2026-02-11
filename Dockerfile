@@ -59,7 +59,6 @@ RUN cd /opt/subnet-2 && \
     chmod -R 775 /opt/subnet-2/.venv
 ENV PATH="/opt/subnet-2/.venv/bin:${PATH}"
 
-# Set workdir for running miner.py or validator.py and compile circuits
 WORKDIR /opt/subnet-2/neurons
 ENV SUBNET_2_NO_AUTO_UPDATE=1
 RUN SUBNET_2_DOCKER_BUILD=1 /opt/subnet-2/.venv/bin/python3 miner.py && \
