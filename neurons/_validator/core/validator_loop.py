@@ -90,7 +90,6 @@ class ValidatorLoop:
 
         self.dsperse_manager = DSperseManager(
             event_client=self.dsperse_event_client,
-            incremental_mode=True,
         )
 
         self.score_manager = ScoreManager(
@@ -606,15 +605,11 @@ class ValidatorLoop:
                 tile_idx=tile_idx,
                 success=False,
             )
-        elif self.dsperse_manager.is_incremental_run(queued.run_uid):
+        else:
             self.dsperse_manager.on_incremental_slice_result(
                 run_uid=queued.run_uid,
                 slice_num=str(queued.slice_num),
                 success=False,
-            )
-        else:
-            self.dsperse_manager.on_slice_result(
-                queued.run_uid, str(queued.slice_num), success=False
             )
 
     def _mark_dslice_complete(self, response: MinerResponse) -> None:
@@ -659,9 +654,7 @@ class ValidatorLoop:
                 bt.logging.info(
                     f"Queued {len(next_requests)} items for {run_uid} (size now: {queue.qsize()})"
                 )
-        elif response.is_incremental or self.dsperse_manager.is_incremental_run(
-            run_uid
-        ):
+        else:
             is_complete, next_request = (
                 self.dsperse_manager.on_incremental_slice_result(
                     run_uid=run_uid,
@@ -676,14 +669,6 @@ class ValidatorLoop:
             if next_request and not is_complete:
                 self.relay.stacked_requests_queue.put_nowait(next_request)
                 bt.logging.debug(f"Queued next incremental slice for run {run_uid}")
-        else:
-            self.dsperse_manager.on_slice_result(
-                run_uid,
-                str(slice_num),
-                success=True,
-                response_time_sec=response.response_time,
-                verification_time_sec=response.verification_time or 0.0,
-            )
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """

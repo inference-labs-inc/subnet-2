@@ -6,13 +6,11 @@ import contextlib
 import copy
 import json
 import traceback
-from pathlib import Path
 
 import bittensor as bt
 import websockets
 from deployment_layer.circuit_store import circuit_store
-from execution_layer.circuit import ProofSystem
-from execution_layer.dsperse_manager import DSperseManager, DsperseRun
+from execution_layer.dsperse_manager import DSperseManager
 from jsonrpcserver import (
     Error,
     InvalidParams,
@@ -257,72 +255,6 @@ class RelayManager:
                 self._pending_notifications.insert(0, notification)
                 break
 
-    def _on_run_complete(self, run: DsperseRun) -> None:
-        """Callback invoked by DSperseManager when all slices finish (before cleanup)."""
-        proof_artifacts = []
-        for slice_num, slice_data in run.slices.items():
-            if not slice_data.success:
-                continue
-            if slice_data.proof_file and slice_data.proof_file.exists():
-                proof_content = self._read_proof_file(
-                    slice_data.proof_file, slice_data.proof_system
-                )
-                if proof_content is not None:
-                    parent_slice = None
-                    tile_idx = None
-                    if "_tile_" in slice_num:
-                        parts = slice_num.split("_tile_")
-                        parent_slice = parts[0]
-                        tile_idx = int(parts[1])
-                    proof_artifacts.append(
-                        {
-                            "slice_num": slice_data.slice_num,
-                            "proof_system": slice_data.proof_system.value,
-                            "proof_data": proof_content,
-                            "parent_slice": parent_slice,
-                            "tile_idx": tile_idx,
-                        }
-                    )
-
-        if proof_artifacts and run.run_source == RunSource.API:
-            import threading
-            from execution_layer.proof_uploader import upload_run_proofs
-
-            threading.Thread(
-                target=upload_run_proofs,
-                args=(run.run_uid, run.circuit_id, run.circuit_name, proof_artifacts),
-                daemon=True,
-            ).start()
-
-        notification = {
-            "jsonrpc": "2.0",
-            "method": "subnet-2.batch_completed",
-            "params": {
-                "run_uid": run.run_uid,
-                "circuit_id": run.circuit_id,
-                "status": "completed" if not run.failed else "completed_with_errors",
-                "completed": len(run.completed),
-                "failed": len(run.failed),
-                "total": len(run.slices),
-            },
-        }
-        self._pending_notifications.append(notification)
-
-    def _read_proof_file(
-        self, proof_file: Path, proof_system: ProofSystem
-    ) -> dict | str | None:
-        """Read proof content from file based on proof system."""
-        try:
-            if proof_system == ProofSystem.JSTPROVE:
-                with open(proof_file, "rb") as f:
-                    return f.read().hex()
-            else:
-                with open(proof_file, "r") as f:
-                    return json.load(f)
-        except Exception as e:
-            bt.logging.error(f"Error reading proof file {proof_file}: {e}")
-            return None
-
     async def handle_proof_of_computation(self, **params: dict) -> dict:
         """
         Handle subnet-2.proof_of_computation RPC method.
@@ -424,12 +356,16 @@ class RelayManager:
 
             self.dsperse_manager.abort_benchmark_runs()
 
-            run_uid, requests = await asyncio.to_thread(
-                self.dsperse_manager.start_run,
+            run_uid = await asyncio.to_thread(
+                self.dsperse_manager.start_incremental_run,
                 circuit,
                 inputs,
-                callback=self._on_run_complete,
-                run_source=RunSource.API,
+                RunSource.API,
+            )
+
+            requests = await asyncio.to_thread(
+                self.dsperse_manager.get_next_incremental_work,
+                run_uid,
             )
 
             for request in requests:

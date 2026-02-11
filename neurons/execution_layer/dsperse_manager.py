@@ -5,22 +5,18 @@ import random
 import shutil
 import tempfile
 import threading
-from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 import torch
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
-from dsperse.src.analyzers.schema import ExecutionInfo, ExecutionMethod, RunMetadata
 import time
 
 from dsperse.src.backends.ezkl import EZKL
 from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.run.runner import Runner
 from dsperse.src.slice.utils.converter import Converter
-from dsperse.src.verify.verifier import Verifier
 from constants import RunSource
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
 import numpy as np
@@ -30,7 +26,6 @@ from utils.system import capture_environment
 
 import cli_parser
 from _validator.models.dslice_request import DSliceQueuedProofRequest
-from _validator.models.request_type import RequestType
 
 from typing import TYPE_CHECKING
 
@@ -38,93 +33,25 @@ if TYPE_CHECKING:
     from execution_layer.dsperse_event_client import DsperseEventClient
 
 
-@dataclass
-class SliceTimingData:
-    slice_num: str
-    proof_system: Optional[str] = None
-    backend_used: Optional[str] = None
-    witness_time_sec: float = 0.0
-    response_time_sec: float = 0.0
-    verification_time_sec: float = 0.0
-    is_tiled: bool = False
-    tile_count: Optional[int] = None
-    memory_peak_mb: float = 0.0
-    success: bool = False
-    error: Optional[str] = None
-
-
-@dataclass
-class DSliceData:
-    slice_num: str
-    circuit_id: str
-    input_file: Path
-    output_file: Path
-    proof_system: ProofSystem
-    witness_file: Path | None = None
-    proof_file: Path | None = None
-    success: bool | None = None
-    timing: SliceTimingData | None = None
-
-
-@dataclass
-class DsperseRun:
-    run_uid: str
-    circuit_id: str
-    run_dir: Path
-    slices: dict[str, DSliceData] = field(default_factory=dict)
-    pending: set[str] = field(default_factory=set)
-    completed: set[str] = field(default_factory=set)
-    failed: set[str] = field(default_factory=set)
-    callback: Callable[["DsperseRun"], None] | None = None
-    environment: dict = field(default_factory=dict)
-    start_time: float = 0.0
-    circuit_name: str = ""
-    run_source: RunSource = RunSource.BENCHMARK
-
-    @property
-    def is_complete(self) -> bool:
-        return len(self.pending) == 0
-
-    @property
-    def all_successful(self) -> bool:
-        return self.is_complete and len(self.failed) == 0
-
-
 class DSperseManager:
     def __init__(
         self,
         event_client: "DsperseEventClient | None" = None,
-        lazy: bool = False,
-        incremental_mode: bool = True,
     ):
-        """
-        Initialize DSperseManager.
-
-        Args:
-            event_client: Optional event client for telemetry
-            lazy: If True, extract slices on-demand
-            incremental_mode: If True, use incremental execution where miners
-                             compute outputs
-        """
         self.circuits: list[Circuit] = [
             circuit
             for circuit in circuit_store.circuits.values()
             if circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION
         ]
-        self.runs: dict[str, DsperseRun] = {}
         self.event_client = event_client
-        self.lazy = lazy
-        self.incremental_mode = incremental_mode
-        self._incremental_runner: IncrementalRunner | None = None
+        self._incremental_runner = IncrementalRunner(
+            on_run_complete=self._on_incremental_run_complete,
+            on_jstprove_range_fallback=self._on_jstprove_range_fallback,
+            on_tile_onnx_fallback=self._on_tile_onnx_fallback,
+        )
         self._incremental_runs: set[str] = set()
         self._incremental_run_circuits: dict[str, str] = {}
         self._incremental_runs_lock = threading.Lock()
-        if incremental_mode:
-            self._incremental_runner = IncrementalRunner(
-                on_run_complete=self._on_incremental_run_complete,
-                on_jstprove_range_fallback=self._on_jstprove_range_fallback,
-                on_tile_onnx_fallback=self._on_tile_onnx_fallback,
-            )
         self._purge_old_runs()
 
     @staticmethod
@@ -164,132 +91,10 @@ class DSperseManager:
             self.circuits.append(circuit)
         return circuit
 
-    def start_run(
-        self,
-        circuit: Circuit,
-        inputs: dict | None = None,
-        callback: Callable[[DsperseRun], None] | None = None,
-        run_source: RunSource = RunSource.BENCHMARK,
-    ) -> tuple[str, list[DSliceQueuedProofRequest]]:
-        run_uid = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        start_time = time.perf_counter()
-        logging.info(
-            f"Starting DSperse run for circuit {circuit.metadata.name}. Run UID: {run_uid}"
-        )
-
-        environment = capture_environment()
-
-        run_dir = Path(tempfile.mkdtemp(prefix=f"dsperse_run_{run_uid}_"))
-
-        input_json_path = run_dir / "input.json"
-        if inputs is None:
-            inputs = circuit.input_handler(RequestType.BENCHMARK).generate()
-        with open(input_json_path, "w") as f:
-            json.dump(inputs, f)
-
-        runner = Runner(
-            run_dir=run_dir, threads=os.cpu_count() or 4, batch=True, lazy=self.lazy
-        )
-        results = runner.run(
-            input_json_path=input_json_path,
-            slice_path=str(circuit.paths.base_path),
-        )
-        actual_run_dir = runner.last_run_dir
-        logging.debug(f"DSperse run completed. Results at {actual_run_dir}")
-
-        slice_results: dict[str, ExecutionInfo] = results.get("slice_results", {})
-        if not all(info.success for info in slice_results.values()):
-            failed = [k for k, v in slice_results.items() if not v.success]
-            logging.error(f"DSperse witness generation failed for slices: {failed}")
-            shutil.rmtree(run_dir, ignore_errors=True)
-            return run_uid, []
-
-        slice_data_list = self._extract_dslice_data(
-            slice_results,
-            actual_run_dir,
-            circuit.id,
-            runner.run_metadata,
-            tensor_cache=runner.tensor_cache,
-        )
-
-        dsperse_run = DsperseRun(
-            run_uid=run_uid,
-            circuit_id=circuit.id,
-            run_dir=run_dir,
-            slices={s.slice_num: s for s in slice_data_list},
-            pending={s.slice_num for s in slice_data_list},
-            callback=callback,
-            environment=environment,
-            start_time=start_time,
-            circuit_name=circuit.metadata.name,
-            run_source=run_source,
-        )
-        self.runs[run_uid] = dsperse_run
-
-        requests = []
-        for slice_data in slice_data_list:
-            with open(slice_data.input_file, "r") as f:
-                slice_inputs = json.load(f)
-            with open(slice_data.output_file, "r") as f:
-                slice_outputs = json.load(f)
-
-            requests.append(
-                DSliceQueuedProofRequest(
-                    circuit=circuit,
-                    inputs=slice_inputs,
-                    outputs=slice_outputs,
-                    slice_num=slice_data.slice_num,
-                    run_uid=run_uid,
-                    proof_system=slice_data.proof_system,
-                )
-            )
-
-        logging.info(f"Generated {len(requests)} DSlice requests for run {run_uid}")
-
-        total_tiles = len(slice_data_list)
-        slice_tile_counts: dict[str, int] = {}
-        for s in slice_data_list:
-            parent = f"slice_{s.slice_num.split('_tile_')[0]}"
-            slice_tile_counts[parent] = slice_tile_counts.get(parent, 0) + 1
-        total_slices = len(slice_tile_counts)
-
-        if self.event_client:
-            self._schedule_async(
-                self.event_client.emit_run_started(
-                    run_uid=run_uid,
-                    circuit_id=circuit.id,
-                    circuit_name=circuit.metadata.name,
-                    total_slices=total_slices,
-                    environment=environment,
-                    total_tiles=total_tiles,
-                    slice_tile_counts=slice_tile_counts,
-                    run_source=run_source.value,
-                )
-            )
-            for slice_data in slice_data_list:
-                if slice_data.timing:
-                    self._schedule_async(
-                        self.event_client.emit_witness_complete(
-                            run_uid=run_uid,
-                            slice_num=slice_data.slice_num,
-                            witness_time_sec=slice_data.timing.witness_time_sec,
-                            memory_peak_mb=slice_data.timing.memory_peak_mb,
-                        )
-                    )
-
-        return run_uid, requests
-
     def generate_dslice_requests(self) -> list[DSliceQueuedProofRequest]:
-        """Generate DSlice requests using standard (pre-computed) or incremental mode."""
         if not self.circuits:
             return []
-
-        if self.incremental_mode:
-            return self.generate_incremental_request()
-
-        circuit = random.choice(self.circuits)
-        _, requests = self.start_run(circuit)
-        return requests
+        return self.generate_incremental_request()
 
     def start_incremental_run(
         self,
@@ -617,30 +422,29 @@ class DSperseManager:
         return aborted
 
     def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
-        """Callback when an incremental run completes."""
         logging.info(f"Incremental run {run_uid} completed, success={success}")
 
         output_tensor = None
         circuit_id = None
         run_source = None
+        status = None
         with self._incremental_runs_lock:
             circuit_id = self._incremental_run_circuits.get(run_uid)
             self._incremental_runs.discard(run_uid)
             self._incremental_run_circuits.pop(run_uid, None)
 
-            if self.event_client:
-                status = (
-                    self._incremental_runner.get_run_status(run_uid)
-                    if self._incremental_runner
-                    else None
-                )
+            status = (
+                self._incremental_runner.get_run_status(run_uid)
+                if self._incremental_runner
+                else None
+            )
+
+            if self.event_client and status:
                 self._schedule_async(
                     self.event_client.emit_run_complete(
                         run_uid=run_uid,
                         all_successful=success,
-                        total_run_time_sec=(
-                            status.get("elapsed_time", 0) if status else 0
-                        ),
+                        total_run_time_sec=status.get("elapsed_time", 0),
                     )
                 )
 
@@ -650,6 +454,13 @@ class DSperseManager:
 
             if self._incremental_runner:
                 self._incremental_runner.cleanup_run(run_uid)
+
+        if status and circuit_id:
+            threading.Thread(
+                target=self._submit_metrics,
+                args=(run_uid, circuit_id, success, status),
+                daemon=True,
+            ).start()
 
         if output_tensor is not None and circuit_id and run_source == RunSource.API:
             from execution_layer.proof_uploader import upload_final_output
@@ -670,148 +481,50 @@ class DSperseManager:
         with self._incremental_runs_lock:
             return run_uid in self._incremental_runs
 
-    def on_slice_result(
+    def get_run_status(self, run_uid: str) -> dict | None:
+        if not self._incremental_runner:
+            return None
+        status = self._incremental_runner.get_run_status(run_uid)
+        if not status:
+            return None
+        total = status["total_slices"]
+        completed = status["completed"]
+        failed = status["failed"]
+        status["all_successful"] = status["is_complete"] and failed == 0
+        status["progress_percent"] = (
+            (completed + failed) / total * 100 if total > 0 else 0
+        )
+        return status
+
+    def _submit_metrics(
         self,
         run_uid: str,
-        slice_num: str,
-        success: bool,
-        response_time_sec: float = 0.0,
-        verification_time_sec: float = 0.0,
-    ) -> bool:
-        if run_uid not in self.runs:
-            logging.warning(f"on_slice_result: Run {run_uid} not found")
-            return False
-
-        run = self.runs[run_uid]
-        if slice_num not in run.pending:
-            logging.warning(
-                f"on_slice_result: Slice {slice_num} not pending in run {run_uid}"
-            )
-            return False
-
-        run.pending.discard(slice_num)
-        if success:
-            run.completed.add(slice_num)
-        else:
-            run.failed.add(slice_num)
-
-        if slice_num in run.slices:
-            run.slices[slice_num].success = success
-            if run.slices[slice_num].timing:
-                run.slices[slice_num].timing.response_time_sec = response_time_sec
-                run.slices[slice_num].timing.verification_time_sec = (
-                    verification_time_sec
-                )
-                run.slices[slice_num].timing.success = success
-
-        if self.event_client:
-            if success:
-                self._schedule_async(
-                    self.event_client.emit_verification_complete(
-                        run_uid=run_uid,
-                        slice_num=slice_num,
-                        verification_time_sec=verification_time_sec,
-                        success=True,
-                    )
-                )
-            else:
-                self._schedule_async(
-                    self.event_client.emit_slice_failed(
-                        run_uid=run_uid,
-                        slice_num=slice_num,
-                    )
-                )
-
-        if run.is_complete:
-            logging.info(
-                f"Run {run_uid} complete. "
-                f"Completed: {len(run.completed)}, Failed: {len(run.failed)}"
-            )
-            total_run_time = (
-                time.perf_counter() - run.start_time if run.start_time else None
-            )
-            if self.event_client:
-                self._schedule_async(
-                    self.event_client.emit_run_complete(
-                        run_uid=run_uid,
-                        all_successful=run.all_successful,
-                        total_run_time_sec=total_run_time,
-                    )
-                )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.run_in_executor(None, self._submit_metrics, run)
-            except RuntimeError:
-                threading.Thread(
-                    target=self._submit_metrics, args=(run,), daemon=True
-                ).start()
-            if run.callback:
-                try:
-                    run.callback(run)
-                except Exception as e:
-                    logging.error(f"Run callback failed: {e}")
-            self.cleanup_run(run_uid)
-
-        return run.is_complete
-
-    def _submit_metrics(self, run: DsperseRun):
-        """Submit dsperse run metrics to sn2-api."""
+        circuit_id: str,
+        all_successful: bool,
+        status: dict,
+    ):
         try:
             import httpx
 
-            total_run_time = (
-                time.perf_counter() - run.start_time if run.start_time else 0.0
-            )
-
-            total_witness_time = 0.0
-            total_response_time = 0.0
-            total_verification_time = 0.0
-            circuit_slices = 0
-            onnx_slices = 0
-
-            slice_metrics = []
-            for slice_data in run.slices.values():
-                if slice_data.timing:
-                    timing = slice_data.timing
-                    total_witness_time += timing.witness_time_sec
-                    total_response_time += timing.response_time_sec
-                    total_verification_time += timing.verification_time_sec
-                    circuit_slices += 1
-
-                    slice_metrics.append(
-                        {
-                            "slice_num": timing.slice_num,
-                            "proof_system": timing.proof_system,
-                            "backend_used": timing.backend_used,
-                            "witness_time_sec": timing.witness_time_sec,
-                            "response_time_sec": timing.response_time_sec,
-                            "verification_time_sec": timing.verification_time_sec,
-                            "is_tiled": timing.is_tiled,
-                            "tile_count": timing.tile_count,
-                            "memory_peak_mb": timing.memory_peak_mb,
-                            "success": timing.success,
-                            "error": timing.error,
-                        }
-                    )
-                else:
-                    onnx_slices += 1
+            circuit = next((c for c in self.circuits if c.id == circuit_id), None)
+            circuit_name = circuit.metadata.name if circuit else circuit_id
 
             payload = {
-                "run_uid": run.run_uid,
+                "run_uid": run_uid,
                 "validator_key": self._get_validator_hotkey(),
-                "circuit_id": run.circuit_id,
-                "circuit_name": run.circuit_name,
-                "total_slices": len(run.slices),
-                "circuit_slices": circuit_slices,
-                "onnx_slices": onnx_slices,
-                "total_witness_time_sec": total_witness_time,
-                "total_response_time_sec": total_response_time,
-                "total_verification_time_sec": total_verification_time,
-                "total_run_time_sec": total_run_time,
-                "all_successful": run.all_successful,
-                "failed_slice_count": len(run.failed),
-                "environment": run.environment,
-                "slices": slice_metrics,
+                "circuit_id": circuit_id,
+                "circuit_name": circuit_name,
+                "total_slices": status.get("total_slices", 0),
+                "circuit_slices": status.get("total_tiles", 0),
+                "onnx_slices": 0,
+                "total_witness_time_sec": 0.0,
+                "total_response_time_sec": 0.0,
+                "total_verification_time_sec": 0.0,
+                "total_run_time_sec": status.get("elapsed_time", 0.0),
+                "all_successful": all_successful,
+                "failed_slice_count": status.get("failed", 0),
+                "environment": capture_environment(),
+                "slices": [],
             }
 
             api_url = getattr(cli_parser.config, "sn2_api_url", None)
@@ -824,7 +537,7 @@ class DSperseManager:
 
             if hotkey == "unknown" or not signature:
                 logging.warning(
-                    f"Skipping metrics submission for run {run.run_uid}: "
+                    f"Skipping metrics submission for run {run_uid}: "
                     f"invalid hotkey or signature"
                 )
                 return
@@ -840,10 +553,10 @@ class DSperseManager:
                     },
                 )
                 if response.status_code == 200:
-                    logging.debug(f"Metrics submitted for run {run.run_uid}")
+                    logging.debug(f"Metrics submitted for run {run_uid}")
                 else:
                     logging.warning(
-                        f"Failed to submit metrics for run {run.run_uid}: "
+                        f"Failed to submit metrics for run {run_uid}: "
                         f"{response.status_code} - {response.text}"
                     )
         except Exception as e:
@@ -865,206 +578,6 @@ class DSperseManager:
             return signature.hex()
         except Exception:
             return ""
-
-    def get_run_status(self, run_uid: str) -> dict | None:
-        if run_uid not in self.runs:
-            return None
-        run = self.runs[run_uid]
-        total = len(run.slices)
-        return {
-            "run_uid": run_uid,
-            "circuit_id": run.circuit_id,
-            "total_slices": total,
-            "pending": len(run.pending),
-            "completed": len(run.completed),
-            "failed": len(run.failed),
-            "is_complete": run.is_complete,
-            "all_successful": run.all_successful,
-            "progress_percent": (
-                (len(run.completed) + len(run.failed)) / total * 100 if total > 0 else 0
-            ),
-        }
-
-    @staticmethod
-    def _extract_dslice_data(
-        slice_results: dict[str, ExecutionInfo],
-        run_dir: Path,
-        circuit_id: str,
-        run_metadata: RunMetadata | None = None,
-        tensor_cache: dict | None = None,
-    ) -> list[DSliceData]:
-        dslice_data_list = []
-
-        for slice_num, exec_info in slice_results.items():
-            method = str(exec_info.method)
-            if method.startswith("onnx"):
-                continue
-
-            if run_metadata:
-                node = run_metadata.execution_chain.nodes.get(slice_num)
-                if node and not node.use_circuit:
-                    continue
-
-            base_slice_num = slice_num.split("_")[-1]
-            slice_run_dir = run_dir / slice_num
-
-            if exec_info.method == ExecutionMethod.TILED:
-                circuit_tiles = [
-                    (idx, t)
-                    for idx, t in enumerate(exec_info.tiles)
-                    if not str(t.method).startswith("onnx")
-                ]
-                if not circuit_tiles:
-                    continue
-                logging.info(
-                    f"Expanding tiled slice {slice_num} into {len(circuit_tiles)} tile requests"
-                )
-                for tile_idx, tile_result in circuit_tiles:
-                    tile_run_dir = slice_run_dir / f"tile_{tile_idx}"
-                    tile_input = tile_run_dir / "input.json"
-                    tile_output = tile_run_dir / "output.json"
-
-                    if not tile_input.exists() or not tile_output.exists():
-                        if tensor_cache is None:
-                            raise ValueError(
-                                f"Tile {tile_idx} of slice {slice_num} missing input/output files"
-                            )
-                        DSperseManager._write_tile_files_from_cache(
-                            tensor_cache,
-                            base_slice_num,
-                            tile_idx,
-                            tile_input,
-                            tile_output,
-                        )
-
-                    proof_system = DSperseManager._method_to_proof_system(
-                        tile_result.method
-                    )
-                    if proof_system is None:
-                        logging.error(
-                            f"Skipping tile {tile_idx} of slice {slice_num}: unknown method"
-                        )
-                        continue
-
-                    timing = SliceTimingData(
-                        slice_num=f"{base_slice_num}_tile_{tile_idx}",
-                        proof_system=(
-                            str(tile_result.method) if tile_result.method else None
-                        ),
-                        backend_used=(
-                            str(tile_result.method) if tile_result.method else None
-                        ),
-                        witness_time_sec=tile_result.time_sec,
-                        is_tiled=True,
-                        tile_count=len(circuit_tiles),
-                        success=tile_result.success,
-                        error=tile_result.error,
-                    )
-
-                    dslice_data_list.append(
-                        DSliceData(
-                            slice_num=f"{base_slice_num}_tile_{tile_idx}",
-                            input_file=tile_input,
-                            output_file=tile_output,
-                            witness_file=tile_run_dir / "output_witness.bin",
-                            circuit_id=circuit_id,
-                            proof_system=proof_system,
-                            timing=timing,
-                        )
-                    )
-            else:
-                slice_input = slice_run_dir / "input.json"
-                slice_output = slice_run_dir / "output.json"
-
-                if not slice_input.exists() or not slice_output.exists():
-                    logging.warning(f"Slice {slice_num} missing input/output files")
-                    continue
-
-                proof_system = DSperseManager._method_to_proof_system(method)
-                if proof_system is None:
-                    logging.error(
-                        f"Skipping slice {slice_num}: unknown method '{method}'"
-                    )
-                    continue
-
-                timing = SliceTimingData(
-                    slice_num=base_slice_num,
-                    proof_system=method,
-                    backend_used=method,
-                    witness_time_sec=getattr(exec_info, "time_sec", 0.0),
-                    memory_peak_mb=getattr(exec_info, "memory_peak_mb", 0.0),
-                    is_tiled=False,
-                    success=exec_info.success,
-                    error=exec_info.error,
-                )
-
-                dslice_data_list.append(
-                    DSliceData(
-                        slice_num=base_slice_num,
-                        input_file=slice_input,
-                        output_file=slice_output,
-                        witness_file=slice_run_dir / "output_witness.bin",
-                        circuit_id=circuit_id,
-                        proof_system=proof_system,
-                        timing=timing,
-                    )
-                )
-
-        logging.info(f"Generated {len(dslice_data_list)} DSlice requests")
-        return dslice_data_list
-
-    @staticmethod
-    def _write_tile_files_from_cache(
-        tensor_cache: dict,
-        slice_idx: str,
-        tile_idx: int,
-        input_path: Path,
-        output_path: Path,
-    ) -> None:
-        input_key = f"tile_{slice_idx}_{tile_idx}_in"
-        output_key = f"tile_{slice_idx}_{tile_idx}_out"
-
-        input_tensor = tensor_cache.get(input_key)
-        output_tensor = tensor_cache.get(output_key)
-
-        if input_tensor is None or output_tensor is None:
-            raise ValueError(
-                f"Tile {tile_idx} of slice_{slice_idx} missing from tensor_cache "
-                f"(input={input_key in tensor_cache}, output={output_key in tensor_cache})"
-            )
-
-        input_path.parent.mkdir(parents=True, exist_ok=True)
-
-        input_list = (
-            input_tensor.tolist() if hasattr(input_tensor, "tolist") else input_tensor
-        )
-        output_list = (
-            output_tensor.tolist()
-            if hasattr(output_tensor, "tolist")
-            else output_tensor
-        )
-
-        with open(input_path, "w") as f:
-            json.dump({"input_data": input_list}, f)
-        with open(output_path, "w") as f:
-            json.dump({"output_data": output_list}, f)
-
-        logging.debug(
-            f"Materialized tile files from cache: {input_path}, {output_path}"
-        )
-
-    @staticmethod
-    def _method_to_proof_system(method: str | None) -> ProofSystem | None:
-        if not method:
-            logging.error("No proof method specified")
-            return None
-        method_lower = str(method).lower()
-        if "ezkl" in method_lower:
-            return ProofSystem.EZKL
-        if "jstprove" in method_lower or "jst" in method_lower:
-            return ProofSystem.JSTPROVE
-        logging.error(f"Unknown proof method '{method}'")
-        return None
 
     def prove_slice(
         self,
@@ -1358,79 +871,6 @@ class DSperseManager:
                 return p
         return None
 
-    def verify_slice_proof(
-        self, run_uid: str, slice_num: str, proof: dict | str, proof_system: ProofSystem
-    ) -> bool:
-        if run_uid not in self.runs:
-            raise ValueError(f"Run UID {run_uid} not found.")
-
-        run = self.runs[run_uid]
-        slice_data = run.slices.get(slice_num)
-        if slice_data is None:
-            raise ValueError(f"Slice {slice_num} not found in run {run_uid}.")
-        if slice_data.proof_system != proof_system:
-            raise ValueError(
-                f"Proof system mismatch for slice {slice_num}. "
-                f"Expected {slice_data.proof_system}, got {proof_system}."
-            )
-
-        circuit = self._get_circuit_by_id(slice_data.circuit_id)
-        base_slice_num, tile_idx = self._parse_slice_num(slice_num)
-
-        proof_file_path = slice_data.input_file.parent / "proof.json"
-        if proof_system == ProofSystem.JSTPROVE:
-            if not isinstance(proof, str):
-                logging.error(f"JSTPROVE proof must be a hex string, got {type(proof)}")
-                return False
-            try:
-                proof_bytes = bytes.fromhex(proof)
-            except ValueError as e:
-                logging.error(f"Invalid hex in JSTPROVE proof: {e}")
-                return False
-            with open(proof_file_path, "wb") as proof_file:
-                proof_file.write(proof_bytes)
-        else:
-            with open(proof_file_path, "w") as proof_file:
-                json.dump(proof, proof_file)
-
-        slice_data.proof_file = proof_file_path
-
-        if proof_system == ProofSystem.JSTPROVE:
-            slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
-            circuit_path = self._find_jstprove_circuit(
-                slice_dir, base_slice_num, is_tiled=(tile_idx is not None)
-            )
-            if circuit_path is None or not circuit_path.exists():
-                logging.error(f"JSTprove circuit not found for slice {slice_num}")
-                return False
-            witness_path = slice_data.witness_file or (
-                slice_data.input_file.parent / "output_witness.bin"
-            )
-
-            jstprove = JSTprove()
-            success = jstprove.verify(
-                proof_path=proof_file_path,
-                circuit_path=circuit_path,
-                input_path=slice_data.input_file,
-                output_path=slice_data.output_file,
-                witness_path=witness_path,
-            )
-        else:
-            verifier = Verifier()
-            run_path = slice_data.input_file.parent.parent
-            result = verifier.verify(
-                run_path=run_path,
-                model_path=Path(circuit.paths.base_path) / f"slice_{base_slice_num}",
-                backend=proof_system.value.lower() if proof_system else None,
-            )
-            _, verification_execution = self._parse_dsperse_result(
-                result, "verification"
-            )
-            success = verification_execution.get("success", False)
-
-        slice_data.success = success
-        return success
-
     def verify_incremental_slice_with_witness(
         self,
         circuit_id: str,
@@ -1605,35 +1045,20 @@ class DSperseManager:
         return result
 
     def cleanup_run(self, run_uid: str):
-        if run_uid not in self.runs:
-            raise ValueError(f"Run {run_uid} not found.")
-        run = self.runs[run_uid]
-        if run.run_dir.exists():
-            shutil.rmtree(run.run_dir)
-        del self.runs[run_uid]
-        logging.info(f"Cleaned up run {run_uid}")
+        if self._incremental_runner:
+            self._incremental_runner.cleanup_run(run_uid)
+        with self._incremental_runs_lock:
+            self._incremental_runs.discard(run_uid)
+            self._incremental_run_circuits.pop(run_uid, None)
 
     def total_cleanup(self):
         logging.info("Performing total cleanup of all DSperse run data...")
-        for run_uid in list(self.runs.keys()):
-            try:
-                self.cleanup_run(run_uid)
-            except Exception as e:
-                logging.error(f"Failed to cleanup run {run_uid}: {e}")
-
-    def _parse_dsperse_result(
-        self, result: dict, execution_type: str
-    ) -> tuple[str | None, dict]:
-        execution_results = result.get("execution_chain", {}).get(
-            "execution_results", []
-        )
-        execution_result = execution_results[0] if execution_results else {}
-        if not execution_result:
-            logging.error("No execution results found in proof generation result.")
-
-        slice_id = execution_result.get("slice_id", None)
-        execution = execution_result.get(f"{execution_type}_execution", {})
-        if execution is None:
-            execution = {}
-
-        return slice_id, execution
+        with self._incremental_runs_lock:
+            for run_uid in list(self._incremental_runs):
+                try:
+                    if self._incremental_runner:
+                        self._incremental_runner.cleanup_run(run_uid)
+                except Exception as e:
+                    logging.error(f"Failed to cleanup run {run_uid}: {e}")
+            self._incremental_runs.clear()
+            self._incremental_run_circuits.clear()

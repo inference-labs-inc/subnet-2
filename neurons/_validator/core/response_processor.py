@@ -75,40 +75,28 @@ class ResponseProcessor:
             return False
 
         if response.request_type == RequestType.DSLICE:
-            is_incremental = (
-                response.dsperse_run_uid
-                and self.dsperse_manager.is_incremental_run(response.dsperse_run_uid)
-            )
-            if is_incremental:
-                if not response.witness:
-                    bt.logging.error(
-                        f"Incremental run requires witness but none provided for UID: {response.uid}"
-                    )
-                    return False
-                inputs = request.inputs
-                if inputs is not None and hasattr(inputs, "to_json"):
-                    inputs = inputs.to_json()
-                elif inputs is None:
-                    inputs = request.data.get("inputs", {})
-                res, extracted_outputs = (
-                    self.dsperse_manager.verify_incremental_slice_with_witness(
-                        circuit_id=response.circuit.id,
-                        slice_num=str(response.dsperse_slice_num),
-                        original_inputs=inputs,
-                        witness_hex=response.witness,
-                        proof_hex=response.proof_content,
-                        proof_system=request.data.get("proof_system"),
-                    )
+            if not response.witness:
+                bt.logging.error(
+                    f"Incremental run requires witness but none provided for UID: {response.uid}"
                 )
-                if res and extracted_outputs is not None:
-                    response.computed_outputs = extracted_outputs
-            else:
-                res: bool = self.dsperse_manager.verify_slice_proof(
-                    run_uid=response.dsperse_run_uid,
-                    slice_num=response.dsperse_slice_num,
-                    proof=response.proof_content,
+                return False
+            inputs = request.inputs
+            if inputs is not None and hasattr(inputs, "to_json"):
+                inputs = inputs.to_json()
+            elif inputs is None:
+                inputs = request.data.get("inputs", {})
+            res, extracted_outputs = (
+                self.dsperse_manager.verify_incremental_slice_with_witness(
+                    circuit_id=response.circuit.id,
+                    slice_num=str(response.dsperse_slice_num),
+                    original_inputs=inputs,
+                    witness_hex=response.witness,
+                    proof_hex=response.proof_content,
                     proof_system=request.data.get("proof_system"),
                 )
+            )
+            if res and extracted_outputs is not None:
+                response.computed_outputs = extracted_outputs
         else:
             if not response.public_json:
                 raise ValueError(f"Public signals not found for UID: {response.uid}")
