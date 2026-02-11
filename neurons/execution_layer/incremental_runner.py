@@ -29,6 +29,7 @@ from dsperse.src.analyzers.schema import (
 from dsperse.src.run.runner import Runner as DsperseRunner
 from dsperse.src.run.tile_executor import TileExecutor
 from dsperse.src.slice.utils.converter import Converter
+from constants import RunSource
 from execution_layer.circuit import Circuit, ProofSystem
 from _validator.models.dslice_request import DSliceQueuedProofRequest
 from _validator.models.request_type import RequestType
@@ -65,6 +66,7 @@ class RunState:
     failed_slices: list[str] = field(default_factory=list)
     failed_tasks: set[str] = field(default_factory=set)
     onnx_fallback_tasks: set[str] = field(default_factory=set)
+    run_source: RunSource = RunSource.BENCHMARK
     start_time: float = 0.0
     aborted: bool = False
 
@@ -148,7 +150,12 @@ class IncrementalRunner:
         )
         return run_meta.to_dict()
 
-    def start_run(self, circuit: Circuit, inputs: Optional[dict] = None) -> str:
+    def start_run(
+        self,
+        circuit: Circuit,
+        inputs: Optional[dict] = None,
+        run_source: RunSource = RunSource.BENCHMARK,
+    ) -> str:
         """Start a new incremental run."""
         run_uid = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{secrets.token_hex(8)}"
         logging.info(f"Starting incremental run {run_uid} for {circuit.metadata.name}")
@@ -235,6 +242,7 @@ class IncrementalRunner:
                 total_tiles += count
         state.total_tiles = total_tiles
         state.slice_tile_counts = slice_tile_counts
+        state.run_source = run_source
 
         self._runs[run_uid] = state
         logging.info(
@@ -455,6 +463,21 @@ class IncrementalRunner:
         if run_uid not in self._runs:
             return False
         return self._runs[run_uid].is_waiting
+
+    def abort_run(self, run_uid: str) -> None:
+        if run_uid not in self._runs:
+            return
+        state = self._runs[run_uid]
+        if state.aborted or state.is_complete:
+            return
+        state.aborted = True
+        logging.warning(f"Run {run_uid} aborted (preempted)")
+        self._on_complete(state)
+
+    def get_run_source(self, run_uid: str) -> RunSource | None:
+        if run_uid not in self._runs:
+            return None
+        return self._runs[run_uid].run_source
 
     def cleanup_run(self, run_uid: str) -> None:
         """Clean up run state."""

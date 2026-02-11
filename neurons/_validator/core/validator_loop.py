@@ -46,7 +46,6 @@ from constants import (
     DEFAULT_PROOF_SIZE,
     EXCEPTION_DELAY_SECONDS,
     FIVE_MINUTES,
-    IDLE_BENCHMARK_PROBABILITY,
     LOOP_DELAY_SECONDS,
     MAX_CONCURRENT_REQUESTS,
     ONE_HOUR,
@@ -316,10 +315,6 @@ class ValidatorLoop:
                             )
                         elif not self.relay.stacked_requests_queue.empty():
                             request = self.request_pipeline._prepare_queued_request(uid)
-                        elif random.random() < IDLE_BENCHMARK_PROBABILITY:
-                            request = self.request_pipeline._prepare_benchmark_request(
-                                uid
-                            )
                         else:
                             break
 

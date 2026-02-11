@@ -1,5 +1,11 @@
 import os
 from dataclasses import dataclass
+from enum import Enum
+
+
+class RunSource(str, Enum):
+    BENCHMARK = "benchmark"
+    API = "api"
 
 
 @dataclass

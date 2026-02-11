@@ -12,6 +12,7 @@ import bittensor as bt
 import websockets
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.circuit import ProofSystem
+from constants import RunSource
 from execution_layer.dsperse_manager import DSperseManager, DsperseRun
 from jsonrpcserver import (
     Error,
@@ -403,11 +404,14 @@ class RelayManager:
 
             bt.logging.info(f"Starting DSperse run for circuit {circuit_id}")
 
+            self.dsperse_manager.abort_benchmark_runs()
+
             run_uid, requests = await asyncio.to_thread(
                 self.dsperse_manager.start_run,
                 circuit,
                 inputs,
                 callback=self._on_run_complete,
+                run_source=RunSource.API,
             )
 
             for request in requests:

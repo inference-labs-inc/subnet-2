@@ -21,6 +21,7 @@ from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.run.runner import Runner
 from dsperse.src.slice.utils.converter import Converter
 from dsperse.src.verify.verifier import Verifier
+from constants import RunSource
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
 import numpy as np
 
@@ -78,6 +79,7 @@ class DsperseRun:
     environment: dict = field(default_factory=dict)
     start_time: float = 0.0
     circuit_name: str = ""
+    run_source: RunSource = RunSource.BENCHMARK
 
     @property
     def is_complete(self) -> bool:
@@ -167,6 +169,7 @@ class DSperseManager:
         circuit: Circuit,
         inputs: dict | None = None,
         callback: Callable[[DsperseRun], None] | None = None,
+        run_source: RunSource = RunSource.BENCHMARK,
     ) -> tuple[str, list[DSliceQueuedProofRequest]]:
         run_uid = datetime.now().strftime("%Y%m%d%H%M%S%f")
         start_time = time.perf_counter()
@@ -219,6 +222,7 @@ class DSperseManager:
             environment=environment,
             start_time=start_time,
             circuit_name=circuit.metadata.name,
+            run_source=run_source,
         )
         self.runs[run_uid] = dsperse_run
 
@@ -259,6 +263,7 @@ class DSperseManager:
                     environment=environment,
                     total_tiles=total_tiles,
                     slice_tile_counts=slice_tile_counts,
+                    run_source=run_source.value,
                 )
             )
             for slice_data in slice_data_list:
@@ -290,6 +295,7 @@ class DSperseManager:
         self,
         circuit: Circuit,
         inputs: dict | None = None,
+        run_source: RunSource = RunSource.BENCHMARK,
     ) -> str:
         """
         Start an incremental run where miners compute outputs.
@@ -308,7 +314,7 @@ class DSperseManager:
                 on_tile_onnx_fallback=self._on_tile_onnx_fallback,
             )
 
-        run_uid = self._incremental_runner.start_run(circuit, inputs)
+        run_uid = self._incremental_runner.start_run(circuit, inputs, run_source)
         with self._incremental_runs_lock:
             self._incremental_runs.add(run_uid)
             self._incremental_run_circuits[run_uid] = circuit.id
@@ -324,6 +330,7 @@ class DSperseManager:
                     environment=capture_environment(),
                     total_tiles=status["total_tiles"] if status else 0,
                     slice_tile_counts=status["slice_tile_counts"] if status else None,
+                    run_source=run_source.value,
                 )
             )
 
@@ -589,6 +596,27 @@ class DSperseManager:
                     task_id=task_id,
                 )
             )
+
+    def abort_benchmark_runs(self) -> list[str]:
+        if not self._incremental_runner:
+            return []
+        aborted = []
+        with self._incremental_runs_lock:
+            for run_uid in list(self._incremental_runs):
+                source = self._incremental_runner.get_run_source(run_uid)
+                if source == RunSource.BENCHMARK:
+                    self._incremental_runner.abort_run(run_uid)
+                    aborted.append(run_uid)
+        if aborted:
+            logging.info(
+                f"Aborted {len(aborted)} benchmark runs for incoming API request"
+            )
+        return aborted
+
+    def is_run_aborted(self, run_uid: str) -> bool:
+        if self._incremental_runner:
+            return self._incremental_runner.is_complete(run_uid)
+        return run_uid not in self.runs
 
     def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
         """Callback when an incremental run completes."""
