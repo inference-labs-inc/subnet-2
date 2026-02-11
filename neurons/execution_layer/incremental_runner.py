@@ -345,10 +345,8 @@ class IncrementalRunner:
                 fallback_output = self._run_onnx_for_failed_task(state, task_id)
                 state.onnx_fallback_tasks.add(task_id)
                 logging.warning(f"ONNX fallback succeeded for {task_id}")
-                success = True
                 output = fallback_output
                 slice_id = state.current_slice_id
-                meta = state.slice_metadata.get(slice_id)
                 if self._on_tile_onnx_fallback:
                     tile_idx = (
                         int(task_id.split("_tile_")[1]) if "_tile_" in task_id else -1
