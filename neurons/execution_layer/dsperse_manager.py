@@ -600,23 +600,20 @@ class DSperseManager:
     def abort_benchmark_runs(self) -> list[str]:
         if not self._incremental_runner:
             return []
-        aborted = []
         with self._incremental_runs_lock:
-            for run_uid in list(self._incremental_runs):
-                source = self._incremental_runner.get_run_source(run_uid)
-                if source == RunSource.BENCHMARK:
-                    self._incremental_runner.abort_run(run_uid)
-                    aborted.append(run_uid)
+            benchmark_uids = [
+                uid
+                for uid in self._incremental_runs
+                if self._incremental_runner.get_run_source(uid) == RunSource.BENCHMARK
+            ]
+        aborted = []
+        for run_uid in benchmark_uids:
+            self._incremental_runner.abort_run(run_uid)
+            aborted.append(run_uid)
         if aborted:
             logging.info(
                 f"Aborted {len(aborted)} benchmark runs for incoming API request"
             )
-        return aborted
-
-    def is_run_aborted(self, run_uid: str) -> bool:
-        if self._incremental_runner:
-            return self._incremental_runner.is_complete(run_uid)
-        return run_uid not in self.runs
 
     def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
         """Callback when an incremental run completes."""

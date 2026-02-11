@@ -12,7 +12,6 @@ import bittensor as bt
 import websockets
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.circuit import ProofSystem
-from constants import RunSource
 from execution_layer.dsperse_manager import DSperseManager, DsperseRun
 from jsonrpcserver import (
     Error,
@@ -31,6 +30,7 @@ from constants import (
     RELAY_OPEN_TIMEOUT,
     RELAY_RECONNECT_BASE_DELAY,
     RELAY_RECONNECT_MAX_DELAY,
+    RunSource,
 )
 
 

@@ -225,6 +225,7 @@ class IncrementalRunner:
             tensor_cache=tensor_cache,
             execution_order=execution_order,
             slice_metadata={k: v for k, v in run_metadata.slices.items()},
+            run_source=run_source,
             start_time=time.perf_counter(),
         )
 
@@ -242,7 +243,6 @@ class IncrementalRunner:
                 total_tiles += count
         state.total_tiles = total_tiles
         state.slice_tile_counts = slice_tile_counts
-        state.run_source = run_source
 
         self._runs[run_uid] = state
         logging.info(
