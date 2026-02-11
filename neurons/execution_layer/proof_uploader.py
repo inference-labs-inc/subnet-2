@@ -177,22 +177,22 @@ def upload_run_proofs(
                     logger.warning(f"Failed to upload artifact {key}")
                     ok = False
                     continue
+
+                confirm_artifacts.append(
+                    {
+                        "slice_num": artifact["slice_num"],
+                        "parent_slice": artifact.get("parent_slice"),
+                        "tile_idx": artifact.get("tile_idx"),
+                        "proof_system": artifact["proof_system"],
+                        "gcs_key": url_info["gcs_key"],
+                        "size_bytes": len(data_bytes),
+                        "artifact_type": "proof",
+                    }
+                )
             except Exception as e:
                 logger.error(f"Error processing artifact {key}: {e}")
                 ok = False
                 continue
-
-            confirm_artifacts.append(
-                {
-                    "slice_num": artifact["slice_num"],
-                    "parent_slice": artifact.get("parent_slice"),
-                    "tile_idx": artifact.get("tile_idx"),
-                    "proof_system": artifact["proof_system"],
-                    "gcs_key": url_info["gcs_key"],
-                    "size_bytes": len(data_bytes),
-                    "artifact_type": "proof",
-                }
-            )
 
     if confirm_artifacts:
         try:
