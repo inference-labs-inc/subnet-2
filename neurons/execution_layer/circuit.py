@@ -26,7 +26,6 @@ from constants import (
 )
 from utils import with_rate_limit
 from utils.gc_logging import gc_log_eval_metrics
-from utils.metrics_logger import log_circuit_metrics
 
 
 class CircuitType(str, Enum):
@@ -290,8 +289,6 @@ class CircuitEvaluationData:
         verified_count = len([r for r in self.data if r.verification_result])
 
         if response_times:
-            log_circuit_metrics(response_times, verified_count, str(self.circuit))
-
             response_tensor = torch.tensor(response_times, dtype=torch.float32)
             mean_response_time = torch.mean(response_tensor).item()
             max_response_time = torch.max(response_tensor).item()
