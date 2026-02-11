@@ -270,7 +270,11 @@ class ValidatorLoop:
                     continue
 
                 if self.relay.stacked_requests_queue.empty():
-                    new_requests = list(self.dsperse_manager.generate_dslice_requests())
+                    new_requests = list(
+                        await asyncio.to_thread(
+                            self.dsperse_manager.generate_dslice_requests
+                        )
+                    )
                     if new_requests:
                         bt.logging.info(
                             f"Generated {len(new_requests)} new requests, inserting into queue"

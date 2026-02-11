@@ -5,6 +5,7 @@ import random
 import shutil
 import tempfile
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,22 @@ if TYPE_CHECKING:
     from execution_layer.dsperse_event_client import DsperseEventClient
 
 
+@dataclass
+class _SliceMetric:
+    slice_num: str
+    response_time_sec: float = 0.0
+    verification_time_sec: float = 0.0
+    success: bool = True
+    is_tile: bool = False
+
+
+@dataclass
+class _RunTiming:
+    total_response_time_sec: float = 0.0
+    total_verification_time_sec: float = 0.0
+    slices: list[_SliceMetric] = field(default_factory=list)
+
+
 class DSperseManager:
     def __init__(
         self,
@@ -53,6 +70,7 @@ class DSperseManager:
         self._incremental_run_circuits: dict[str, str] = {}
         self._incremental_runs_lock = threading.Lock()
         self._completed_run_statuses: dict[str, tuple[float, RunStatus]] = {}
+        self._run_timings: dict[str, _RunTiming] = {}
         self._purge_old_runs()
 
     @staticmethod
@@ -225,6 +243,19 @@ class DSperseManager:
             f"slice_{slice_num}" if not slice_num.startswith("slice_") else slice_num
         )
 
+        timing = self._run_timings.setdefault(run_uid, _RunTiming())
+        timing.total_response_time_sec += response_time_sec
+        timing.total_verification_time_sec += verification_time_sec
+        timing.slices.append(
+            _SliceMetric(
+                slice_num=slice_num,
+                response_time_sec=response_time_sec,
+                verification_time_sec=verification_time_sec,
+                success=success,
+                is_tile=False,
+            )
+        )
+
         slice_complete = self._incremental_runner.apply_result(
             run_uid=run_uid,
             task_id=task_id,
@@ -292,6 +323,20 @@ class DSperseManager:
         Returns:
             Tuple of (is_run_complete, next_requests)
         """
+        tile_slice_num = f"{slice_id.removeprefix('slice_')}_tile_{tile_idx}"
+        timing = self._run_timings.setdefault(run_uid, _RunTiming())
+        timing.total_response_time_sec += response_time_sec
+        timing.total_verification_time_sec += verification_time_sec
+        timing.slices.append(
+            _SliceMetric(
+                slice_num=tile_slice_num,
+                response_time_sec=response_time_sec,
+                verification_time_sec=verification_time_sec,
+                success=success,
+                is_tile=True,
+            )
+        )
+
         slice_complete = self._incremental_runner.apply_result(
             run_uid=run_uid,
             task_id=task_id,
@@ -301,7 +346,7 @@ class DSperseManager:
         )
 
         if self.event_client:
-            slice_num = f"{slice_id.removeprefix('slice_')}_tile_{tile_idx}"
+            slice_num = tile_slice_num
             if success:
                 self._schedule_async(
                     self.event_client.emit_verification_complete(
@@ -432,10 +477,12 @@ class DSperseManager:
             self._incremental_runs.discard(run_uid)
             self._incremental_run_circuits.pop(run_uid, None)
 
+        run_timing = self._run_timings.pop(run_uid, _RunTiming())
+
         if status and circuit_id:
             threading.Thread(
                 target=self._submit_metrics,
-                args=(run_uid, circuit_id, success, status),
+                args=(run_uid, circuit_id, success, status, run_timing),
                 daemon=True,
             ).start()
 
@@ -469,6 +516,7 @@ class DSperseManager:
         circuit_id: str,
         all_successful: bool,
         status: RunStatus,
+        run_timing: _RunTiming,
     ):
         try:
             import httpx
@@ -476,22 +524,41 @@ class DSperseManager:
             circuit = next((c for c in self.circuits if c.id == circuit_id), None)
             circuit_name = circuit.metadata.name if circuit else circuit_id
 
+            circuit_slices = sum(1 for s in run_timing.slices if s.success)
+            onnx_slices = status.total_slices - len(
+                {s.slice_num.split("_tile_")[0] for s in run_timing.slices}
+            )
+
+            slice_metrics = [
+                {
+                    "slice_num": s.slice_num,
+                    "proof_system": "jstprove",
+                    "backend_used": "jstprove",
+                    "witness_time_sec": 0.0,
+                    "response_time_sec": s.response_time_sec,
+                    "verification_time_sec": s.verification_time_sec,
+                    "is_tiled": s.is_tile,
+                    "success": s.success,
+                }
+                for s in run_timing.slices
+            ]
+
             payload = {
                 "run_uid": run_uid,
                 "validator_key": self._get_validator_hotkey(),
                 "circuit_id": circuit_id,
                 "circuit_name": circuit_name,
                 "total_slices": status.total_slices,
-                "circuit_slices": status.total_tiles,
-                "onnx_slices": 0,
+                "circuit_slices": circuit_slices,
+                "onnx_slices": max(onnx_slices, 0),
                 "total_witness_time_sec": 0.0,
-                "total_response_time_sec": 0.0,
-                "total_verification_time_sec": 0.0,
+                "total_response_time_sec": run_timing.total_response_time_sec,
+                "total_verification_time_sec": run_timing.total_verification_time_sec,
                 "total_run_time_sec": status.elapsed_time,
                 "all_successful": all_successful,
                 "failed_slice_count": status.failed,
                 "environment": capture_environment(),
-                "slices": [],
+                "slices": slice_metrics,
             }
 
             api_url = getattr(cli_parser.config, "sn2_api_url", None)
@@ -1014,6 +1081,7 @@ class DSperseManager:
     def cleanup_run(self, run_uid: str):
         self._incremental_runner.cleanup_run(run_uid)
         self._completed_run_statuses.pop(run_uid, None)
+        self._run_timings.pop(run_uid, None)
         with self._incremental_runs_lock:
             self._incremental_runs.discard(run_uid)
             self._incremental_run_circuits.pop(run_uid, None)
@@ -1031,3 +1099,4 @@ class DSperseManager:
             self._incremental_runs.clear()
             self._incremental_run_circuits.clear()
         self._completed_run_statuses.clear()
+        self._run_timings.clear()

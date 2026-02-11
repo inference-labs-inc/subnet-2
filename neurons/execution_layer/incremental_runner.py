@@ -48,10 +48,11 @@ class RunStatus:
     pending_work: int
     is_complete: bool
     elapsed_time: float
+    aborted: bool = False
 
     @property
     def all_successful(self) -> bool:
-        return self.is_complete and self.failed == 0
+        return self.is_complete and self.failed == 0 and not self.aborted
 
     @property
     def progress_percent(self) -> float:
@@ -72,6 +73,7 @@ class RunStatus:
             "pending_work": self.pending_work,
             "is_complete": self.is_complete,
             "elapsed_time": self.elapsed_time,
+            "aborted": self.aborted,
             "all_successful": self.all_successful,
             "progress_percent": self.progress_percent,
         }
@@ -470,6 +472,7 @@ class IncrementalRunner:
             pending_work=len(state.pending_work),
             is_complete=state.is_complete,
             elapsed_time=time.perf_counter() - state.start_time,
+            aborted=state.aborted,
         )
 
     def get_final_output(self, run_uid: str) -> Optional[Any]:
@@ -898,13 +901,12 @@ class IncrementalRunner:
             )
 
     def _on_complete(self, state: RunState) -> None:
-        """Handle run completion."""
         elapsed = time.perf_counter() - state.start_time
-        success = len(state.failed_slices) == 0
+        success = len(state.failed_slices) == 0 and not state.aborted
         logging.info(
             f"Run {state.run_uid} complete. "
             f"Completed: {len(state.completed_slices)}, Failed: {len(state.failed_slices)}, "
-            f"Time: {elapsed:.2f}s"
+            f"Aborted: {state.aborted}, Time: {elapsed:.2f}s"
         )
         if self._on_run_complete:
             self._on_run_complete(state.run_uid, success)

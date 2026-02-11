@@ -374,6 +374,10 @@ class RelayManager:
                 self.dispatch_event.set()
 
             status = self.dsperse_manager.get_run_status(run_uid)
+            if not status:
+                return Success(
+                    {"run_uid": run_uid, "status": "processing", "progress": {}}
+                )
             bt.logging.success(
                 f"Run {run_uid} created: {status.total_slices} slices queued"
             )
