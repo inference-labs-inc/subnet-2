@@ -466,6 +466,14 @@ class ValidatorLoop:
             except Exception as e:
                 bt.logging.error(f"WATCHDOG error: {e}")
 
+    async def _load_circuits_background(self):
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                self.thread_pool, circuit_store.load_circuits
+            )
+        except Exception as e:
+            bt.logging.error(f"Background circuit loading failed: {e}")
+
     async def run(self) -> NoReturn:
         """
         Run the main validator loop indefinitely.
@@ -474,12 +482,12 @@ class ValidatorLoop:
             f"Validator started on subnet {self.config.subnet_uid} using UID {self.config.user_uid}"
         )
 
-        # Start the relay client connection
         self.relay.start()
         self.dsperse_event_client.start()
 
         try:
             await asyncio.gather(
+                self._load_circuits_background(),
                 self.maintain_request_pool(),
                 self.run_periodic_tasks(),
                 self.watchdog(),

@@ -23,10 +23,6 @@ if __name__ == "__main__":
         start_memory_profiler()
 
     try:
-        from deployment_layer.circuit_store import circuit_store
-
-        circuit_store.load_circuits()
-
         bt.logging.info("Creating validator session...")
         validator_session = ValidatorSession()
         bt.logging.debug("Running main loop...")
