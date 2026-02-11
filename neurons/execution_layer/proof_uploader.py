@@ -154,6 +154,7 @@ def upload_run_proofs(
             url_info = url_map.get(key)
             if not url_info:
                 logger.warning(f"No upload URL for {key}")
+                ok = False
                 continue
 
             try:
