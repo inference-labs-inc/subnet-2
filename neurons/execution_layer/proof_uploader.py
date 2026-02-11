@@ -2,7 +2,6 @@ import base64
 import json
 import logging
 import os
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -61,26 +60,13 @@ def request_upload_urls(
     return result.get("urls", [])
 
 
-def upload_artifact(upload_url: str, file_path: Path) -> bool:
-    with open(file_path, "rb") as f:
-        data = f.read()
-    with httpx.Client(timeout=120.0) as client:
-        response = client.put(
-            upload_url,
-            content=data,
-            headers={"Content-Type": "application/octet-stream"},
-        )
-        return response.status_code in (200, 201)
-
-
-def upload_artifact_bytes(upload_url: str, data: bytes) -> bool:
-    with httpx.Client(timeout=120.0) as client:
-        response = client.put(
-            upload_url,
-            content=data,
-            headers={"Content-Type": "application/octet-stream"},
-        )
-        return response.status_code in (200, 201)
+def upload_artifact_bytes(client: httpx.Client, upload_url: str, data: bytes) -> bool:
+    response = client.put(
+        upload_url,
+        content=data,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    return response.status_code in (200, 201)
 
 
 def confirm_uploads(
@@ -161,40 +147,52 @@ def upload_run_proofs(
     url_map = {(u["slice_num"], u["artifact_type"]): u for u in url_responses}
 
     confirm_artifacts = []
-    for artifact in proof_artifacts:
-        key = (artifact["slice_num"], "proof")
-        url_info = url_map.get(key)
-        if not url_info:
-            logger.warning(f"No upload URL for {key}")
-            continue
+    ok = True
+    with httpx.Client(timeout=120.0) as client:
+        for artifact in proof_artifacts:
+            key = (artifact["slice_num"], "proof")
+            url_info = url_map.get(key)
+            if not url_info:
+                logger.warning(f"No upload URL for {key}")
+                continue
 
-        proof_data = artifact["proof_data"]
-        if isinstance(proof_data, str):
-            data_bytes = bytes.fromhex(proof_data)
-        elif isinstance(proof_data, dict):
-            data_bytes = json.dumps(proof_data).encode()
-        elif isinstance(proof_data, bytes):
-            data_bytes = proof_data
-        else:
-            logger.warning(f"Unknown proof data type for {key}: {type(proof_data)}")
-            continue
+            try:
+                proof_data = artifact["proof_data"]
+                if isinstance(proof_data, str):
+                    data_bytes = bytes.fromhex(proof_data)
+                elif isinstance(proof_data, dict):
+                    data_bytes = json.dumps(proof_data).encode()
+                elif isinstance(proof_data, bytes):
+                    data_bytes = proof_data
+                else:
+                    logger.warning(
+                        f"Unknown proof data type for {key}: {type(proof_data)}"
+                    )
+                    continue
 
-        success = upload_artifact_bytes(url_info["upload_url"], data_bytes)
-        if not success:
-            logger.warning(f"Failed to upload artifact {key}")
-            continue
+                uploaded = upload_artifact_bytes(
+                    client, url_info["upload_url"], data_bytes
+                )
+                if not uploaded:
+                    logger.warning(f"Failed to upload artifact {key}")
+                    ok = False
+                    continue
+            except Exception as e:
+                logger.error(f"Error processing artifact {key}: {e}")
+                ok = False
+                continue
 
-        confirm_artifacts.append(
-            {
-                "slice_num": artifact["slice_num"],
-                "parent_slice": artifact.get("parent_slice"),
-                "tile_idx": artifact.get("tile_idx"),
-                "proof_system": artifact["proof_system"],
-                "gcs_key": url_info["gcs_key"],
-                "size_bytes": len(data_bytes),
-                "artifact_type": "proof",
-            }
-        )
+            confirm_artifacts.append(
+                {
+                    "slice_num": artifact["slice_num"],
+                    "parent_slice": artifact.get("parent_slice"),
+                    "tile_idx": artifact.get("tile_idx"),
+                    "proof_system": artifact["proof_system"],
+                    "gcs_key": url_info["gcs_key"],
+                    "size_bytes": len(data_bytes),
+                    "artifact_type": "proof",
+                }
+            )
 
     if confirm_artifacts:
         try:
@@ -204,6 +202,7 @@ def upload_run_proofs(
             )
         except Exception as e:
             logger.error(f"Failed to confirm uploads for run {run_uid}: {e}")
+            ok = False
 
     if final_output:
         try:
@@ -211,5 +210,6 @@ def upload_run_proofs(
             logger.info(f"Uploaded final output for run {run_uid}")
         except Exception as e:
             logger.error(f"Failed to upload final output for run {run_uid}: {e}")
+            ok = False
 
-    return True
+    return ok
