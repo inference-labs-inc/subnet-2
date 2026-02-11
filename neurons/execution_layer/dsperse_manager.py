@@ -614,6 +614,7 @@ class DSperseManager:
             logging.info(
                 f"Aborted {len(aborted)} benchmark runs for incoming API request"
             )
+        return aborted
 
     def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
         """Callback when an incremental run completes."""
