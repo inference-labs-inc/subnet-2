@@ -375,11 +375,15 @@ class RelayManager:
 
             status = self.dsperse_manager.get_run_status(run_uid)
             bt.logging.success(
-                f"Run {run_uid} created: {status['total_slices']} slices queued"
+                f"Run {run_uid} created: {status.total_slices} slices queued"
             )
 
             return Success(
-                {"run_uid": run_uid, "status": "processing", "progress": status}
+                {
+                    "run_uid": run_uid,
+                    "status": "processing",
+                    "progress": status.to_dict(),
+                }
             )
 
         except Exception as e:
@@ -401,16 +405,16 @@ class RelayManager:
             return Error(11, "Run not found", f"No run with ID {run_uid}")
 
         try:
-            if status["is_complete"]:
+            if status.is_complete:
                 run_status = (
-                    "completed" if status["all_successful"] else "completed_with_errors"
+                    "completed" if status.all_successful else "completed_with_errors"
                 )
                 self._cleanup_run(run_uid)
             else:
                 run_status = "processing"
 
             return Success(
-                {"run_uid": run_uid, "status": run_status, "progress": status}
+                {"run_uid": run_uid, "status": run_status, "progress": status.to_dict()}
             )
 
         except Exception as e:
