@@ -3,6 +3,7 @@ from collections import deque
 from dataclasses import dataclass, field
 import json
 import os
+import threading
 import torch
 import bittensor as bt
 from constants import (
@@ -30,34 +31,46 @@ class PerformanceTracker:
     ):
         self.window_size = window_size
         self.windows: dict[int, deque[bool]] = {}
+        self._lock = threading.Lock()
         self.persistence_path = persistence_path
         self._load()
 
     def record(self, uid: int, success: bool) -> None:
-        if uid not in self.windows:
-            self.windows[uid] = deque(maxlen=self.window_size)
-        self.windows[uid].append(success)
+        with self._lock:
+            if uid not in self.windows:
+                self.windows[uid] = deque(maxlen=self.window_size)
+            self.windows[uid].append(success)
 
     def success_rate(self, uid: int) -> float:
-        if uid not in self.windows or len(self.windows[uid]) == 0:
-            return 0.0
-        return sum(self.windows[uid]) / len(self.windows[uid])
+        with self._lock:
+            if uid not in self.windows or len(self.windows[uid]) == 0:
+                return 0.0
+            return sum(self.windows[uid]) / len(self.windows[uid])
 
     def sample_count(self, uid: int) -> int:
-        if uid not in self.windows:
-            return 0
-        return len(self.windows[uid])
+        with self._lock:
+            if uid not in self.windows:
+                return 0
+            return len(self.windows[uid])
+
+    def snapshot(self) -> dict[int, tuple[float, int]]:
+        with self._lock:
+            return {
+                uid: (sum(w) / len(w) if len(w) > 0 else 0.0, len(w))
+                for uid, w in self.windows.items()
+            }
 
     def save(self) -> None:
         if not self.persistence_path:
             return
         try:
             os.makedirs(os.path.dirname(self.persistence_path), exist_ok=True)
-            with open(self.persistence_path, "w") as f:
-                json.dump(
-                    {str(uid): list(window) for uid, window in self.windows.items()},
-                    f,
-                )
+            with self._lock:
+                data = {str(uid): list(window) for uid, window in self.windows.items()}
+            tmp_path = self.persistence_path + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp_path, self.persistence_path)
         except Exception as e:
             bt.logging.error(f"Failed to save performance tracker: {e}")
 
@@ -68,7 +81,9 @@ class PerformanceTracker:
             with open(self.persistence_path, "r") as f:
                 data = json.load(f)
             for uid_str, results in data.items():
-                self.windows[int(uid_str)] = deque(results, maxlen=self.window_size)
+                self.windows[int(uid_str)] = deque(
+                    (bool(v) for v in results), maxlen=self.window_size
+                )
             bt.logging.info(f"Loaded performance tracker with {len(self.windows)} UIDs")
         except Exception as e:
             bt.logging.error(f"Failed to load performance tracker: {e}")
@@ -138,14 +153,15 @@ class WeightsManager:
     def _compute_performance_weights(self, scores: torch.Tensor) -> torch.Tensor:
         n = self.metagraph.n
         weights = torch.zeros(n)
+        snap = self.performance_tracker.snapshot()
+        exploration_floor = 1.0 / n
 
         for uid in range(n):
-            samples = self.performance_tracker.sample_count(uid)
-            if samples >= PERFORMANCE_MIN_SAMPLES:
-                rate = self.performance_tracker.success_rate(uid)
+            rate, count = snap.get(uid, (0.0, 0))
+            if count >= PERFORMANCE_MIN_SAMPLES:
                 weights[uid] = rate**PERFORMANCE_CURVE_POWER
             elif uid < len(scores) and scores[uid] > 0:
-                weights[uid] = float(scores[uid])
+                weights[uid] = exploration_floor
 
         total = weights.sum()
         if total > 0:
@@ -164,17 +180,16 @@ class WeightsManager:
 
         weights = self._compute_performance_weights(scores)
 
-        tracker = self.performance_tracker
-        tracked_uids = [
-            uid
-            for uid in range(self.metagraph.n)
-            if tracker.sample_count(uid) >= PERFORMANCE_MIN_SAMPLES
-        ]
-        if tracked_uids:
-            rates = {uid: tracker.success_rate(uid) for uid in tracked_uids}
-            top = sorted(rates.items(), key=lambda x: x[1], reverse=True)[:5]
+        snap = self.performance_tracker.snapshot()
+        tracked = {
+            uid: rate
+            for uid, (rate, count) in snap.items()
+            if count >= PERFORMANCE_MIN_SAMPLES
+        }
+        if tracked:
+            top = sorted(tracked.items(), key=lambda x: x[1], reverse=True)[:5]
             bt.logging.info(
-                f"Performance tracker: {len(tracked_uids)} UIDs tracked, "
+                f"Performance tracker: {len(tracked)} UIDs tracked, "
                 f"top 5: {[(uid, f'{rate:.2%}') for uid, rate in top]}"
             )
 

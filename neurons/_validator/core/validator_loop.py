@@ -746,7 +746,7 @@ class ValidatorLoop:
                 )
 
             self.weights_manager.performance_tracker.record(
-                response.uid, response.verification_result
+                response.uid, bool(response.verification_result)
             )
 
             old_score = self.score_manager._get_safe_score(response.uid)
