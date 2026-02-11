@@ -106,11 +106,6 @@ class DSperseManager:
             incremental_mode: If True, use incremental execution where miners
                              compute outputs
         """
-        self.circuits: list[Circuit] = [
-            circuit
-            for circuit in circuit_store.circuits.values()
-            if circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION
-        ]
         self.runs: dict[str, DsperseRun] = {}
         self.event_client = event_client
         self.lazy = lazy
@@ -126,6 +121,14 @@ class DSperseManager:
                 on_tile_onnx_fallback=self._on_tile_onnx_fallback,
             )
         self._purge_old_runs()
+
+    @property
+    def circuits(self) -> list[Circuit]:
+        return [
+            circuit
+            for circuit in circuit_store.circuits.values()
+            if circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION
+        ]
 
     @staticmethod
     def _purge_old_runs():
@@ -161,7 +164,6 @@ class DSperseManager:
                 raise ValueError(
                     f"Circuit {circuit_id} is not a DSperse circuit (type: {circuit.metadata.type})"
                 )
-            self.circuits.append(circuit)
         return circuit
 
     def start_run(
