@@ -134,9 +134,14 @@ def upload_run_proofs(
         logger.info(f"No proof artifacts to upload for run {run_uid}")
         return True
 
-    artifact_specs = [
-        {"slice_num": a["slice_num"], "artifact_type": "proof"} for a in proof_artifacts
-    ]
+    try:
+        artifact_specs = [
+            {"slice_num": a["slice_num"], "artifact_type": "proof"}
+            for a in proof_artifacts
+        ]
+    except (KeyError, TypeError) as e:
+        logger.error(f"Malformed proof artifact for run {run_uid}: {e}")
+        return False
 
     try:
         url_responses = request_upload_urls(run_uid, circuit_id, artifact_specs)
@@ -154,14 +159,14 @@ def upload_run_proofs(
     ok = True
     with httpx.Client(timeout=120.0) as client:
         for artifact in proof_artifacts:
-            key = (artifact["slice_num"], "proof")
-            url_info = url_map.get(key)
-            if not url_info:
-                logger.warning(f"No upload URL for {key}")
-                ok = False
-                continue
-
             try:
+                key = (artifact["slice_num"], "proof")
+                url_info = url_map.get(key)
+                if not url_info:
+                    logger.warning(f"No upload URL for {key}")
+                    ok = False
+                    continue
+
                 proof_data = artifact["proof_data"]
                 if isinstance(proof_data, str):
                     data_bytes = bytes.fromhex(proof_data)
@@ -196,7 +201,9 @@ def upload_run_proofs(
                     }
                 )
             except Exception as e:
-                logger.error(f"Error processing artifact {key}: {e}")
+                logger.error(
+                    f"Error processing artifact {artifact.get('slice_num', '?')}: {e}"
+                )
                 ok = False
                 continue
 
