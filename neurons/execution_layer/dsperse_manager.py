@@ -52,6 +52,7 @@ class DSperseManager:
         self._incremental_runs: set[str] = set()
         self._incremental_run_circuits: dict[str, str] = {}
         self._incremental_runs_lock = threading.Lock()
+        self._completed_run_statuses: dict[str, dict] = {}
         self._purge_old_runs()
 
     @staticmethod
@@ -112,13 +113,6 @@ class DSperseManager:
         Returns:
             Run UID
         """
-        if not self._incremental_runner:
-            self._incremental_runner = IncrementalRunner(
-                on_run_complete=self._on_incremental_run_complete,
-                on_jstprove_range_fallback=self._on_jstprove_range_fallback,
-                on_tile_onnx_fallback=self._on_tile_onnx_fallback,
-            )
-
         run_uid = self._incremental_runner.start_run(circuit, inputs, run_source)
         with self._incremental_runs_lock:
             self._incremental_runs.add(run_uid)
@@ -142,24 +136,18 @@ class DSperseManager:
         return run_uid
 
     def get_next_incremental_work(self, run_uid: str) -> list[DSliceQueuedProofRequest]:
-        """
-        Get the next work items for an incremental run.
-
-        Args:
-            run_uid: The run identifier
-
-        Returns:
-            List of DSliceQueuedProofRequest. Empty list means ONNX ran locally (call again).
-            None returned as empty list means waiting or complete.
-        """
-        if not self._incremental_runner:
+        max_local_steps = 200
+        for _ in range(max_local_steps):
+            work_items = self._incremental_runner.get_next_work(run_uid)
+            if work_items is None:
+                return []
+            if len(work_items) > 0:
+                break
+        else:
+            logging.warning(
+                f"get_next_incremental_work exhausted {max_local_steps} local ONNX steps for run {run_uid}"
+            )
             return []
-
-        work_items = self._incremental_runner.get_next_work(run_uid)
-        if work_items is None:
-            return []
-        if len(work_items) == 0:
-            return self.get_next_incremental_work(run_uid)
 
         queued_requests = [
             self._incremental_runner.create_queued_request(item) for item in work_items
@@ -180,13 +168,6 @@ class DSperseManager:
         Returns:
             List of DSliceQueuedProofRequest
         """
-        if not self._incremental_runner:
-            self._incremental_runner = IncrementalRunner(
-                on_run_complete=self._on_incremental_run_complete,
-                on_jstprove_range_fallback=self._on_jstprove_range_fallback,
-                on_tile_onnx_fallback=self._on_tile_onnx_fallback,
-            )
-
         with self._incremental_runs_lock:
             incremental_runs_snapshot = list(self._incremental_runs)
             active_circuit_ids = set(self._incremental_run_circuits.values())
@@ -240,9 +221,6 @@ class DSperseManager:
         Returns:
             Tuple of (is_run_complete, next_slice_request)
         """
-        if not self._incremental_runner:
-            return True, None
-
         task_id = (
             f"slice_{slice_num}" if not slice_num.startswith("slice_") else slice_num
         )
@@ -314,9 +292,6 @@ class DSperseManager:
         Returns:
             Tuple of (is_run_complete, next_requests)
         """
-        if not self._incremental_runner:
-            return True, []
-
         slice_complete = self._incremental_runner.apply_result(
             run_uid=run_uid,
             task_id=task_id,
@@ -354,9 +329,6 @@ class DSperseManager:
         return False, self.get_next_incremental_work(run_uid)
 
     def has_work_in_flight(self) -> bool:
-        """Check if any run has work currently being processed by miners."""
-        if not self._incremental_runner:
-            return False
         with self._incremental_runs_lock:
             for run_uid in self._incremental_runs:
                 if self._incremental_runner.has_pending_work(run_uid):
@@ -403,8 +375,6 @@ class DSperseManager:
             )
 
     def abort_benchmark_runs(self) -> list[str]:
-        if not self._incremental_runner:
-            return []
         with self._incremental_runs_lock:
             benchmark_uids = [
                 uid
@@ -424,36 +394,39 @@ class DSperseManager:
     def _on_incremental_run_complete(self, run_uid: str, success: bool) -> None:
         logging.info(f"Incremental run {run_uid} completed, success={success}")
 
-        output_tensor = None
-        circuit_id = None
-        run_source = None
-        status = None
         with self._incremental_runs_lock:
             circuit_id = self._incremental_run_circuits.get(run_uid)
-            self._incremental_runs.discard(run_uid)
-            self._incremental_run_circuits.pop(run_uid, None)
 
-            status = (
-                self._incremental_runner.get_run_status(run_uid)
-                if self._incremental_runner
-                else None
+        status = self._incremental_runner.get_run_status(run_uid)
+        if status:
+            status["all_successful"] = status["is_complete"] and status["failed"] == 0
+            total = status["total_slices"]
+            status["progress_percent"] = (
+                (status["completed"] + status["failed"]) / total * 100
+                if total > 0
+                else 0
+            )
+            self._completed_run_statuses[run_uid] = status
+
+        if self.event_client and status:
+            self._schedule_async(
+                self.event_client.emit_run_complete(
+                    run_uid=run_uid,
+                    all_successful=success,
+                    total_run_time_sec=status.get("elapsed_time", 0),
+                )
             )
 
-            if self.event_client and status:
-                self._schedule_async(
-                    self.event_client.emit_run_complete(
-                        run_uid=run_uid,
-                        all_successful=success,
-                        total_run_time_sec=status.get("elapsed_time", 0),
-                    )
-                )
+        output_tensor = None
+        run_source = None
+        if success:
+            output_tensor = self._incremental_runner.get_final_output(run_uid)
+            run_source = self._incremental_runner.get_run_source(run_uid)
 
-            if self._incremental_runner and success:
-                output_tensor = self._incremental_runner.get_final_output(run_uid)
-                run_source = self._incremental_runner.get_run_source(run_uid)
-
-            if self._incremental_runner:
-                self._incremental_runner.cleanup_run(run_uid)
+        self._incremental_runner.cleanup_run(run_uid)
+        with self._incremental_runs_lock:
+            self._incremental_runs.discard(run_uid)
+            self._incremental_run_circuits.pop(run_uid, None)
 
         if status and circuit_id:
             threading.Thread(
@@ -482,8 +455,9 @@ class DSperseManager:
             return run_uid in self._incremental_runs
 
     def get_run_status(self, run_uid: str) -> dict | None:
-        if not self._incremental_runner:
-            return None
+        cached = self._completed_run_statuses.get(run_uid)
+        if cached:
+            return cached
         status = self._incremental_runner.get_run_status(run_uid)
         if not status:
             return None
@@ -1045,8 +1019,8 @@ class DSperseManager:
         return result
 
     def cleanup_run(self, run_uid: str):
-        if self._incremental_runner:
-            self._incremental_runner.cleanup_run(run_uid)
+        self._incremental_runner.cleanup_run(run_uid)
+        self._completed_run_statuses.pop(run_uid, None)
         with self._incremental_runs_lock:
             self._incremental_runs.discard(run_uid)
             self._incremental_run_circuits.pop(run_uid, None)
@@ -1056,9 +1030,9 @@ class DSperseManager:
         with self._incremental_runs_lock:
             for run_uid in list(self._incremental_runs):
                 try:
-                    if self._incremental_runner:
-                        self._incremental_runner.cleanup_run(run_uid)
+                    self._incremental_runner.cleanup_run(run_uid)
                 except Exception as e:
                     logging.error(f"Failed to cleanup run {run_uid}: {e}")
             self._incremental_runs.clear()
             self._incremental_run_circuits.clear()
+        self._completed_run_statuses.clear()
