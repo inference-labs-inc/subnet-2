@@ -120,6 +120,7 @@ class DSperseManager:
             self._incremental_runner = IncrementalRunner(
                 on_run_complete=self._on_incremental_run_complete,
                 on_jstprove_range_fallback=self._on_jstprove_range_fallback,
+                on_tile_onnx_fallback=self._on_tile_onnx_fallback,
             )
         self._purge_old_runs()
 
@@ -303,6 +304,7 @@ class DSperseManager:
             self._incremental_runner = IncrementalRunner(
                 on_run_complete=self._on_incremental_run_complete,
                 on_jstprove_range_fallback=self._on_jstprove_range_fallback,
+                on_tile_onnx_fallback=self._on_tile_onnx_fallback,
             )
 
         run_uid = self._incremental_runner.start_run(circuit, inputs)
@@ -369,6 +371,7 @@ class DSperseManager:
             self._incremental_runner = IncrementalRunner(
                 on_run_complete=self._on_incremental_run_complete,
                 on_jstprove_range_fallback=self._on_jstprove_range_fallback,
+                on_tile_onnx_fallback=self._on_tile_onnx_fallback,
             )
 
         with self._incremental_runs_lock:
@@ -562,6 +565,27 @@ class DSperseManager:
                     run_uid=run_uid,
                     slice_num=slice_id,
                     overflow_info=overflow_info,
+                )
+            )
+
+    def _on_tile_onnx_fallback(
+        self, run_uid: str, slice_id: str, task_id: str, tile_idx: int
+    ) -> None:
+        logging.warning(
+            f"Tile ONNX fallback in run {run_uid} slice {slice_id}: "
+            f"task {task_id} (tile {tile_idx}) reverted to local ONNX"
+        )
+        if self.event_client:
+            slice_num = (
+                f"{slice_id.removeprefix('slice_')}_tile_{tile_idx}"
+                if tile_idx >= 0
+                else slice_id
+            )
+            self._schedule_async(
+                self.event_client.emit_tile_onnx_fallback(
+                    run_uid=run_uid,
+                    slice_num=slice_num,
+                    task_id=task_id,
                 )
             )
 

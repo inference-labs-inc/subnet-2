@@ -64,6 +64,7 @@ class RunState:
     completed_slices: list[str] = field(default_factory=list)
     failed_slices: list[str] = field(default_factory=list)
     failed_tasks: set[str] = field(default_factory=set)
+    onnx_fallback_tasks: set[str] = field(default_factory=set)
     start_time: float = 0.0
     aborted: bool = False
 
@@ -109,10 +110,12 @@ class IncrementalRunner:
         self,
         on_run_complete: Optional[Callable[[str, bool], None]] = None,
         on_jstprove_range_fallback: Optional[Callable[[str, str, dict], None]] = None,
+        on_tile_onnx_fallback: Optional[Callable[[str, str, str, int], None]] = None,
     ):
         self._runs: dict[str, RunState] = {}
         self._on_run_complete = on_run_complete
         self._on_jstprove_range_fallback = on_jstprove_range_fallback
+        self._on_tile_onnx_fallback = on_tile_onnx_fallback
 
     def _build_from_dslice_zips(
         self, slices_path: Path, dslice_files: list[Path]
@@ -337,16 +340,31 @@ class IncrementalRunner:
         del state.pending_work[task_id]
 
         if not success:
-            logging.error(f"Task {task_id} failed: {error}")
-            state.failed_tasks.add(task_id)
-            if not state.pending_work:
-                state.failed_slices.append(state.current_slice_id)
-                state.aborted = True
-                logging.error(
-                    f"Run {run_uid} aborted: slice {state.current_slice_id} failed"
-                )
-                self._on_complete(state)
-            return not state.pending_work
+            logging.warning(f"Task {task_id} failed from miner: {error}")
+            try:
+                fallback_output = self._run_onnx_for_failed_task(state, task_id)
+                state.onnx_fallback_tasks.add(task_id)
+                logging.warning(f"ONNX fallback succeeded for {task_id}")
+                success = True
+                output = fallback_output
+                slice_id = state.current_slice_id
+                meta = state.slice_metadata.get(slice_id)
+                if self._on_tile_onnx_fallback:
+                    tile_idx = (
+                        int(task_id.split("_tile_")[1]) if "_tile_" in task_id else -1
+                    )
+                    self._on_tile_onnx_fallback(run_uid, slice_id, task_id, tile_idx)
+            except Exception as onnx_err:
+                logging.error(f"ONNX fallback also failed for {task_id}: {onnx_err}")
+                state.failed_tasks.add(task_id)
+                if not state.pending_work:
+                    state.failed_slices.append(state.current_slice_id)
+                    state.aborted = True
+                    logging.error(
+                        f"Run {run_uid} aborted: slice {state.current_slice_id} failed"
+                    )
+                    self._on_complete(state)
+                return not state.pending_work
 
         slice_id = state.current_slice_id
         meta = state.slice_metadata.get(slice_id)
@@ -562,6 +580,56 @@ class IncrementalRunner:
                     "circuit_id": state.circuit.id,
                 }
         return None
+
+    def _run_onnx_for_failed_task(
+        self, state: RunState, task_id: str
+    ) -> Optional[torch.Tensor]:
+        from dsperse.src.run.utils.runner_utils import RunnerUtils
+        from dsperse.src.backends.onnx_models import OnnxModels
+
+        slice_id = state.current_slice_id
+        meta = state.slice_metadata.get(slice_id)
+        if not meta:
+            raise ValueError(f"No metadata for {slice_id}")
+
+        if "_tile_" in task_id:
+            tile_idx = int(task_id.split("_tile_")[1])
+            cache_name = f"tile_{meta.tiling.slice_idx}_{tile_idx}_in"
+            tile_input = state.tensor_cache.get(cache_name)
+            if tile_input is None:
+                raise ValueError(f"Missing tile input {cache_name} for ONNX fallback")
+
+            onnx_path = RunnerUtils.resolve_relative_path(
+                meta.path, state.slices_path / slice_id
+            )
+            if not onnx_path or not Path(onnx_path).exists():
+                raise ValueError(f"ONNX path not found for {slice_id}: {onnx_path}")
+
+            logging.warning(f"Running ONNX fallback for tile {task_id}")
+            success, result = OnnxModels.run_inference_tensor(
+                input_tensor=tile_input,
+                model_path=onnx_path,
+            )
+            if not success:
+                raise RuntimeError(
+                    f"ONNX inference failed for tile {task_id}: {result}"
+                )
+
+            output_tensors = result.get("output_tensors", {})
+            if output_tensors:
+                output_tensor = next(iter(output_tensors.values()))
+            else:
+                output_tensor = RunnerUtils.extract_output_tensor(result)
+
+            if output_tensor is None:
+                raise RuntimeError(f"No output tensor from ONNX fallback for {task_id}")
+
+            self._store_tile_output(state, meta, tile_idx, output_tensor)
+            return output_tensor
+        else:
+            logging.warning(f"Running ONNX fallback for slice {task_id}")
+            self._run_single_onnx(state, slice_id, meta)
+            return None
 
     def _run_onnx_locally(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata

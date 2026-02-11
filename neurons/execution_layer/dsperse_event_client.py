@@ -168,6 +168,22 @@ class DsperseEventClient:
             }
         )
 
+    async def emit_tile_onnx_fallback(
+        self,
+        run_uid: str,
+        slice_num: str,
+        task_id: str,
+    ):
+        await self.emit(
+            {
+                "event_type": "tile_onnx_fallback",
+                "run_uid": run_uid,
+                "slice_num": slice_num,
+                "fallback": "onnx",
+                "error": f"Miner failed task {task_id}, reverted to local ONNX",
+            }
+        )
+
     async def emit_run_complete(
         self,
         run_uid: str,

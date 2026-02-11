@@ -418,11 +418,7 @@ class Circuit:
         self.paths.set_proof_system_paths(self.proof_system)
         self.settings = {}
         self.evaluation_data = CircuitEvaluationData(self, self.paths.evaluation_data)
-        self.timeout = (
-            self.metadata.timeout
-            if hasattr(self.metadata, "timeout") and self.metadata.timeout is not None
-            else CIRCUIT_TIMEOUT_SECONDS
-        )
+        self.timeout = CIRCUIT_TIMEOUT_SECONDS
         if self.proof_system not in (ProofSystem.JSTPROVE,):
             try:
                 with open(self.paths.settings, "r", encoding="utf-8") as f:
