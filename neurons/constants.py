@@ -58,7 +58,7 @@ MAXIMUM_SCORE_MEDIAN_SAMPLE = 0.05
 # Shift in seconds to apply to the minimum response time for vertical asymptote adjustment
 MINIMUM_SCORE_SHIFT = 0.0
 # Weights version hyperparameter
-WEIGHTS_VERSION = 11002
+WEIGHTS_VERSION = 11003
 # Rate limit for weight updates
 WEIGHT_RATE_LIMIT: int = 100
 # Delay between loop iterations
@@ -186,10 +186,11 @@ EMA_BOOST_FACTOR = 1.2
 EMA_ENABLED = False
 
 PERFORMANCE_WINDOW_SIZE = 2000
-PERFORMANCE_CURVE_POWER = 5.0
+PERFORMANCE_CURVE_POWER = 3.0
 PERFORMANCE_MIN_SAMPLES = 5
 PERFORMANCE_RESCHEDULE_PENALTY = -0.4
-PERFORMANCE_RESPONSE_TIME_WEIGHT = 0.3
+PERFORMANCE_RESPONSE_TIME_WEIGHT = 0.5
+PERFORMANCE_SCORING_PERCENTILE = 0.50
 
 CIRCUIT_API_URL = os.getenv("CIRCUIT_API_URL", "https://repository.inferencelabs.com")
 CIRCUIT_R2_BASE_URL = os.getenv(

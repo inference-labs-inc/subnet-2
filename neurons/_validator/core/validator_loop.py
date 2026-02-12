@@ -150,9 +150,8 @@ class ValidatorLoop:
                 asyncio.get_event_loop().run_in_executor(
                     self.thread_pool,
                     self.weights_manager.update_weights,
-                    self.score_manager.scores,
                 ),
-                timeout=120.0,  # 2 minute timeout
+                timeout=120.0,
             )
             duration = time.time() - start_time
             log_weight_update(duration, success=True)
