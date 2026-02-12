@@ -5,12 +5,14 @@ import base64
 import contextlib
 import copy
 import json
+import threading
 import traceback
 
 import bittensor as bt
 import websockets
 from deployment_layer.circuit_store import circuit_store
 from execution_layer.dsperse_manager import DSperseManager
+from execution_layer.proof_uploader import upload_run_proofs
 from jsonrpcserver import (
     Error,
     InvalidParams,
@@ -254,6 +256,34 @@ class RelayManager:
                 bt.logging.error(f"Failed to send queued notification: {e}")
                 self._pending_notifications.insert(0, notification)
                 break
+
+    def on_api_run_complete(
+        self,
+        run_uid: str,
+        circuit_id: str,
+        success: bool,
+        proof_artifacts: list[dict],
+    ) -> None:
+        if proof_artifacts:
+            circuit = circuit_store.circuits.get(circuit_id)
+            circuit_name = circuit.metadata.name if circuit else circuit_id
+            threading.Thread(
+                target=upload_run_proofs,
+                args=(run_uid, circuit_id, circuit_name, proof_artifacts),
+                daemon=True,
+            ).start()
+
+        self._pending_notifications.append(
+            {
+                "jsonrpc": "2.0",
+                "method": "subnet-2.batch_completed",
+                "params": {
+                    "run_uid": run_uid,
+                    "circuit_id": circuit_id,
+                    "status": "completed" if success else "completed_with_errors",
+                },
+            }
+        )
 
     async def handle_proof_of_computation(self, **params: dict) -> dict:
         """

@@ -110,6 +110,7 @@ class ValidatorLoop:
         self.relay = RelayManager(self.config)
         self.relay.dsperse_manager = self.dsperse_manager
         self.relay.dispatch_event = self._dispatch_event
+        self.dsperse_manager.on_api_run_complete = self.relay.on_api_run_complete
         self.request_pipeline = RequestPipeline(
             self.config, self.score_manager, self.relay
         )
@@ -644,6 +645,7 @@ class ValidatorLoop:
                     computed_outputs=response.computed_outputs,
                     proof=response.proof_content,
                     witness=response.witness,
+                    proof_system=response.proof_system,
                     response_time_sec=response.response_time,
                     verification_time_sec=response.verification_time or 0.0,
                 )
@@ -666,6 +668,7 @@ class ValidatorLoop:
                     success=True,
                     computed_outputs=response.computed_outputs,
                     proof=response.proof_content,
+                    proof_system=response.proof_system,
                     response_time_sec=response.response_time,
                     verification_time_sec=response.verification_time or 0.0,
                 )
