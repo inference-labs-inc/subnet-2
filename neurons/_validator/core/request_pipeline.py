@@ -71,17 +71,16 @@ class RequestPipeline:
         skip_hash_guard: bool = False,
     ) -> Request | None:
         """Check hash and create request if valid."""
-        guard_hash = None
-        if skip_hash_guard:
-            pass
+        if isinstance(request_data, ProofOfWeightsDataModel) or isinstance(
+            request_data, DSliceProofGenerationDataModel
+        ):
+            input_data = request_data.inputs
         else:
+            input_data = request_data.query_input
+
+        guard_hash = None
+        if not skip_hash_guard:
             try:
-                if isinstance(request_data, ProofOfWeightsDataModel) or isinstance(
-                    request_data, DSliceProofGenerationDataModel
-                ):
-                    input_data = request_data.inputs
-                else:
-                    input_data = request_data.query_input
                 guard_hash = self.hash_guard.check_hash(input_data)
             except ValueError as e:
                 bt.logging.error(f"Hash already exists: {e}")
