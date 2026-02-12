@@ -2,8 +2,6 @@ import sys
 import bittensor as bt
 from constants import DEFAULT_NETUID, COMPETITION_SYNC_INTERVAL
 
-from utils import wandb_logger
-
 
 class ValidatorConfig:
     """
@@ -53,14 +51,6 @@ class ValidatorConfig:
             COMPETITION_SYNC_INTERVAL
             if self.bt_config.competition_sync_interval is None
             else self.bt_config.competition_sync_interval
-        )
-
-        # Initialize wandb logger
-        wandb_logger.safe_init(
-            "Validator",
-            self.wallet,
-            self.metagraph,
-            self.bt_config,
         )
 
     def check_register(self):

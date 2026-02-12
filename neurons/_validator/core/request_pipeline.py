@@ -28,7 +28,6 @@ from protocol import (
     ProofOfWeightsDataModel,
     QueryZkProof,
 )
-from utils.wandb_logger import safe_log
 
 
 def _get_local_miner_overrides() -> dict[int, tuple[str, int]]:
@@ -82,7 +81,6 @@ class RequestPipeline:
             guard_hash = self.hash_guard.check_hash(input_data)
         except ValueError as e:
             bt.logging.error(f"Hash already exists: {e}")
-            safe_log({"hash_guard_error": 1})
             if request_type == RequestType.RWR:
                 self.relay.set_request_result(
                     external_request_hash,

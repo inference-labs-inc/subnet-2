@@ -28,7 +28,7 @@ from constants import (
     ONE_HOUR,
     SINGLE_PROOF_OF_WEIGHTS_MODEL_ID,
 )
-from utils import AutoUpdate, clean_temp_files, wandb_logger
+from utils import AutoUpdate, clean_temp_files
 from utils.rate_limiter import with_rate_limit
 from .circuit_manager import CircuitManager
 
@@ -44,7 +44,6 @@ class MinerSession:
         self.check_register(should_exit=True)
         self.auto_update = AutoUpdate()
         self.dsperse_manager = DSperseManager()
-        self.log_batch = []
         self.shuffled_uids = None
         self.last_shuffle_epoch = -1
         if cli_parser.config.disable_blacklist:
@@ -130,17 +129,6 @@ class MinerSession:
                             "Automatic updates are disabled, skipping version check"
                         )
 
-                if step % 20 == 0:
-                    if len(self.log_batch) > 0:
-                        bt.logging.debug(
-                            f"Logging batch to WandB of size {len(self.log_batch)}"
-                        )
-                        for log in self.log_batch:
-                            wandb_logger.safe_log(log)
-                        self.log_batch = []
-                    else:
-                        bt.logging.debug("No logs to log to WandB")
-
                 if step % 600 == 0:
                     self.check_register()
                     circuit_store.refresh_circuits()
@@ -199,8 +187,6 @@ class MinerSession:
         self.server = MinerServer(
             wallet=self.wallet, config=cli_parser.config, metagraph=self.metagraph
         )
-        wandb_logger.safe_init("Miner", self.wallet, self.metagraph, cli_parser.config)
-
         if cli_parser.config.storage:
             storage_config = {
                 "provider": cli_parser.config.storage.provider,
@@ -434,16 +420,6 @@ class MinerSession:
             f"Total response time {delta_t}s. Proof time: {proof_time}s. "
             f"Overhead time: {delta_t - proof_time}s."
         )
-        self.log_batch.append(
-            {
-                model_id: {
-                    "proof_time": proof_time,
-                    "overhead_time": delta_t - proof_time,
-                    "total_response_time": delta_t,
-                }
-            }
-        )
-
         if delta_t > circuit_timeout:
             bt.logging.error(
                 "Response time is greater than circuit timeout. "
@@ -506,16 +482,6 @@ class MinerSession:
             f"Total response time {delta_t}s. Proof time: {proof_time}s. "
             f"Overhead time: {delta_t - proof_time}s."
         )
-        self.log_batch.append(
-            {
-                str(data.verification_key_hash): {
-                    "proof_time": proof_time,
-                    "overhead_time": delta_t - proof_time,
-                    "total_response_time": delta_t,
-                }
-            }
-        )
-
         if delta_t > circuit_timeout:
             bt.logging.error(
                 "Response time is greater than circuit timeout. "

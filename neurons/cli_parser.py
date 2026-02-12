@@ -43,8 +43,6 @@ def init_config(role: Optional[str] = None):
     and some of which are specific to each.
     The configuration itself is stored in the global variable `config`. Kinda singleton pattern.
     """
-    from utils import wandb_logger
-
     global parser
     global config
 
@@ -63,15 +61,6 @@ def init_config(role: Optional[str] = None):
         "--no-auto-update",
         default=bool(os.getenv("SUBNET_2_NO_AUTO_UPDATE", False)),
         help="Whether this miner should NOT automatically update upon new release.",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--wandb-key", type=str, default="", help="A https://wandb.ai API key"
-    )
-    parser.add_argument(
-        "--disable-wandb",
-        default=False,
-        help="Whether to disable WandB logging.",
         action="store_true",
     )
     parser.add_argument(
@@ -150,7 +139,6 @@ def init_config(role: Optional[str] = None):
         config.eth_wallet = (
             config.eth_wallet if config.eth_wallet is not None else "0x002"
         )
-        config.disable_wandb = True
         config.disable_metric_logging = True
         config.verbose = config.verbose if config.verbose is None else True
 
@@ -179,10 +167,6 @@ def init_config(role: Optional[str] = None):
         bt.logging.error(
             f"Cannot write to {config.full_path}. Please make sure you have the correct permissions."
         )
-
-    if config.wandb_key:
-        wandb_logger.safe_login(api_key=config.wandb_key)
-        bt.logging.success("Logged into WandB")
 
 
 def _miner_config():

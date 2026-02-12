@@ -4,8 +4,6 @@ import time
 import requests
 from typing import Optional
 from constants import REPO_URL, ONE_MINUTE
-from .wandb_logger import safe_log
-
 from bittensor import logging
 
 from .system import restart_app
@@ -114,13 +112,6 @@ class AutoUpdate:
                 return False
 
             current_tag = self.get_local_latest_tag()
-
-            safe_log(
-                {
-                    "local_version": current_tag.name,
-                    "remote_version": latest_release_tag_name,
-                }
-            )
 
             if current_tag.name == latest_release_tag_name:
                 if self.repo.head.commit.hexsha == current_tag.commit.hexsha:

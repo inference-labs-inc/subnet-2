@@ -38,7 +38,6 @@ dependencies = [
   "tqdm>=4.67.1",
   "urllib3>=2.6.3",
   "uvicorn==0.34.0",
-  "wandb==0.21.0",
   "websocket-client>=1.8.0",
   "websockets>=12.0",
 ]

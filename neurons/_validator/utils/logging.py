@@ -4,7 +4,6 @@ import torch
 from rich.console import Console, JustifyMethod
 from rich.table import Table
 
-from utils import wandb_logger
 from _validator.models.miner_response import MinerResponse
 
 
@@ -44,9 +43,6 @@ def log_tensor_data(title: str, data: torch.Tensor, log_key: str):
     create_and_print_table(
         title, [("uid", "right", "cyan"), (log_key, "right", "yellow")], rows
     )
-    wandb_logger.safe_log(
-        {log_key: {uid: value.item() for uid, value in enumerate(data)}}
-    )
 
 
 def log_scores(scores: torch.Tensor):
@@ -84,9 +80,6 @@ def log_verify_result(results: list[tuple[int, bool]]):
         [("uid", "right", "cyan"), ("Verified?", "right", "green")],
         rows,
     )
-    wandb_logger.safe_log(
-        {"verification_results": {uid: int(result) for uid, result in results}}
-    )
 
 
 def log_responses(responses: list[MinerResponse]):
@@ -120,18 +113,3 @@ def log_responses(responses: list[MinerResponse]):
         for response in sorted_responses
     ]
     create_and_print_table("Responses", columns, rows)
-
-    wandb_log = {
-        "responses": {
-            response.uid: {
-                str(response.circuit): {
-                    "verification_result": int(response.verification_result),
-                    "response_time": response.response_time,
-                    "proof_size": response.proof_size,
-                }
-            }
-            for response in sorted_responses
-            if response.verification_result
-        }
-    }
-    wandb_logger.safe_log(wandb_log)

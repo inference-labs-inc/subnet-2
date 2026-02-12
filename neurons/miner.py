@@ -1,3 +1,4 @@
+import os
 import traceback
 
 # isort: off
@@ -16,8 +17,11 @@ if __name__ == "__main__":
     run_auto_update_check()
     run_shared_preflight_checks(Roles.MINER)
 
+    if os.getenv("SUBNET_2_DOCKER_BUILD"):
+        bt.logging.info("Docker build mode: skipping circuit load and miner session")
+        raise SystemExit(0)
+
     try:
-        # Initialize the circuit store and load external models
         from deployment_layer.circuit_store import circuit_store
 
         circuit_store.load_circuits()

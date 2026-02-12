@@ -78,6 +78,14 @@ class DSperseManager:
         ) = None
         self._purge_old_runs()
 
+    @property
+    def circuits(self) -> list[Circuit]:
+        return [
+            circuit
+            for circuit in circuit_store.circuits.values()
+            if circuit.metadata.type == CircuitType.DSPERSE_PROOF_GENERATION
+        ]
+
     @staticmethod
     def _purge_old_runs():
         run_dir = Path(cli_parser.config.dsperse_run_dir)
@@ -112,7 +120,6 @@ class DSperseManager:
                 raise ValueError(
                     f"Circuit {circuit_id} is not a DSperse circuit (type: {circuit.metadata.type})"
                 )
-            self.circuits.append(circuit)
         return circuit
 
     def generate_dslice_requests(self) -> list[DSliceQueuedProofRequest]:
