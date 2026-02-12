@@ -666,9 +666,15 @@ class IncrementalRunner:
             if tile_input is None:
                 raise ValueError(f"Missing tile input {cache_name} for ONNX fallback")
 
-            onnx_path = RunnerUtils.resolve_relative_path(
-                meta.path, state.slices_path / slice_id
-            )
+            tile_onnx = meta.tiling.tile.path if meta.tiling.tile else None
+            if tile_onnx:
+                onnx_path = RunnerUtils.resolve_relative_path(
+                    tile_onnx, state.slices_path
+                )
+            else:
+                onnx_path = RunnerUtils.resolve_relative_path(
+                    meta.path, state.slices_path / slice_id
+                )
             if not onnx_path or not Path(onnx_path).exists():
                 raise ValueError(f"ONNX path not found for {slice_id}: {onnx_path}")
 
@@ -690,6 +696,15 @@ class IncrementalRunner:
 
             if output_tensor is None:
                 raise RuntimeError(f"No output tensor from ONNX fallback for {task_id}")
+
+            c_out = meta.tiling.c_out
+            conv_out = meta.tiling.tile.conv_out if meta.tiling.tile else (0, 0)
+            if c_out and conv_out[0] and conv_out[1]:
+                expected = 1 * c_out * conv_out[0] * conv_out[1]
+                if output_tensor.numel() == expected:
+                    output_tensor = output_tensor.reshape(
+                        1, c_out, conv_out[0], conv_out[1]
+                    )
 
             self._store_tile_output(state, meta, tile_idx, output_tensor)
             return output_tensor
