@@ -126,6 +126,26 @@ class PerformanceTracker:
                 uid: (self._uid_rate(w, ref), len(w)) for uid, w in self.windows.items()
             }
 
+    def miner_capacities(self, max_capacity: int) -> dict[int, int]:
+        with self._lock:
+            ref = self._reference_time()
+            capacities = {}
+            for uid, w in self.windows.items():
+                count = len(w)
+                if count < PERFORMANCE_MIN_SAMPLES:
+                    capacities[uid] = 1
+                    continue
+                rate = self._uid_rate(w, ref)
+                confidence = min(count / 100.0, 1.0)
+                raw = 1 + (max_capacity - 1) * rate * confidence
+                capacities[uid] = max(1, int(raw))
+            return capacities
+
+    def reset_uid(self, uid: int) -> None:
+        with self._lock:
+            if uid in self.windows:
+                del self.windows[uid]
+
     def save(self) -> None:
         if not self.persistence_path:
             return

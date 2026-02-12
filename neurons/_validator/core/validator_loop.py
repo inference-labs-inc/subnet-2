@@ -48,6 +48,7 @@ from constants import (
     FIVE_MINUTES,
     LOOP_DELAY_SECONDS,
     MAX_CONCURRENT_REQUESTS,
+    MAX_MINER_CAPACITY,
     ONE_HOUR,
     ONE_MINUTE,
     TEN_MINUTES,
@@ -118,7 +119,8 @@ class ValidatorLoop:
         self.request_queue = asyncio.Queue()
         self.active_tasks: dict[str, asyncio.Task | None] = {}
         self.miner_active_count: dict[int, int] = {}
-        self.default_miner_capacity = 1
+        self.miner_capacities: dict[int, int] = {}
+        self._uid_hotkeys: dict[int, str] = {}
         self.queryable_uids: list[int] = []
         self.last_response_time = time.time()
         self.last_periodic_task_time = time.time()
@@ -206,6 +208,16 @@ class ValidatorLoop:
     @with_rate_limit(period=FIVE_MINUTES)
     def update_queryable_uids(self):
         self.queryable_uids = list(get_queryable_uids(self.config.metagraph))
+        hotkeys = self.config.metagraph.hotkeys
+        for uid in self.queryable_uids:
+            current_hotkey = hotkeys[uid]
+            prev_hotkey = self._uid_hotkeys.get(uid)
+            if prev_hotkey is not None and prev_hotkey != current_hotkey:
+                bt.logging.info(
+                    f"UID {uid} hotkey changed, resetting performance history"
+                )
+                self.weights_manager.performance_tracker.reset_uid(uid)
+            self._uid_hotkeys[uid] = current_hotkey
 
     @with_rate_limit(period=ONE_MINUTE / 4)
     def log_health(self):
@@ -305,12 +317,18 @@ class ValidatorLoop:
                 adaptive_to = (
                     self.weights_manager.performance_tracker.adaptive_timeout()
                 )
+                self.miner_capacities = (
+                    self.weights_manager.performance_tracker.miner_capacities(
+                        MAX_MINER_CAPACITY
+                    )
+                )
                 for uid in shuffled_uids:
                     if requests_sent >= slots_available:
                         break
 
                     miner_active = self.miner_active_count.get(uid, 0)
-                    available_slots = self.default_miner_capacity - miner_active
+                    miner_cap = self.miner_capacities.get(uid, 1)
+                    available_slots = miner_cap - miner_active
 
                     if available_slots <= 0:
                         continue
