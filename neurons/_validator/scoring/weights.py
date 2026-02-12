@@ -136,7 +136,7 @@ class PerformanceTracker:
                     capacities[uid] = 1
                     continue
                 rate = self._uid_rate(w, ref)
-                confidence = min(count / 100.0, 1.0)
+                confidence = min(count / 50.0, 1.0)
                 raw = 1 + (max_capacity - 1) * rate * confidence
                 capacities[uid] = max(1, int(raw))
             return capacities
