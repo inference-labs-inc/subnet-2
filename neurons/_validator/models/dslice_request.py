@@ -26,3 +26,4 @@ class DSliceQueuedProofRequest(QueuedRequestDataModel):
     is_tile: bool = Field(False, description="Whether this is a tile request")
     tile_idx: Optional[int] = Field(None, description="Tile index for tiled slices")
     task_id: Optional[str] = Field(None, description="Tile task ID for result tracking")
+    speculative_index: int = Field(0, description="0=primary, 1+=speculative copy")

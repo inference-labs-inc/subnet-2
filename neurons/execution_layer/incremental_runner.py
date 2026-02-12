@@ -367,6 +367,8 @@ class IncrementalRunner:
 
         return self._create_work_items(state, slice_id, meta, is_tiled)
 
+    RESULT_DUPLICATE = "duplicate"
+
     def apply_result(
         self,
         run_uid: str,
@@ -374,20 +376,21 @@ class IncrementalRunner:
         success: bool,
         output: Optional[torch.Tensor] = None,
         error: Optional[str] = None,
-    ) -> bool:
+    ) -> bool | str:
         """
         Apply result from a miner.
 
         Returns True if this was the last pending item for current slice.
+        Returns False if there are still pending items.
+        Returns RESULT_DUPLICATE if the task was already completed by another miner.
         """
         if run_uid not in self._runs:
-            return False
+            return self.RESULT_DUPLICATE
 
         state = self._runs[run_uid]
 
         if task_id not in state.pending_work:
-            logging.warning(f"Task {task_id} not in pending work")
-            return False
+            return self.RESULT_DUPLICATE
 
         del state.pending_work[task_id]
 

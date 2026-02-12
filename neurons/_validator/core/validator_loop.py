@@ -574,7 +574,13 @@ class ValidatorLoop:
         """
         Reschedule a failed request for retry.
         Only RWR and DSLICE requests are rescheduled, up to MAX_SLICE_RETRIES times.
+        Speculative tile copies (speculative_index > 0) are silently dropped.
         """
+        queued = request.queued_request
+        if queued and getattr(queued, "speculative_index", 0) > 0:
+            self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
+            return
+
         self.weights_manager.performance_tracker.record_reschedule(request.uid)
 
         if request.request_type not in (RequestType.RWR, RequestType.DSLICE):
@@ -640,14 +646,15 @@ class ValidatorLoop:
                 success=False,
             )
 
-    def _mark_dslice_complete(self, response: MinerResponse) -> None:
+    def _mark_dslice_complete(self, response: MinerResponse) -> bool:
+        """Returns True if this was a duplicate result (tile already completed by another miner)."""
         run_uid = response.dsperse_run_uid
         slice_num = response.dsperse_slice_num
         if not run_uid or slice_num is None:
             bt.logging.warning(
                 f"Cannot mark DSLICE complete: missing run_uid={run_uid} or slice_num={slice_num}"
             )
-            return
+            return False
 
         is_tile = "_tile_" in str(slice_num)
 
@@ -658,7 +665,7 @@ class ValidatorLoop:
             slice_id = f"slice_{base_slice}"
             task_id = f"{slice_id}_tile_{tile_idx}"
 
-            is_complete, next_requests = (
+            is_complete, next_requests, is_duplicate = (
                 self.dsperse_manager.on_incremental_tile_result(
                     run_uid=run_uid,
                     task_id=task_id,
@@ -673,6 +680,8 @@ class ValidatorLoop:
                     verification_time_sec=response.verification_time or 0.0,
                 )
             )
+            if is_duplicate:
+                return True
             if next_requests and not is_complete:
                 queue = self.relay.stacked_requests_queue
                 bt.logging.info(
@@ -684,7 +693,7 @@ class ValidatorLoop:
                     f"Queued {len(next_requests)} items for {run_uid} (size now: {queue.qsize()})"
                 )
         else:
-            is_complete, next_request = (
+            is_complete, next_request, is_duplicate = (
                 self.dsperse_manager.on_incremental_slice_result(
                     run_uid=run_uid,
                     slice_num=str(slice_num),
@@ -696,9 +705,12 @@ class ValidatorLoop:
                     verification_time_sec=response.verification_time or 0.0,
                 )
             )
+            if is_duplicate:
+                return True
             if next_request and not is_complete:
                 self.relay.stacked_requests_queue.put_nowait(next_request)
                 bt.logging.debug(f"Queued next incremental slice for run {run_uid}")
+        return False
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
@@ -708,20 +720,33 @@ class ValidatorLoop:
             response (MinerResponse): The processed response to handle.
         """
         try:
+            is_duplicate = False
+            if (
+                response.request_type == RequestType.DSLICE
+                and response.verification_result
+            ):
+                is_duplicate = self._mark_dslice_complete(response)
+
+            effective_success = bool(response.verification_result) and not is_duplicate
             self.weights_manager.performance_tracker.record(
                 response.uid,
-                bool(response.verification_result),
+                effective_success,
                 response_time_sec=response.response_time,
             )
 
             request_hash = response.external_request_hash
-            if response.verification_result:
+            if response.verification_result and not is_duplicate:
                 bt.logging.info(
                     f"Successfully verified proof from UID {response.uid} "
                     f"for circuit {response.circuit.metadata.name} ({response.circuit.metadata.version}), "
                     f"using {response.proof_system}. "
                     f"Request type: {response.request_type.name}"
                 )
+            elif is_duplicate:
+                bt.logging.debug(
+                    f"Duplicate tile result from UID {response.uid} - recording as failure"
+                )
+                return
             else:
                 response.response_time = (
                     response.circuit.evaluation_data.maximum_response_time
@@ -746,11 +771,6 @@ class ValidatorLoop:
                             "success": False,
                         },
                     )
-            elif (
-                response.request_type == RequestType.DSLICE
-                and response.verification_result
-            ):
-                self._mark_dslice_complete(response)
 
             if response.verification_result and response.save:
                 save_proof_of_weights(
@@ -766,10 +786,11 @@ class ValidatorLoop:
                     proof_filename=request_hash,
                 )
 
-            old_score = self.score_manager._get_safe_score(response.uid)
-            self.score_manager.update_single_score(response, self.queryable_uids)
-            new_score = self.score_manager._get_safe_score(response.uid)
-            log_score_change(old_score, new_score)
+            if not is_duplicate:
+                old_score = self.score_manager._get_safe_score(response.uid)
+                self.score_manager.update_single_score(response, self.queryable_uids)
+                new_score = self.score_manager._get_safe_score(response.uid)
+                log_score_change(old_score, new_score)
 
         except Exception as e:
             bt.logging.error(f"Error handling response: {e}")

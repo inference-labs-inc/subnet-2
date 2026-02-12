@@ -68,25 +68,29 @@ class RequestPipeline:
         request_type: RequestType,
         external_request_hash: str | None = None,
         save: bool = False,
+        skip_hash_guard: bool = False,
     ) -> Request | None:
         """Check hash and create request if valid."""
-        try:
-            if isinstance(request_data, ProofOfWeightsDataModel) or isinstance(
-                request_data, DSliceProofGenerationDataModel
-            ):
-                input_data = request_data.inputs
-            else:
-                input_data = request_data.query_input
-            # Check hash to prevent duplicate requests
-            guard_hash = self.hash_guard.check_hash(input_data)
-        except ValueError as e:
-            bt.logging.error(f"Hash already exists: {e}")
-            if request_type == RequestType.RWR:
-                self.relay.set_request_result(
-                    external_request_hash,
-                    {"success": False, "error": "Hash already exists"},
-                )
-            return None
+        guard_hash = None
+        if skip_hash_guard:
+            pass
+        else:
+            try:
+                if isinstance(request_data, ProofOfWeightsDataModel) or isinstance(
+                    request_data, DSliceProofGenerationDataModel
+                ):
+                    input_data = request_data.inputs
+                else:
+                    input_data = request_data.query_input
+                guard_hash = self.hash_guard.check_hash(input_data)
+            except ValueError as e:
+                bt.logging.error(f"Hash already exists: {e}")
+                if request_type == RequestType.RWR:
+                    self.relay.set_request_result(
+                        external_request_hash,
+                        {"success": False, "error": "Hash already exists"},
+                    )
+                return None
 
         axon: AxonInfo = self.config.metagraph.axons[uid]
 
@@ -140,6 +144,10 @@ class RequestPipeline:
                 external_request.circuit,
                 external_request,
             )
+            is_speculative = (
+                hasattr(external_request, "speculative_index")
+                and external_request.speculative_index > 0
+            )
             request = self._check_and_create_request(
                 uid=uid,
                 request_data=request_data,
@@ -147,6 +155,7 @@ class RequestPipeline:
                 request_type=external_request.request_type,
                 external_request_hash=external_request.hash,
                 save=save,
+                skip_hash_guard=is_speculative,
             )
             if request:
                 request.queued_request = external_request

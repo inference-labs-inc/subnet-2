@@ -190,6 +190,8 @@ PERFORMANCE_MIN_SAMPLES = 5
 PERFORMANCE_RESCHEDULE_PENALTY = -0.4
 PERFORMANCE_RESPONSE_TIME_WEIGHT = 0.3
 
+TILE_REDUNDANCY = 5
+
 CIRCUIT_API_URL = os.getenv("CIRCUIT_API_URL", "https://repository.inferencelabs.com")
 CIRCUIT_R2_BASE_URL = os.getenv(
     "CIRCUIT_R2_BASE_URL", "https://dsperse.inferencelabs.com"
