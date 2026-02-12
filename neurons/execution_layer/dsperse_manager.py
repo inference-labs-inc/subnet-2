@@ -58,6 +58,7 @@ class DSperseManager:
         event_client: "DsperseEventClient | None" = None,
     ):
         self.event_client = event_client
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._incremental_runner = IncrementalRunner(
             on_run_complete=self._on_incremental_run_complete,
             on_jstprove_range_fallback=self._on_jstprove_range_fallback,
@@ -104,8 +105,13 @@ class DSperseManager:
             loop = asyncio.get_running_loop()
             loop.create_task(coro)
         except RuntimeError:
-            logging.warning(f"No running event loop, dropping coroutine: {coro!r}")
-            coro.close()
+            if self._loop is not None:
+                asyncio.run_coroutine_threadsafe(coro, self._loop)
+            else:
+                logging.warning(
+                    f"No event loop available, dropping coroutine: {coro!r}"
+                )
+                coro.close()
 
     def _get_circuit_by_id(self, circuit_id: str) -> Circuit:
         circuit = next((c for c in self.circuits if c.id == circuit_id), None)

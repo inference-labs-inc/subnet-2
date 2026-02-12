@@ -493,6 +493,7 @@ class ValidatorLoop:
 
         self.relay.start()
         self.dsperse_event_client.start()
+        self.dsperse_manager._loop = asyncio.get_running_loop()
 
         try:
             await asyncio.gather(
