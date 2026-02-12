@@ -135,6 +135,10 @@ class ValidatorLoop:
         if self.config.bt_config.prometheus_monitoring:
             start_prometheus_logging(self.config.bt_config.prometheus_port)
 
+    @with_rate_limit(period=FIVE_MINUTES)
+    def save_performance_tracker(self):
+        self.weights_manager.performance_tracker.save()
+
     @with_rate_limit(period=ONE_MINUTE)
     async def update_weights(self):
         start_time = time.time()
@@ -398,6 +402,7 @@ class ValidatorLoop:
                 await self.sync_metagraph()
                 await self.sync_scores_uids()
                 await self.update_weights()
+                self.save_performance_tracker()
                 self.update_queryable_uids()
                 self.log_health()
                 await self.log_responses()
@@ -510,6 +515,7 @@ class ValidatorLoop:
         Perform a single request to a miner and handle the response.
         """
         response: MinerResponse | None = None
+        rescheduled = False
         try:
             response = await query_miner(
                 self.httpx_client,
@@ -518,12 +524,10 @@ class ValidatorLoop:
             )
 
             if DEBUG_SYNC_MODE:
-                # Direct sync call for easier debugging
                 response = self.response_processor.verify_single_response(
                     request, response
                 )
             else:
-                # Run in thread pool to avoid blocking event loop
                 response: (
                     MinerResponse | None
                 ) = await asyncio.get_event_loop().run_in_executor(
@@ -536,25 +540,29 @@ class ValidatorLoop:
         except (EmptyProofException, IncorrectProofException) as e:
             bt.logging.warning(f"{e.message}")
             self._reschedule_request(request)
+            rescheduled = True
         except httpx.InvalidURL:
             bt.logging.warning(
                 f"Ignoring UID as there is not a valid URL: {request.uid}. {request.ip}:{request.port}"
             )
             self._reschedule_request(request)
+            rescheduled = True
         except httpx.HTTPError as e:
             bt.logging.warning(
                 f"Failed to query miner for UID: {request.uid}. {request.ip}:{request.port} Error: {e}"
             )
             self._reschedule_request(request)
+            rescheduled = True
         except Exception as e:
             bt.logging.error(f"Error processing request for UID {request.uid}: {e}")
             traceback.print_exc()
             log_error("request_processing", "axon_query", str(e))
             self._reschedule_request(request)
+            rescheduled = True
         finally:
             if response:
                 await self._handle_response(response)
-            else:
+            elif not rescheduled:
                 self.weights_manager.performance_tracker.record(request.uid, False)
 
     def _reschedule_request(self, request: Request) -> None:
@@ -562,6 +570,8 @@ class ValidatorLoop:
         Reschedule a failed request for retry.
         Only RWR and DSLICE requests are rescheduled, up to MAX_SLICE_RETRIES times.
         """
+        self.weights_manager.performance_tracker.record_reschedule(request.uid)
+
         if request.request_type not in (RequestType.RWR, RequestType.DSLICE):
             bt.logging.debug(
                 f"Not rescheduling request type {request.request_type} for UID {request.uid}"
@@ -693,6 +703,13 @@ class ValidatorLoop:
             response (MinerResponse): The processed response to handle.
         """
         try:
+            self.weights_manager.performance_tracker.record(
+                response.uid,
+                bool(response.verification_result),
+                response_time_sec=response.response_time,
+                timeout_sec=response.circuit.timeout,
+            )
+
             request_hash = response.external_request_hash
             if response.verification_result:
                 bt.logging.info(
@@ -744,10 +761,6 @@ class ValidatorLoop:
                     is_testnet=self.config.subnet_uid == 118,
                     proof_filename=request_hash,
                 )
-
-            self.weights_manager.performance_tracker.record(
-                response.uid, bool(response.verification_result)
-            )
 
             old_score = self.score_manager._get_safe_score(response.uid)
             self.score_manager.update_single_score(response, self.queryable_uids)

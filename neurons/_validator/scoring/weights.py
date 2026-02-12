@@ -7,8 +7,11 @@ import threading
 import torch
 import bittensor as bt
 from constants import (
+    CIRCUIT_TIMEOUT_SECONDS,
     PERFORMANCE_CURVE_POWER,
     PERFORMANCE_MIN_SAMPLES,
+    PERFORMANCE_RESCHEDULE_PENALTY,
+    PERFORMANCE_RESPONSE_TIME_WEIGHT,
     PERFORMANCE_WINDOW_SIZE,
     WEIGHT_RATE_LIMIT,
     WEIGHTS_VERSION,
@@ -30,22 +33,43 @@ class PerformanceTracker:
         persistence_path: str | None = None,
     ):
         self.window_size = window_size
-        self.windows: dict[int, deque[bool]] = {}
+        self.windows: dict[int, deque[float]] = {}
         self._lock = threading.Lock()
         self.persistence_path = persistence_path
         self._load()
 
-    def record(self, uid: int, success: bool) -> None:
+    def record(
+        self,
+        uid: int,
+        success: bool,
+        response_time_sec: float = 0.0,
+        timeout_sec: float = CIRCUIT_TIMEOUT_SECONDS,
+    ) -> None:
+        if not success:
+            score = 0.0
+        else:
+            if timeout_sec <= 0:
+                timeout_sec = CIRCUIT_TIMEOUT_SECONDS
+            time_factor = max(0.0, 1.0 - (response_time_sec / timeout_sec))
+            score = PERFORMANCE_RESPONSE_TIME_WEIGHT * time_factor + (
+                1.0 - PERFORMANCE_RESPONSE_TIME_WEIGHT
+            )
         with self._lock:
             if uid not in self.windows:
                 self.windows[uid] = deque(maxlen=self.window_size)
-            self.windows[uid].append(success)
+            self.windows[uid].append(score)
+
+    def record_reschedule(self, uid: int) -> None:
+        with self._lock:
+            if uid not in self.windows:
+                self.windows[uid] = deque(maxlen=self.window_size)
+            self.windows[uid].append(PERFORMANCE_RESCHEDULE_PENALTY)
 
     def success_rate(self, uid: int) -> float:
         with self._lock:
             if uid not in self.windows or len(self.windows[uid]) == 0:
                 return 0.0
-            return sum(self.windows[uid]) / len(self.windows[uid])
+            return max(0.0, sum(self.windows[uid]) / len(self.windows[uid]))
 
     def sample_count(self, uid: int) -> int:
         with self._lock:
@@ -56,7 +80,10 @@ class PerformanceTracker:
     def snapshot(self) -> dict[int, tuple[float, int]]:
         with self._lock:
             return {
-                uid: (sum(w) / len(w) if len(w) > 0 else 0.0, len(w))
+                uid: (
+                    max(0.0, sum(w) / len(w)) if len(w) > 0 else 0.0,
+                    len(w),
+                )
                 for uid, w in self.windows.items()
             }
 
@@ -82,7 +109,7 @@ class PerformanceTracker:
                 data = json.load(f)
             for uid_str, results in data.items():
                 self.windows[int(uid_str)] = deque(
-                    (bool(v) for v in results), maxlen=self.window_size
+                    (float(v) for v in results), maxlen=self.window_size
                 )
             bt.logging.info(f"Loaded performance tracker with {len(self.windows)} UIDs")
         except Exception as e:
