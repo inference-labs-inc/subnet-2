@@ -27,49 +27,73 @@ if TYPE_CHECKING:
 
 
 class PerformanceTracker:
+    RESPONSE_TIME_PERCENTILE = 0.95
+
     def __init__(
         self,
         window_size: int = PERFORMANCE_WINDOW_SIZE,
         persistence_path: str | None = None,
     ):
         self.window_size = window_size
-        self.windows: dict[int, deque[float]] = {}
+        self.windows: dict[int, deque[tuple[bool, float]]] = {}
         self._lock = threading.Lock()
         self.persistence_path = persistence_path
         self._load()
+
+    def _reference_time(self) -> float:
+        times = []
+        for w in self.windows.values():
+            for success, rt in w:
+                if success and rt > 0:
+                    times.append(rt)
+        if not times:
+            return CIRCUIT_TIMEOUT_SECONDS
+        times.sort()
+        idx = min(int(len(times) * self.RESPONSE_TIME_PERCENTILE), len(times) - 1)
+        return max(times[idx], 1.0)
+
+    def _score(self, success: bool, response_time_sec: float, ref: float) -> float:
+        if not success:
+            return 0.0
+        time_factor = max(0.0, 1.0 - (response_time_sec / ref))
+        return PERFORMANCE_RESPONSE_TIME_WEIGHT * time_factor + (
+            1.0 - PERFORMANCE_RESPONSE_TIME_WEIGHT
+        )
 
     def record(
         self,
         uid: int,
         success: bool,
         response_time_sec: float = 0.0,
-        timeout_sec: float = CIRCUIT_TIMEOUT_SECONDS,
     ) -> None:
-        if not success:
-            score = 0.0
-        else:
-            if timeout_sec <= 0:
-                timeout_sec = CIRCUIT_TIMEOUT_SECONDS
-            time_factor = max(0.0, 1.0 - (response_time_sec / timeout_sec))
-            score = PERFORMANCE_RESPONSE_TIME_WEIGHT * time_factor + (
-                1.0 - PERFORMANCE_RESPONSE_TIME_WEIGHT
-            )
         with self._lock:
             if uid not in self.windows:
                 self.windows[uid] = deque(maxlen=self.window_size)
-            self.windows[uid].append(score)
+            self.windows[uid].append((success, response_time_sec))
 
     def record_reschedule(self, uid: int) -> None:
         with self._lock:
             if uid not in self.windows:
                 self.windows[uid] = deque(maxlen=self.window_size)
-            self.windows[uid].append(PERFORMANCE_RESCHEDULE_PENALTY)
+            self.windows[uid].append((False, PERFORMANCE_RESCHEDULE_PENALTY))
+
+    def _uid_rate(self, w: deque[tuple[bool, float]], ref: float) -> float:
+        if not w:
+            return 0.0
+        total = 0.0
+        for success, rt in w:
+            if rt == PERFORMANCE_RESCHEDULE_PENALTY:
+                total += PERFORMANCE_RESCHEDULE_PENALTY
+            else:
+                total += self._score(success, rt, ref)
+        return max(0.0, total / len(w))
 
     def success_rate(self, uid: int) -> float:
         with self._lock:
             if uid not in self.windows or len(self.windows[uid]) == 0:
                 return 0.0
-            return max(0.0, sum(self.windows[uid]) / len(self.windows[uid]))
+            ref = self._reference_time()
+            return self._uid_rate(self.windows[uid], ref)
 
     def sample_count(self, uid: int) -> int:
         with self._lock:
@@ -79,12 +103,9 @@ class PerformanceTracker:
 
     def snapshot(self) -> dict[int, tuple[float, int]]:
         with self._lock:
+            ref = self._reference_time()
             return {
-                uid: (
-                    max(0.0, sum(w) / len(w)) if len(w) > 0 else 0.0,
-                    len(w),
-                )
-                for uid, w in self.windows.items()
+                uid: (self._uid_rate(w, ref), len(w)) for uid, w in self.windows.items()
             }
 
     def save(self) -> None:
@@ -93,7 +114,10 @@ class PerformanceTracker:
         try:
             os.makedirs(os.path.dirname(self.persistence_path), exist_ok=True)
             with self._lock:
-                data = {str(uid): list(window) for uid, window in self.windows.items()}
+                data = {
+                    str(uid): [[s, rt] for s, rt in window]
+                    for uid, window in self.windows.items()
+                }
             tmp_path = self.persistence_path + ".tmp"
             with open(tmp_path, "w") as f:
                 json.dump(data, f)
@@ -108,9 +132,14 @@ class PerformanceTracker:
             with open(self.persistence_path, "r") as f:
                 data = json.load(f)
             for uid_str, results in data.items():
-                self.windows[int(uid_str)] = deque(
-                    (float(v) for v in results), maxlen=self.window_size
-                )
+                entries = []
+                for v in results:
+                    if isinstance(v, list) and len(v) == 2:
+                        entries.append((bool(v[0]), float(v[1])))
+                    else:
+                        score = float(v)
+                        entries.append((score > 0, 0.0))
+                self.windows[int(uid_str)] = deque(entries, maxlen=self.window_size)
             bt.logging.info(f"Loaded performance tracker with {len(self.windows)} UIDs")
         except Exception as e:
             bt.logging.error(f"Failed to load performance tracker: {e}")

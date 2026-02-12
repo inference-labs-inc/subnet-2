@@ -708,7 +708,6 @@ class ValidatorLoop:
                 response.uid,
                 bool(response.verification_result),
                 response_time_sec=response.response_time,
-                timeout_sec=response.circuit.timeout,
             )
 
             request_hash = response.external_request_hash
