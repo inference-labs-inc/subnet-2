@@ -338,6 +338,9 @@ class ValidatorLoop:
                             )
                             break
 
+                        request.timeout_override = (
+                            self.weights_manager.performance_tracker.adaptive_timeout()
+                        )
                         task_id = self._generate_task_id(uid)
 
                         if DEBUG_SYNC_MODE:

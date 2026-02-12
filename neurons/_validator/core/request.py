@@ -34,4 +34,5 @@ class Request:
     # It's calculated from the inputs of the request.
     guard_hash: str | None = None
     response_time: float | None = None
+    timeout_override: float | None = None
     save: bool = False

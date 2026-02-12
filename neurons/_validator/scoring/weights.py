@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
 class PerformanceTracker:
     RESPONSE_TIME_PERCENTILE = 0.95
+    ADAPTIVE_TIMEOUT_MULTIPLIER = 2.0
+    ADAPTIVE_TIMEOUT_MIN_SAMPLES = 50
 
     def __init__(
         self,
@@ -100,6 +102,22 @@ class PerformanceTracker:
             if uid not in self.windows:
                 return 0
             return len(self.windows[uid])
+
+    def adaptive_timeout(self) -> float:
+        with self._lock:
+            times = []
+            for w in self.windows.values():
+                for success, rt in w:
+                    if success and rt > 0:
+                        times.append(rt)
+            if len(times) < self.ADAPTIVE_TIMEOUT_MIN_SAMPLES:
+                return CIRCUIT_TIMEOUT_SECONDS
+            times.sort()
+            idx = min(int(len(times) * self.RESPONSE_TIME_PERCENTILE), len(times) - 1)
+            return min(
+                times[idx] * self.ADAPTIVE_TIMEOUT_MULTIPLIER,
+                CIRCUIT_TIMEOUT_SECONDS,
+            )
 
     def snapshot(self) -> dict[int, tuple[float, int]]:
         with self._lock:
@@ -245,8 +263,10 @@ class WeightsManager:
         }
         if tracked:
             top = sorted(tracked.items(), key=lambda x: x[1], reverse=True)[:5]
+            adaptive_to = self.performance_tracker.adaptive_timeout()
             bt.logging.info(
                 f"Performance tracker: {len(tracked)} UIDs tracked, "
+                f"adaptive timeout: {adaptive_to:.1f}s, "
                 f"top 5: {[(uid, f'{rate:.2%}') for uid, rate in top]}"
             )
 
