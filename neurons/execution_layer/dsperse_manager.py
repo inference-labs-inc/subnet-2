@@ -18,7 +18,7 @@ from dsperse.src.backends.ezkl import EZKL
 from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.run.runner import Runner
 from dsperse.src.slice.utils.converter import Converter
-from constants import RunSource, TILE_REDUNDANCY
+from constants import RunSource
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
 import numpy as np
 
@@ -180,21 +180,9 @@ class DSperseManager:
             )
             return []
 
-        queued_requests = []
-        for item in work_items:
-            primary = self._incremental_runner.create_queued_request(item)
-            queued_requests.append(primary)
-            if item.tile_idx is not None:
-                for i in range(1, TILE_REDUNDANCY):
-                    copy = self._incremental_runner.create_queued_request(item)
-                    copy.speculative_index = i
-                    queued_requests.append(copy)
-        tile_count = sum(1 for w in work_items if w.tile_idx is not None)
-        if tile_count:
-            logging.info(
-                f"Converted {len(work_items)} work items to {len(queued_requests)} queued requests "
-                f"({tile_count} tiles at {TILE_REDUNDANCY}x redundancy)"
-            )
+        queued_requests = [
+            self._incremental_runner.create_queued_request(item) for item in work_items
+        ]
         return queued_requests
 
     def generate_incremental_request(self) -> list[DSliceQueuedProofRequest]:

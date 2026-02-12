@@ -51,6 +51,7 @@ from constants import (
     ONE_HOUR,
     ONE_MINUTE,
     TEN_MINUTES,
+    TILE_REDUNDANCY,
 )
 from utils import AutoUpdate, clean_temp_files, with_rate_limit
 from utils.gc_logging import log_responses as gc_log_responses
@@ -257,6 +258,56 @@ class ValidatorLoop:
             self.last_response_time = time.time()
             self.recent_responses = []
 
+    async def _dispatch_to_miner(self, request: Request, uid: int, adaptive_to: float):
+        request.timeout_override = adaptive_to
+        task_id = self._generate_task_id(uid)
+        if DEBUG_SYNC_MODE:
+            bt.logging.debug(f"[SYNC MODE] Processing request {task_id} for UID {uid}")
+            self.active_tasks[task_id] = None
+            self.miner_active_count[uid] = self.miner_active_count.get(uid, 0) + 1
+            await self._process_single_request(request)
+            self._handle_completed_task(task_id, uid)
+        else:
+            task = asyncio.create_task(self._process_single_request(request))
+            self.active_tasks[task_id] = task
+            self.miner_active_count[uid] = self.miner_active_count.get(uid, 0) + 1
+            task.add_done_callback(
+                lambda _, tid=task_id, u=uid: self._handle_completed_task(tid, u)
+            )
+
+    async def _fan_out_tile_copies(
+        self,
+        queued_request: DSliceQueuedProofRequest,
+        primary_uid: int,
+        shuffled_uids: list[int],
+        adaptive_to: float,
+        remaining_slots: int,
+    ) -> int:
+        used_uids = {primary_uid}
+        dispatched = 0
+        for copy_idx in range(1, TILE_REDUNDANCY):
+            if dispatched >= remaining_slots:
+                break
+            for uid in shuffled_uids:
+                if uid in used_uids:
+                    continue
+                miner_active = self.miner_active_count.get(uid, 0)
+                if miner_active >= self.default_miner_capacity:
+                    continue
+                queued_copy = queued_request.model_copy(
+                    update={"speculative_index": copy_idx}
+                )
+                copy_request = self.request_pipeline._prepare_queued_request(
+                    uid, queued_copy
+                )
+                if not copy_request:
+                    continue
+                await self._dispatch_to_miner(copy_request, uid, adaptive_to)
+                used_uids.add(uid)
+                dispatched += 1
+                break
+        return dispatched
+
     async def maintain_request_pool(self):
         """
         Maintain the pool of active requests to miners.
@@ -341,34 +392,19 @@ class ValidatorLoop:
                             )
                             break
 
-                        request.timeout_override = adaptive_to
-                        task_id = self._generate_task_id(uid)
-
-                        if DEBUG_SYNC_MODE:
-                            bt.logging.debug(
-                                f"[SYNC MODE] Processing request {task_id} for UID {uid}"
-                            )
-                            self.active_tasks[task_id] = None
-                            self.miner_active_count[uid] = (
-                                self.miner_active_count.get(uid, 0) + 1
-                            )
-                            await self._process_single_request(request)
-                            self._handle_completed_task(task_id, uid)
-                        else:
-                            task = asyncio.create_task(
-                                self._process_single_request(request)
-                            )
-                            self.active_tasks[task_id] = task
-                            self.miner_active_count[uid] = (
-                                self.miner_active_count.get(uid, 0) + 1
-                            )
-                            task.add_done_callback(
-                                lambda _, tid=task_id, u=uid: self._handle_completed_task(
-                                    tid, u
-                                )
-                            )
-
+                        await self._dispatch_to_miner(request, uid, adaptive_to)
                         requests_sent += 1
+
+                        queued = request.queued_request
+                        if queued and getattr(queued, "is_tile", False):
+                            fan_out = await self._fan_out_tile_copies(
+                                queued,
+                                uid,
+                                shuffled_uids,
+                                adaptive_to,
+                                slots_available - requests_sent,
+                            )
+                            requests_sent += fan_out
 
                 if requests_sent == 0:
                     self._dispatch_event.clear()
