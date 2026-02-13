@@ -327,8 +327,8 @@ def _validator_config():
     parser.add_argument(
         "--api-miners-pct",
         type=int,
-        default=5,
-        help="Percentage of top-performing miners eligible for API requests (default: 5).",
+        default=20,
+        help="Percentage of top-performing miners eligible for API requests (default: 20).",
     )
 
     parser.add_argument(
