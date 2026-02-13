@@ -260,6 +260,7 @@ class RelayManager:
     def __init__(self, config: ValidatorConfig):
         self.config = config
         self.stacked_requests_queue: asyncio.Queue = asyncio.Queue()
+        self.api_requests_queue: asyncio.Queue = asyncio.Queue()
         self.rwr_queue: asyncio.Queue = asyncio.Queue()
         self.pending_requests: dict[str, asyncio.Event] = {}
         self.request_results: dict[str, dict] = {}

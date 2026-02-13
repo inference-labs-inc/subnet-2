@@ -285,7 +285,10 @@ class ValidatorLoop:
                         continue
                     continue
 
-                if self.relay.stacked_requests_queue.empty():
+                if (
+                    self.relay.stacked_requests_queue.empty()
+                    and self.relay.api_requests_queue.empty()
+                ):
                     new_requests = list(
                         await asyncio.to_thread(
                             self.dsperse_manager.generate_dslice_requests
@@ -296,7 +299,13 @@ class ValidatorLoop:
                             f"Generated {len(new_requests)} new requests, inserting into queue"
                         )
                     for dslice_request in new_requests:
-                        self.relay.stacked_requests_queue.put_nowait(dslice_request)
+                        if (
+                            hasattr(dslice_request, "run_source")
+                            and dslice_request.run_source == RunSource.API
+                        ):
+                            self.relay.api_requests_queue.put_nowait(dslice_request)
+                        else:
+                            self.relay.stacked_requests_queue.put_nowait(dslice_request)
 
                 pow_circuit = None
                 if (
@@ -362,16 +371,16 @@ class ValidatorLoop:
                             request = self.request_pipeline._prepare_queued_request(
                                 uid, rwr_req
                             )
+                        elif (
+                            uid in api_eligible_uids
+                            and not self.relay.api_requests_queue.empty()
+                        ):
+                            next_req = self.relay.api_requests_queue.get_nowait()
+                            request = self.request_pipeline._prepare_queued_request(
+                                uid, next_req
+                            )
                         elif not self.relay.stacked_requests_queue.empty():
                             next_req = self.relay.stacked_requests_queue.get_nowait()
-                            if (
-                                api_eligible_uids
-                                and hasattr(next_req, "run_source")
-                                and next_req.run_source == RunSource.API
-                                and uid not in api_eligible_uids
-                            ):
-                                self.relay.stacked_requests_queue.put_nowait(next_req)
-                                break
                             request = self.request_pipeline._prepare_queued_request(
                                 uid, next_req
                             )
@@ -665,6 +674,8 @@ class ValidatorLoop:
         self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
         if request.request_type == RequestType.RWR:
             self.relay.rwr_queue.put_nowait(queued)
+        elif hasattr(queued, "run_source") and queued.run_source == RunSource.API:
+            self.relay.api_requests_queue.put_nowait(queued)
         else:
             self.relay.stacked_requests_queue.put_nowait(queued)
 
@@ -724,15 +735,11 @@ class ValidatorLoop:
                 )
             )
             if next_requests and not is_complete:
-                queue = self.relay.stacked_requests_queue
-                bt.logging.info(
-                    f"Inserting {len(next_requests)} items into queue (size: {queue.qsize()})"
-                )
                 for req in next_requests:
-                    queue.put_nowait(req)
-                bt.logging.info(
-                    f"Queued {len(next_requests)} items for {run_uid} (size now: {queue.qsize()})"
-                )
+                    if hasattr(req, "run_source") and req.run_source == RunSource.API:
+                        self.relay.api_requests_queue.put_nowait(req)
+                    else:
+                        self.relay.stacked_requests_queue.put_nowait(req)
         else:
             is_complete, next_request = (
                 self.dsperse_manager.on_incremental_slice_result(
@@ -747,7 +754,13 @@ class ValidatorLoop:
                 )
             )
             if next_request and not is_complete:
-                self.relay.stacked_requests_queue.put_nowait(next_request)
+                if (
+                    hasattr(next_request, "run_source")
+                    and next_request.run_source == RunSource.API
+                ):
+                    self.relay.api_requests_queue.put_nowait(next_request)
+                else:
+                    self.relay.stacked_requests_queue.put_nowait(next_request)
                 bt.logging.debug(f"Queued next incremental slice for run {run_uid}")
 
     async def _handle_response(self, response: MinerResponse) -> None:
