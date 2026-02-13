@@ -60,6 +60,13 @@ from utils.gc_logging import log_responses as gc_log_responses
 DEBUG_SYNC_MODE = os.environ.get("DEBUG_SYNC_MODE", "").lower() in ("1", "true", "yes")
 
 MAX_SLICE_RETRIES = 5
+MAX_API_RETRIES = 20
+API_TIMEOUT_SECONDS = 30.0
+
+
+def _is_api_request(request: Request) -> bool:
+    q = request.queued_request
+    return q is not None and getattr(q, "run_source", None) == RunSource.API
 
 
 class ValidatorLoop:
@@ -384,7 +391,11 @@ class ValidatorLoop:
                             )
                             break
 
-                        request.timeout_override = adaptive_to
+                        request.timeout_override = (
+                            API_TIMEOUT_SECONDS
+                            if _is_api_request(request)
+                            else adaptive_to
+                        )
                         task_id = self._generate_task_id(uid)
 
                         if DEBUG_SYNC_MODE:
@@ -623,7 +634,8 @@ class ValidatorLoop:
     def _reschedule_request(self, request: Request) -> None:
         """
         Reschedule a failed request for retry.
-        Only RWR and DSLICE requests are rescheduled, up to MAX_SLICE_RETRIES times.
+        RWR and DSLICE requests are rescheduled up to MAX_API_RETRIES (API) or
+        MAX_SLICE_RETRIES (non-API) times.
         """
         self.weights_manager.performance_tracker.record_reschedule(request.uid)
 
@@ -642,10 +654,12 @@ class ValidatorLoop:
         queued = request.queued_request
         queued.retry_count += 1
 
-        if queued.retry_count > MAX_SLICE_RETRIES:
+        max_retries = MAX_API_RETRIES if _is_api_request(request) else MAX_SLICE_RETRIES
+
+        if queued.retry_count > max_retries:
             bt.logging.warning(
                 f"{request.request_type.name} request exceeded max retries "
-                f"({MAX_SLICE_RETRIES}) for UID {request.uid}"
+                f"({max_retries}) for UID {request.uid}"
             )
             self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
             if request.request_type == RequestType.DSLICE:
@@ -659,7 +673,7 @@ class ValidatorLoop:
 
         bt.logging.info(
             f"Rescheduling {request.request_type.name} request for UID {request.uid} "
-            f"(attempt {queued.retry_count}/{MAX_SLICE_RETRIES})..."
+            f"(attempt {queued.retry_count}/{max_retries})..."
         )
 
         self.request_pipeline.hash_guard.remove_hash(request.guard_hash)
