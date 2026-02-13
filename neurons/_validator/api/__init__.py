@@ -233,13 +233,13 @@ def _relay_ws_process(
                                         try:
                                             os.read(notify_fd, 4096)
                                         except BlockingIOError:
-                                            pass
+                                            pass  # expected: non-blocking fd has no data yet
                                         try:
                                             await asyncio.wait_for(
                                                 ready.wait(), timeout=5.0
                                             )
                                         except asyncio.TimeoutError:
-                                            pass
+                                            pass  # periodic wake to check ws.close_code
                             finally:
                                 loop.remove_reader(notify_fd)
 
@@ -384,7 +384,7 @@ class RelayManager:
         try:
             os.write(self._ws_notify_w, b"\x01")
         except (OSError, BlockingIOError):
-            pass
+            pass  # non-blocking write; pipe full is harmless (writer will drain)
 
     def start(self) -> None:
         if not self.config.relay_enabled:
