@@ -372,7 +372,7 @@ class RelayManager:
                 del self._onnx_outputs[k]
 
     def _start_ws_process(self) -> None:
-        if self._ws_notify_r >= 0:
+        if self._ws_notify_w >= 0:
             with contextlib.suppress(OSError):
                 os.close(self._ws_notify_r)
             with contextlib.suppress(OSError):
