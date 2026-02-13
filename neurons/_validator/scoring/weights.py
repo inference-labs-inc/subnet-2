@@ -141,20 +141,22 @@ class PerformanceTracker:
                 uid: (self._uid_rate(w, ref), len(w)) for uid, w in self.windows.items()
             }
 
+    def _compute_capacity(self, rate: float, count: int, max_capacity: int) -> int:
+        if count < PERFORMANCE_MIN_SAMPLES:
+            return 1
+        confidence = min(count / 50.0, 1.0)
+        raw = 1 + (max_capacity - 1) * rate * confidence
+        return max(1, int(raw))
+
     def miner_capacities(self, max_capacity: int) -> dict[int, int]:
         with self._lock:
             ref = self._scoring_reference_time()
-            capacities = {}
-            for uid, w in self.windows.items():
-                count = len(w)
-                if count < PERFORMANCE_MIN_SAMPLES:
-                    capacities[uid] = 1
-                    continue
-                rate = self._uid_rate(w, ref)
-                confidence = min(count / 50.0, 1.0)
-                raw = 1 + (max_capacity - 1) * rate * confidence
-                capacities[uid] = max(1, int(raw))
-            return capacities
+            return {
+                uid: self._compute_capacity(
+                    self._uid_rate(w, ref), len(w), max_capacity
+                )
+                for uid, w in self.windows.items()
+            }
 
     def throughput_snapshot(
         self, max_capacity: int
@@ -165,12 +167,7 @@ class PerformanceTracker:
             for uid, w in self.windows.items():
                 count = len(w)
                 rate = self._uid_rate(w, ref)
-                if count < PERFORMANCE_MIN_SAMPLES:
-                    cap = 1
-                else:
-                    confidence = min(count / 50.0, 1.0)
-                    raw = 1 + (max_capacity - 1) * rate * confidence
-                    cap = max(1, int(raw))
+                cap = self._compute_capacity(rate, count, max_capacity)
                 result[uid] = (rate, cap, count)
             return result
 
@@ -278,10 +275,11 @@ class WeightsManager:
 
         return True, ""
 
-    def _compute_performance_weights(self) -> torch.Tensor:
+    def _compute_performance_weights(
+        self, snap: dict[int, tuple[float, int, int]]
+    ) -> torch.Tensor:
         n = self.metagraph.n
         weights = torch.zeros(n)
-        snap = self.performance_tracker.throughput_snapshot(MAX_MINER_CAPACITY)
 
         for uid in range(n):
             rate, cap, count = snap.get(uid, (0.0, 1, 0))
@@ -303,9 +301,9 @@ class WeightsManager:
 
         bt.logging.info("Updating weights")
 
-        weights = self._compute_performance_weights()
-
         snap = self.performance_tracker.throughput_snapshot(MAX_MINER_CAPACITY)
+        weights = self._compute_performance_weights(snap)
+
         tracked = {
             uid: (rate, cap, rate * cap)
             for uid, (rate, cap, count) in snap.items()
