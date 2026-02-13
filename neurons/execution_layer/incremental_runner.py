@@ -652,7 +652,7 @@ class IncrementalRunner:
         if not slice_dir.exists() or not dslice_path.exists():
             return
 
-        for other in self._runs.values():
+        for other in list(self._runs.values()):
             if other is state or other.is_complete:
                 continue
             if other.slices_path == state.slices_path:
