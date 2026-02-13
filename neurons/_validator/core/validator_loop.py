@@ -368,6 +368,9 @@ class ValidatorLoop:
                             request = self.request_pipeline._prepare_queued_request(
                                 uid, rwr_req
                             )
+                            if not request:
+                                self.relay.rwr_queue.put_nowait(rwr_req)
+                                break
                         elif (
                             uid in api_eligible_uids
                             and not self.relay.api_requests_queue.empty()
