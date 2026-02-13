@@ -4,6 +4,7 @@ import sys
 from typing import Optional
 
 from constants import (
+    MAX_CONCURRENT_REQUESTS,
     ONCHAIN_PROOF_OF_WEIGHTS_ENABLED,
     PROOF_OF_WEIGHTS_INTERVAL,
     TEMP_FOLDER,
@@ -314,6 +315,27 @@ def _validator_config():
         type=int,
         default=9090,
         help="The port for the prometheus monitoring.",
+    )
+
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=MAX_CONCURRENT_REQUESTS,
+        help=f"Maximum concurrent in-flight requests (default: {MAX_CONCURRENT_REQUESTS}).",
+    )
+
+    parser.add_argument(
+        "--api-miners-pct",
+        type=int,
+        default=5,
+        help="Percentage of top-performing miners eligible for API requests (default: 5).",
+    )
+
+    parser.add_argument(
+        "--disable-benchmark",
+        action="store_true",
+        default=False,
+        help="Disable benchmark proof-of-weights requests.",
     )
 
     bt.Subtensor.add_args(parser)

@@ -49,7 +49,6 @@ from constants import (
     LOOP_DELAY_SECONDS,
     PERFORMANCE_MIN_SAMPLES,
     RunSource,
-    MAX_CONCURRENT_REQUESTS,
     ONE_HOUR,
     ONE_MINUTE,
     TEN_MINUTES,
@@ -82,7 +81,7 @@ class ValidatorLoop:
         self.auto_update = AutoUpdate()
         self.httpx_client = httpx.AsyncClient()
 
-        self.current_concurrency = MAX_CONCURRENT_REQUESTS
+        self.current_concurrency = config.max_concurrency
 
         api_url = (
             getattr(cli_parser.config, "sn2_api_url", None)
@@ -222,14 +221,14 @@ class ValidatorLoop:
     @with_rate_limit(period=ONE_MINUTE / 4)
     def log_health(self):
         bt.logging.info(
-            f"In-flight requests: {len(self.active_tasks)} / {MAX_CONCURRENT_REQUESTS}"
+            f"In-flight requests: {len(self.active_tasks)} / {self.current_concurrency}"
         )
         bt.logging.debug(f"Queryable UIDs: {len(self.queryable_uids)}")
 
         log_system_metrics()
         queue_size = self.request_queue.qsize()
         est_latency = (
-            queue_size * (LOOP_DELAY_SECONDS / MAX_CONCURRENT_REQUESTS)
+            queue_size * (LOOP_DELAY_SECONDS / self.current_concurrency)
             if queue_size > 0
             else 0
         )
@@ -301,7 +300,8 @@ class ValidatorLoop:
 
                 pow_circuit = None
                 if (
-                    len(self.score_manager.pow_manager.proof_of_weights_queue)
+                    not self.config.disable_benchmark
+                    and len(self.score_manager.pow_manager.proof_of_weights_queue)
                     >= ProofOfWeightsHandler.BATCH_SIZE
                 ):
                     loop = asyncio.get_event_loop()
@@ -332,7 +332,7 @@ class ValidatorLoop:
                     key=lambda x: x[1],
                     reverse=True,
                 )
-                top_count = max(1, len(ranked) // 20)
+                top_count = max(1, len(ranked) * self.config.api_miners_pct // 100)
                 api_eligible_uids = (
                     {uid for uid, _ in ranked[:top_count]} if ranked else set()
                 )
@@ -507,7 +507,7 @@ class ValidatorLoop:
                     except Exception:
                         pass  # Thread pool internals may not be accessible
                     bt.logging.warning(
-                        f"Active tasks: {len(self.active_tasks)}/{MAX_CONCURRENT_REQUESTS}, "
+                        f"Active tasks: {len(self.active_tasks)}/{self.current_concurrency}, "
                         f"Queue size: {self.request_queue.qsize()}, "
                         f"Queryable UIDs: {len(self.queryable_uids)}, "
                         f"Current concurrency: {self.current_concurrency}"
@@ -535,7 +535,9 @@ class ValidatorLoop:
         Run the main validator loop indefinitely.
         """
         bt.logging.success(
-            f"Validator started on subnet {self.config.subnet_uid} using UID {self.config.user_uid}"
+            f"Validator started on subnet {self.config.subnet_uid} using UID {self.config.user_uid} "
+            f"(concurrency={self.current_concurrency}, api_miners_pct={self.config.api_miners_pct}%, "
+            f"benchmark={'off' if self.config.disable_benchmark else 'on'})"
         )
 
         self.relay.start()

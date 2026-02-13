@@ -1,6 +1,6 @@
 import sys
 import bittensor as bt
-from constants import DEFAULT_NETUID, COMPETITION_SYNC_INTERVAL
+from constants import DEFAULT_NETUID, COMPETITION_SYNC_INTERVAL, MAX_CONCURRENT_REQUESTS
 
 
 class ValidatorConfig:
@@ -52,6 +52,12 @@ class ValidatorConfig:
             if self.bt_config.competition_sync_interval is None
             else self.bt_config.competition_sync_interval
         )
+
+        self.max_concurrency = getattr(
+            self.bt_config, "max_concurrency", MAX_CONCURRENT_REQUESTS
+        )
+        self.api_miners_pct = getattr(self.bt_config, "api_miners_pct", 5)
+        self.disable_benchmark = getattr(self.bt_config, "disable_benchmark", False)
 
     def check_register(self):
         """
