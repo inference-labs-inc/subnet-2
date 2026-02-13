@@ -275,7 +275,8 @@ class RelayManager:
         self._onnx_max_queue = 15
         self._onnx_pending: list[tuple[str, object, dict]] = []
         self._onnx_pending_lock = threading.Lock()
-        self._relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+        self._relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+        self._dsperse_submit_sem: asyncio.Semaphore | None = None
         threading.Thread(target=self._monitor_onnx_results, daemon=True).start()
 
         self._ws_inbox: mp.Queue = _spawn_ctx.Queue()
@@ -383,6 +384,8 @@ class RelayManager:
             self._start_ws_process()
 
     async def _dispatch_loop(self) -> None:
+        if self._dsperse_submit_sem is None:
+            self._dsperse_submit_sem = asyncio.Semaphore(64)
         loop = asyncio.get_running_loop()
         health_check_counter = 0
         while self._should_run:
@@ -399,31 +402,42 @@ class RelayManager:
                 continue
 
             bt.logging.debug(f"Received relay message: {str(message)[:100]}...")
-            try:
-                response = await async_dispatch(
-                    message,
-                    methods={
-                        "subnet-2.proof_of_computation": self.handle_proof_of_computation,
-                        "subnet-2.dsperse_submit": self.handle_dsperse_submit,
-                        "subnet-2.run_status": self.handle_run_status,
-                    },
+            asyncio.create_task(self._handle_relay_message(message))
+
+    async def _handle_relay_message(self, message: str) -> None:
+        try:
+            response = await async_dispatch(
+                message,
+                methods={
+                    "subnet-2.proof_of_computation": self.handle_proof_of_computation,
+                    "subnet-2.dsperse_submit": self._guarded_dsperse_submit,
+                    "subnet-2.run_status": self.handle_run_status,
+                },
+            )
+            self._ws_outbox.put(str(response))
+        except Exception as e:
+            bt.logging.error(f"Error processing relay message: {e}")
+            traceback.print_exc()
+            request_id = None
+            with contextlib.suppress(Exception):
+                request_id = json.loads(message).get("id")
+            self._ws_outbox.put(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32603, "message": str(e)},
+                        "id": request_id,
+                    }
                 )
-                self._ws_outbox.put(str(response))
-            except Exception as e:
-                bt.logging.error(f"Error processing relay message: {e}")
-                traceback.print_exc()
-                request_id = None
-                with contextlib.suppress(Exception):
-                    request_id = json.loads(message).get("id")
-                self._ws_outbox.put(
-                    json.dumps(
-                        {
-                            "jsonrpc": "2.0",
-                            "error": {"code": -32603, "message": str(e)},
-                            "id": request_id,
-                        }
-                    )
-                )
+            )
+
+    async def _guarded_dsperse_submit(self, **params: object) -> dict[str, object]:
+        if self._dsperse_submit_sem.locked():
+            pending = 64 - self._dsperse_submit_sem._value
+            bt.logging.warning(f"DSperse submit queue full ({pending}/64)")
+            return Error(11, "Server busy, try again later")
+        async with self._dsperse_submit_sem:
+            return await self.handle_dsperse_submit(**params)
 
     def on_api_run_complete(
         self,
