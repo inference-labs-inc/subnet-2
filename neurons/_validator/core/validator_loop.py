@@ -130,9 +130,9 @@ class ValidatorLoop:
 
         self._should_run = True
 
-        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=32)
         self.response_thread_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=16
+            max_workers=32
         )
         self.recent_responses: list[MinerResponse] = []
 

@@ -49,7 +49,7 @@ CIRCUIT_TIMEOUT_SECONDS = 180
 # An additional queueing time for external requests
 EXTERNAL_REQUEST_QUEUE_TIME_SECONDS = 10
 # Maximum number of concurrent requests that the validator will handle
-MAX_CONCURRENT_REQUESTS = 32
+MAX_CONCURRENT_REQUESTS = 64
 MAX_MINER_CAPACITY = 8
 # Default proof size when we're unable to determine the actual size
 DEFAULT_PROOF_SIZE = 5000

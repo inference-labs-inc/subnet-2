@@ -943,7 +943,7 @@ class IncrementalRunner:
             self._cleanup_tile_cache(state, tiling)
         logging.info(f"Completed {tiling.num_tiles} tiles for {slice_id}")
 
-    API_SAMPLE_TILES = 2
+    API_SAMPLE_TILES = 1
 
     def _create_work_items(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata, is_tiled: bool

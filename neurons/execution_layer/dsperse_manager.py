@@ -72,6 +72,7 @@ class DSperseManager:
         self._incremental_runs_lock = threading.Lock()
         self._completed_run_statuses: dict[str, tuple[float, RunStatus]] = {}
         self._run_timings: dict[str, _RunTiming] = {}
+        self._api_round_robin_idx = 0
         self.on_api_run_complete: (
             Callable[[str, str, bool, list[dict]], None] | None
         ) = None
@@ -259,19 +260,32 @@ class DSperseManager:
             uid
             for uid in incremental_runs_snapshot
             if self._incremental_runner.get_run_source(uid) == RunSource.API
+            and not self._incremental_runner.is_complete(uid)
         ]
         other_runs = [
-            uid for uid in incremental_runs_snapshot if uid not in set(api_runs)
+            uid
+            for uid in incremental_runs_snapshot
+            if uid not in set(api_runs)
+            and not self._incremental_runner.is_complete(uid)
         ]
 
-        for run_uid in api_runs + other_runs:
-            if not self._incremental_runner.is_complete(run_uid):
+        if api_runs:
+            idx = self._api_round_robin_idx % len(api_runs)
+            rotated = api_runs[idx:] + api_runs[:idx]
+            self._api_round_robin_idx += 1
+            for run_uid in rotated:
                 requests = self.get_next_incremental_work(run_uid)
                 if requests:
                     logging.info(
                         f"Generating {len(requests)} work items for run {run_uid}"
                     )
                     return requests
+
+        for run_uid in other_runs:
+            requests = self.get_next_incremental_work(run_uid)
+            if requests:
+                logging.info(f"Generating {len(requests)} work items for run {run_uid}")
+                return requests
 
         available_circuits = [
             c for c in self.circuits if c.id not in active_circuit_ids
