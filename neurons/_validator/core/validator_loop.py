@@ -343,16 +343,7 @@ class ValidatorLoop:
                     if requests_sent >= slots_available:
                         break
 
-                    miner_active = self.miner_active_count.get(uid, 0)
-                    miner_cap = self.miner_capacities.get(uid, 1)
-                    available_slots = miner_cap - miner_active
-
-                    if available_slots <= 0:
-                        continue
-
-                    requests_for_miner = min(
-                        available_slots, slots_available - requests_sent
-                    )
+                    requests_for_miner = slots_available - requests_sent
 
                     for _ in range(requests_for_miner):
                         if pow_circuit is not None:
