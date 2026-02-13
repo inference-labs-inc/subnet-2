@@ -277,6 +277,7 @@ class RelayManager:
         self._onnx_pending_lock = threading.Lock()
         self._relay_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
         self._dsperse_submit_sem: asyncio.Semaphore | None = None
+        self._background_tasks: set[asyncio.Task] = set()
         threading.Thread(target=self._monitor_onnx_results, daemon=True).start()
 
         self._ws_inbox: mp.Queue = _spawn_ctx.Queue()
@@ -402,7 +403,9 @@ class RelayManager:
                 continue
 
             bt.logging.debug(f"Received relay message: {str(message)[:100]}...")
-            asyncio.create_task(self._handle_relay_message(message))
+            task = asyncio.create_task(self._handle_relay_message(message))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     async def _handle_relay_message(self, message: str) -> None:
         try:
@@ -433,9 +436,8 @@ class RelayManager:
 
     async def _guarded_dsperse_submit(self, **params: object) -> dict[str, object]:
         if self._dsperse_submit_sem.locked():
-            pending = 64 - self._dsperse_submit_sem._value
-            bt.logging.warning(f"DSperse submit queue full ({pending}/64)")
-            return Error(11, "Server busy, try again later")
+            bt.logging.warning("DSperse submit queue full (max 64)")
+            return Error(20, "Server busy, try again later")
         async with self._dsperse_submit_sem:
             return await self.handle_dsperse_submit(**params)
 
