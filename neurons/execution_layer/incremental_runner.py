@@ -649,9 +649,20 @@ class IncrementalRunner:
         slice_dir = state.slices_path / slice_id
         dslice_path = state.slices_path / f"{slice_id}.dslice"
 
-        if slice_dir.exists() and dslice_path.exists():
-            logging.info(f"Cleaning up extracted {slice_id}")
-            shutil.rmtree(slice_dir, ignore_errors=True)
+        if not slice_dir.exists() or not dslice_path.exists():
+            return
+
+        for other in list(self._runs.values()):
+            if other is state or other.is_complete:
+                continue
+            if other.slices_path == state.slices_path:
+                logging.debug(
+                    f"Skipping cleanup of {slice_id}, still in use by run {other.run_uid}"
+                )
+                return
+
+        logging.info(f"Cleaning up extracted {slice_id}")
+        shutil.rmtree(slice_dir, ignore_errors=True)
 
     def _has_circuits(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata
