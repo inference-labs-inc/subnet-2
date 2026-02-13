@@ -12,7 +12,6 @@ from constants import (
     PERFORMANCE_CURVE_POWER,
     PERFORMANCE_MIN_SAMPLES,
     PERFORMANCE_RESCHEDULE_PENALTY,
-    PERFORMANCE_RESPONSE_TIME_WEIGHT,
     PERFORMANCE_SCORING_PERCENTILE,
     PERFORMANCE_WINDOW_SIZE,
     WEIGHT_RATE_LIMIT,
@@ -79,10 +78,9 @@ class PerformanceTracker:
     def _score(self, success: bool, response_time_sec: float, ref: float) -> float:
         if not success:
             return 0.0
-        time_factor = max(0.0, 1.0 - (response_time_sec / ref))
-        return PERFORMANCE_RESPONSE_TIME_WEIGHT * time_factor + (
-            1.0 - PERFORMANCE_RESPONSE_TIME_WEIGHT
-        )
+        if response_time_sec <= 0:
+            return 2.0
+        return min(ref / response_time_sec, 2.0)
 
     def record(
         self,
