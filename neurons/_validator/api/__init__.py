@@ -386,7 +386,7 @@ class RelayManager:
     def _notify_ws_writer(self) -> None:
         try:
             os.write(self._ws_notify_w, b"\x01")
-        except (OSError, BlockingIOError):
+        except OSError:
             pass  # non-blocking write; pipe full is harmless (writer will drain)
 
     def start(self) -> None:
