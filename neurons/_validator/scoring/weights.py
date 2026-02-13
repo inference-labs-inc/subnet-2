@@ -146,7 +146,7 @@ class PerformanceTracker:
             return 1
         confidence = min(count / 50.0, 1.0)
         raw = 1 + (max_capacity - 1) * rate * confidence
-        return max(1, int(raw))
+        return max(1, min(max_capacity, int(raw)))
 
     def miner_capacities(self, max_capacity: int) -> dict[int, int]:
         with self._lock:
