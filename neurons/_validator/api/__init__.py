@@ -235,6 +235,18 @@ def _relay_ws_process(
                                         await ws.send(msg)
                                         continue
                                     except queue.Empty:
+                                        pass  # feeder thread may not have delivered yet
+                                    try:
+                                        await asyncio.wait_for(
+                                            ready.wait(), timeout=0.01
+                                        )
+                                    except asyncio.TimeoutError:
+                                        pass
+                                    try:
+                                        msg = outbox.get_nowait()
+                                        await ws.send(msg)
+                                        continue
+                                    except queue.Empty:
                                         pass  # nothing queued; wait for notification
                                     try:
                                         await asyncio.wait_for(
@@ -361,8 +373,10 @@ class RelayManager:
 
     def _start_ws_process(self) -> None:
         if self._ws_notify_r >= 0:
-            os.close(self._ws_notify_r)
-            os.close(self._ws_notify_w)
+            with contextlib.suppress(OSError):
+                os.close(self._ws_notify_r)
+            with contextlib.suppress(OSError):
+                os.close(self._ws_notify_w)
         r, w = os.pipe()
         os.set_blocking(r, False)
         os.set_blocking(w, False)
@@ -382,6 +396,8 @@ class RelayManager:
             daemon=True,
         )
         self._ws_process.start()
+        os.close(r)
+        self._ws_notify_r = -1
 
     def _notify_ws_writer(self) -> None:
         try:
