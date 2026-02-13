@@ -225,21 +225,23 @@ def _relay_ws_process(
                             loop.add_reader(notify_fd, ready.set)
                             try:
                                 while ws.close_code is None:
+                                    ready.clear()
+                                    try:
+                                        os.read(notify_fd, 4096)
+                                    except BlockingIOError:
+                                        pass  # expected: non-blocking fd has no data yet
                                     try:
                                         msg = outbox.get_nowait()
                                         await ws.send(msg)
+                                        continue
                                     except queue.Empty:
-                                        ready.clear()
-                                        try:
-                                            os.read(notify_fd, 4096)
-                                        except BlockingIOError:
-                                            pass  # expected: non-blocking fd has no data yet
-                                        try:
-                                            await asyncio.wait_for(
-                                                ready.wait(), timeout=5.0
-                                            )
-                                        except asyncio.TimeoutError:
-                                            pass  # periodic wake to check ws.close_code
+                                        pass  # nothing queued; wait for notification
+                                    try:
+                                        await asyncio.wait_for(
+                                            ready.wait(), timeout=5.0
+                                        )
+                                    except asyncio.TimeoutError:
+                                        pass  # periodic wake to check ws.close_code
                             finally:
                                 loop.remove_reader(notify_fd)
 
@@ -364,6 +366,7 @@ class RelayManager:
         r, w = os.pipe()
         os.set_blocking(r, False)
         os.set_blocking(w, False)
+        os.set_inheritable(r, True)
         self._ws_notify_r = r
         self._ws_notify_w = w
         self._ws_process = _spawn_ctx.Process(
@@ -776,6 +779,12 @@ class RelayManager:
         if self._ws_process and self._ws_process.is_alive():
             self._ws_process.terminate()
             self._ws_process.join(timeout=5)
+        for fd_attr in ("_ws_notify_r", "_ws_notify_w"):
+            fd = getattr(self, fd_attr, -1)
+            if fd >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+                setattr(self, fd_attr, -1)
 
     def set_request_result(self, request_hash: str, result: dict) -> None:
         if request_hash in self.pending_requests:
