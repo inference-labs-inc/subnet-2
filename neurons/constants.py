@@ -50,7 +50,6 @@ CIRCUIT_TIMEOUT_SECONDS = 180
 EXTERNAL_REQUEST_QUEUE_TIME_SECONDS = 10
 # Maximum number of concurrent requests that the validator will handle
 MAX_CONCURRENT_REQUESTS = 64
-MAX_MINER_CAPACITY = 8
 # Default proof size when we're unable to determine the actual size
 DEFAULT_PROOF_SIZE = 5000
 # Size in percent of the sample to be used for the maximum score median
@@ -191,6 +190,8 @@ PERFORMANCE_MIN_SAMPLES = 5
 PERFORMANCE_RESCHEDULE_PENALTY = -0.4
 PERFORMANCE_RESPONSE_TIME_WEIGHT = 0.5
 PERFORMANCE_SCORING_PERCENTILE = 0.50
+CAPACITY_RAMP_SUCCESSES = 3
+CAPACITY_BACKOFF_FACTOR = 0.5
 
 CIRCUIT_API_URL = os.getenv("CIRCUIT_API_URL", "https://repository.inferencelabs.com")
 CIRCUIT_R2_BASE_URL = os.getenv(

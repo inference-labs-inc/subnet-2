@@ -50,7 +50,6 @@ from constants import (
     PERFORMANCE_MIN_SAMPLES,
     RunSource,
     MAX_CONCURRENT_REQUESTS,
-    MAX_MINER_CAPACITY,
     ONE_HOUR,
     ONE_MINUTE,
     TEN_MINUTES,
@@ -319,9 +318,7 @@ class ValidatorLoop:
                     self.weights_manager.performance_tracker.adaptive_timeout()
                 )
                 self.miner_capacities = (
-                    self.weights_manager.performance_tracker.miner_capacities(
-                        MAX_MINER_CAPACITY
-                    )
+                    self.weights_manager.performance_tracker.miner_capacities()
                 )
 
                 snap = self.weights_manager.performance_tracker.snapshot()
@@ -614,7 +611,12 @@ class ValidatorLoop:
             if response:
                 await self._handle_response(response)
             elif not rescheduled:
-                self.weights_manager.performance_tracker.record(request.uid, False)
+                was_at_cap = self.miner_active_count.get(
+                    request.uid, 0
+                ) >= self.miner_capacities.get(request.uid, 1)
+                self.weights_manager.performance_tracker.record(
+                    request.uid, False, was_at_capacity=was_at_cap
+                )
 
     def _reschedule_request(self, request: Request) -> None:
         """
@@ -754,10 +756,14 @@ class ValidatorLoop:
             response (MinerResponse): The processed response to handle.
         """
         try:
+            was_at_cap = self.miner_active_count.get(
+                response.uid, 0
+            ) >= self.miner_capacities.get(response.uid, 1)
             self.weights_manager.performance_tracker.record(
                 response.uid,
                 bool(response.verification_result),
                 response_time_sec=response.response_time,
+                was_at_capacity=was_at_cap,
             )
 
             request_hash = response.external_request_hash

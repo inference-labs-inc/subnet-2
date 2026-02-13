@@ -7,8 +7,9 @@ import threading
 import torch
 import bittensor as bt
 from constants import (
+    CAPACITY_BACKOFF_FACTOR,
+    CAPACITY_RAMP_SUCCESSES,
     CIRCUIT_TIMEOUT_SECONDS,
-    MAX_MINER_CAPACITY,
     PERFORMANCE_CURVE_POWER,
     PERFORMANCE_MIN_SAMPLES,
     PERFORMANCE_RESCHEDULE_PENALTY,
@@ -39,6 +40,8 @@ class PerformanceTracker:
     ):
         self.window_size = window_size
         self.windows: dict[int, deque[tuple[bool, float]]] = {}
+        self.adaptive_caps: dict[int, int] = {}
+        self.consecutive_at_cap: dict[int, int] = {}
         self._lock = threading.Lock()
         self.persistence_path = persistence_path
         self._load()
@@ -82,22 +85,47 @@ class PerformanceTracker:
             return 2.0
         return min(ref / response_time_sec, 2.0)
 
+    def _ensure_cap_state(self, uid: int) -> None:
+        if uid not in self.adaptive_caps:
+            self.adaptive_caps[uid] = 1
+            self.consecutive_at_cap[uid] = 0
+
+    def _backoff_capacity(self, uid: int) -> None:
+        self._ensure_cap_state(uid)
+        self.adaptive_caps[uid] = max(
+            1, int(self.adaptive_caps[uid] * CAPACITY_BACKOFF_FACTOR)
+        )
+        self.consecutive_at_cap[uid] = 0
+
     def record(
         self,
         uid: int,
         success: bool,
         response_time_sec: float = 0.0,
+        was_at_capacity: bool = False,
     ) -> None:
         with self._lock:
             if uid not in self.windows:
                 self.windows[uid] = deque(maxlen=self.window_size)
             self.windows[uid].append((success, response_time_sec))
 
+            self._ensure_cap_state(uid)
+            if success and was_at_capacity:
+                self.consecutive_at_cap[uid] += 1
+                if self.consecutive_at_cap[uid] >= CAPACITY_RAMP_SUCCESSES:
+                    self.adaptive_caps[uid] += 1
+                    self.consecutive_at_cap[uid] = 0
+            elif success:
+                self.consecutive_at_cap[uid] = 0
+            else:
+                self._backoff_capacity(uid)
+
     def record_reschedule(self, uid: int) -> None:
         with self._lock:
             if uid not in self.windows:
                 self.windows[uid] = deque(maxlen=self.window_size)
             self.windows[uid].append((False, PERFORMANCE_RESCHEDULE_PENALTY))
+            self._backoff_capacity(uid)
 
     def _uid_rate(self, w: deque[tuple[bool, float]], ref: float) -> float:
         if not w:
@@ -141,33 +169,25 @@ class PerformanceTracker:
                 uid: (self._uid_rate(w, ref), len(w)) for uid, w in self.windows.items()
             }
 
-    def _compute_capacity(self, rate: float, count: int, max_capacity: int) -> int:
+    def _get_capacity(self, uid: int, count: int) -> int:
         if count < PERFORMANCE_MIN_SAMPLES:
             return 1
-        confidence = min(count / 50.0, 1.0)
-        raw = 1 + (max_capacity - 1) * rate * confidence
-        return max(1, min(max_capacity, int(raw)))
+        return self.adaptive_caps.get(uid, 1)
 
-    def miner_capacities(self, max_capacity: int) -> dict[int, int]:
+    def miner_capacities(self) -> dict[int, int]:
         with self._lock:
-            ref = self._scoring_reference_time()
             return {
-                uid: self._compute_capacity(
-                    self._uid_rate(w, ref), len(w), max_capacity
-                )
-                for uid, w in self.windows.items()
+                uid: self._get_capacity(uid, len(w)) for uid, w in self.windows.items()
             }
 
-    def throughput_snapshot(
-        self, max_capacity: int
-    ) -> dict[int, tuple[float, int, int]]:
+    def throughput_snapshot(self) -> dict[int, tuple[float, int, int]]:
         with self._lock:
             ref = self._scoring_reference_time()
             result = {}
             for uid, w in self.windows.items():
                 count = len(w)
                 rate = self._uid_rate(w, ref)
-                cap = self._compute_capacity(rate, count, max_capacity)
+                cap = self._get_capacity(uid, count)
                 result[uid] = (rate, cap, count)
             return result
 
@@ -175,6 +195,8 @@ class PerformanceTracker:
         with self._lock:
             if uid in self.windows:
                 del self.windows[uid]
+            self.adaptive_caps.pop(uid, None)
+            self.consecutive_at_cap.pop(uid, None)
 
     def save(self) -> None:
         if not self.persistence_path:
@@ -183,8 +205,17 @@ class PerformanceTracker:
             os.makedirs(os.path.dirname(self.persistence_path), exist_ok=True)
             with self._lock:
                 data = {
-                    str(uid): [[s, rt] for s, rt in window]
-                    for uid, window in self.windows.items()
+                    "windows": {
+                        str(uid): [[s, rt] for s, rt in window]
+                        for uid, window in self.windows.items()
+                    },
+                    "capacities": {
+                        str(uid): [
+                            self.adaptive_caps.get(uid, 1),
+                            self.consecutive_at_cap.get(uid, 0),
+                        ]
+                        for uid in self.windows
+                    },
                 }
             tmp_path = self.persistence_path + ".tmp"
             with open(tmp_path, "w") as f:
@@ -199,7 +230,15 @@ class PerformanceTracker:
         try:
             with open(self.persistence_path, "r") as f:
                 data = json.load(f)
-            for uid_str, results in data.items():
+
+            if "windows" in data and isinstance(data["windows"], dict):
+                windows_data = data["windows"]
+                capacities_data = data.get("capacities", {})
+            else:
+                windows_data = data
+                capacities_data = {}
+
+            for uid_str, results in windows_data.items():
                 entries = []
                 for v in results:
                     if isinstance(v, list) and len(v) == 2:
@@ -208,7 +247,17 @@ class PerformanceTracker:
                         score = float(v)
                         entries.append((score > 0, 0.0))
                 self.windows[int(uid_str)] = deque(entries, maxlen=self.window_size)
-            bt.logging.info(f"Loaded performance tracker with {len(self.windows)} UIDs")
+
+            for uid_str, cap_data in capacities_data.items():
+                uid = int(uid_str)
+                if isinstance(cap_data, list) and len(cap_data) == 2:
+                    self.adaptive_caps[uid] = max(1, int(cap_data[0]))
+                    self.consecutive_at_cap[uid] = max(0, int(cap_data[1]))
+
+            bt.logging.info(
+                f"Loaded performance tracker with {len(self.windows)} UIDs, "
+                f"{len(self.adaptive_caps)} with adaptive caps"
+            )
         except Exception as e:
             bt.logging.error(f"Failed to load performance tracker: {e}")
 
@@ -301,7 +350,7 @@ class WeightsManager:
 
         bt.logging.info("Updating weights")
 
-        snap = self.performance_tracker.throughput_snapshot(MAX_MINER_CAPACITY)
+        snap = self.performance_tracker.throughput_snapshot()
         weights = self._compute_performance_weights(snap)
 
         tracked = {
