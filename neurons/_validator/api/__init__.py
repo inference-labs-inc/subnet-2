@@ -159,6 +159,7 @@ def _relay_ws_process(
     wallet_hotkey: str,
     inbox: mp.Queue,
     outbox: mp.Queue,
+    notify_fd: int,
 ):
     import logging
     import signal
@@ -220,16 +221,27 @@ def _relay_ws_process(
                     async def _writer():
                         loop = asyncio.get_running_loop()
                         while ws.close_code is None:
+                            ready = asyncio.Event()
+                            loop.add_reader(notify_fd, ready.set)
                             try:
-                                msg = await asyncio.wait_for(
-                                    loop.run_in_executor(
-                                        None, lambda: outbox.get(timeout=0.5)
-                                    ),
-                                    timeout=2.0,
-                                )
-                                await ws.send(msg)
-                            except (asyncio.TimeoutError, queue.Empty):
-                                continue
+                                while ws.close_code is None:
+                                    try:
+                                        msg = outbox.get_nowait()
+                                        await ws.send(msg)
+                                    except queue.Empty:
+                                        ready.clear()
+                                        try:
+                                            os.read(notify_fd, 4096)
+                                        except BlockingIOError:
+                                            pass
+                                        try:
+                                            await asyncio.wait_for(
+                                                ready.wait(), timeout=5.0
+                                            )
+                                        except asyncio.TimeoutError:
+                                            pass
+                            finally:
+                                loop.remove_reader(notify_fd)
 
                     done, pending = await asyncio.wait(
                         {
@@ -283,6 +295,8 @@ class RelayManager:
 
         self._ws_inbox: mp.Queue = _spawn_ctx.Queue()
         self._ws_outbox: mp.Queue = _spawn_ctx.Queue()
+        self._ws_notify_r: int = -1
+        self._ws_notify_w: int = -1
         self._ws_process: mp.Process | None = None
         self._should_run = True
         self._task: asyncio.Task | None = None
@@ -344,6 +358,14 @@ class RelayManager:
                 del self._onnx_outputs[k]
 
     def _start_ws_process(self) -> None:
+        if self._ws_notify_r >= 0:
+            os.close(self._ws_notify_r)
+            os.close(self._ws_notify_w)
+        r, w = os.pipe()
+        os.set_blocking(r, False)
+        os.set_blocking(w, False)
+        self._ws_notify_r = r
+        self._ws_notify_w = w
         self._ws_process = _spawn_ctx.Process(
             target=_relay_ws_process,
             args=(
@@ -352,10 +374,17 @@ class RelayManager:
                 self.config.wallet.hotkey_str,
                 self._ws_inbox,
                 self._ws_outbox,
+                r,
             ),
             daemon=True,
         )
         self._ws_process.start()
+
+    def _notify_ws_writer(self) -> None:
+        try:
+            os.write(self._ws_notify_w, b"\x01")
+        except (OSError, BlockingIOError):
+            pass
 
     def start(self) -> None:
         if not self.config.relay_enabled:
@@ -419,6 +448,7 @@ class RelayManager:
                 },
             )
             self._ws_outbox.put(str(response))
+            self._notify_ws_writer()
         except Exception as e:
             bt.logging.error(f"Error processing relay message: {e}")
             traceback.print_exc()
@@ -434,6 +464,7 @@ class RelayManager:
                     }
                 )
             )
+            self._notify_ws_writer()
 
     async def _guarded_dsperse_submit(self, **params: object) -> dict[str, object]:
         if self._dsperse_submit_sem.locked():
@@ -471,6 +502,7 @@ class RelayManager:
                 }
             )
         )
+        self._notify_ws_writer()
 
     async def handle_proof_of_computation(self, **params: dict) -> dict:
         input_json = params.get("input")
