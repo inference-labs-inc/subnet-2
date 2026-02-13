@@ -291,7 +291,10 @@ class ValidatorLoop:
                         continue
                     continue
 
-                if self.relay.stacked_requests_queue.empty():
+                if (
+                    self.relay.stacked_requests_queue.empty()
+                    or self.relay.api_requests_queue.empty()
+                ):
                     new_requests = list(
                         await asyncio.to_thread(
                             self.dsperse_manager.generate_dslice_requests
@@ -381,7 +384,7 @@ class ValidatorLoop:
                             )
                             if not request:
                                 self.relay.api_requests_queue.put_nowait(next_req)
-                                break
+                                continue
                         elif not self.relay.stacked_requests_queue.empty():
                             next_req = self.relay.stacked_requests_queue.get_nowait()
                             request = self.request_pipeline._prepare_queued_request(
