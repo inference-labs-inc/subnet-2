@@ -167,8 +167,9 @@ class CircuitStore:
         metadata = circuit_data.get("metadata", {})
         files = circuit_data.get("files", {})
         failed_downloads = []
+        SKIP_AUTO_DOWNLOAD = {"metadata.json", "full_model.onnx"}
         for filename, url in files.items():
-            if filename == "metadata.json":
+            if filename in SKIP_AUTO_DOWNLOAD:
                 continue
             try:
                 self._download_file(url, os.path.join(cache_path, filename))

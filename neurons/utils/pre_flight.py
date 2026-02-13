@@ -36,6 +36,7 @@ MINER_EXTERNAL_FILES = [
 ]
 VALIDATOR_EXTERNAL_FILES = [
     "circuit.zkey",
+    "full_model.onnx",
 ]
 
 SYNC_LOG_PREFIX = "  SYNC  | "

@@ -7,16 +7,15 @@ import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
+import bittensor as bt
 import torch
 from bittensor import logging
 from deployment_layer.circuit_store import circuit_store
 import time
 
-from dsperse.src.backends.ezkl import EZKL
 from dsperse.src.backends.jstprove import JSTprove
-from dsperse.src.run.runner import Runner
 from dsperse.src.slice.utils.converter import Converter
 from constants import RunSource
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
@@ -52,6 +51,10 @@ class _RunTiming:
     slices: list[_SliceMetric] = field(default_factory=list)
 
 
+_extraction_locks: dict[str, threading.Lock] = {}
+_extraction_locks_guard = threading.Lock()
+
+
 class DSperseManager:
     def __init__(
         self,
@@ -73,6 +76,51 @@ class DSperseManager:
             Callable[[str, str, bool, list[dict]], None] | None
         ) = None
         self._purge_old_runs()
+
+    @staticmethod
+    def _get_extraction_lock(key: str) -> threading.Lock:
+        with _extraction_locks_guard:
+            if key not in _extraction_locks:
+                _extraction_locks[key] = threading.Lock()
+            return _extraction_locks[key]
+
+    @staticmethod
+    def _ensure_slice_extracted(base_path: Path, slice_id: str) -> bool:
+        slice_dir = base_path / slice_id
+        if slice_dir.exists():
+            return True
+        dslice_path = base_path / f"{slice_id}.dslice"
+        if not dslice_path.exists():
+            return False
+        lock_key = str(base_path / slice_id)
+        lock = DSperseManager._get_extraction_lock(lock_key)
+        with lock:
+            if slice_dir.exists():
+                return True
+            staging_dir = base_path / f".{slice_id}.staging"
+            try:
+                if staging_dir.exists():
+                    shutil.rmtree(staging_dir)
+                logging.info(f"Extracting {slice_id} from {dslice_path}")
+                Converter.extract_single_slice(base_path, slice_id, staging_dir)
+                os.rename(str(staging_dir / slice_id), str(slice_dir))
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                return True
+            except OSError as e:
+                if slice_dir.exists():
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    return True
+                logging.error(f"Failed to extract {slice_id} from {dslice_path}: {e}")
+                if staging_dir.exists():
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                return False
+            except Exception as e:
+                logging.error(f"Failed to extract {slice_id} from {dslice_path}: {e}")
+                if staging_dir.exists():
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                if slice_dir.exists():
+                    shutil.rmtree(slice_dir, ignore_errors=True)
+                return False
 
     @property
     def circuits(self) -> list[Circuit]:
@@ -133,6 +181,7 @@ class DSperseManager:
         circuit: Circuit,
         inputs: dict | None = None,
         run_source: RunSource = RunSource.BENCHMARK,
+        max_tiles: int | None = None,
     ) -> str:
         """
         Start an incremental run where miners compute outputs.
@@ -140,11 +189,14 @@ class DSperseManager:
         Args:
             circuit: The circuit to execute
             inputs: Model inputs (generated if not provided)
+            max_tiles: If set, cap the run to at most this many provable tiles
 
         Returns:
             Run UID
         """
-        run_uid = self._incremental_runner.start_run(circuit, inputs, run_source)
+        run_uid = self._incremental_runner.start_run(
+            circuit, inputs, run_source, max_tiles=max_tiles
+        )
         with self._incremental_runs_lock:
             self._incremental_runs.add(run_uid)
             self._incremental_run_circuits[run_uid] = circuit.id
@@ -203,7 +255,16 @@ class DSperseManager:
             incremental_runs_snapshot = list(self._incremental_runs)
             active_circuit_ids = set(self._incremental_run_circuits.values())
 
-        for run_uid in incremental_runs_snapshot:
+        api_runs = [
+            uid
+            for uid in incremental_runs_snapshot
+            if self._incremental_runner.get_run_source(uid) == RunSource.API
+        ]
+        other_runs = [
+            uid for uid in incremental_runs_snapshot if uid not in set(api_runs)
+        ]
+
+        for run_uid in api_runs + other_runs:
             if not self._incremental_runner.is_complete(run_uid):
                 requests = self.get_next_incremental_work(run_uid)
                 if requests:
@@ -457,6 +518,22 @@ class DSperseManager:
             )
         return aborted
 
+    def abort_active_runs(self) -> list[str]:
+        with self._incremental_runs_lock:
+            active_uids = list(self._incremental_runs)
+        aborted = []
+        for run_uid in active_uids:
+            state = self._incremental_runner._runs.get(run_uid)
+            if state and not state.aborted and not state.is_complete:
+                self._incremental_runner.abort_run(run_uid)
+                aborted.append(run_uid)
+        if aborted:
+            logging.info(f"Aborted {len(aborted)} active runs for incoming request")
+        return aborted
+
+    def run_onnx_inference(self, circuit: Circuit, inputs: dict) -> Optional[Any]:
+        return self._incremental_runner.run_onnx_inference(circuit, inputs)
+
     _COMPLETED_STATUS_TTL_SEC = 600
 
     def _evict_stale_statuses(self) -> None:
@@ -623,7 +700,7 @@ class DSperseManager:
                 api_url = "https://sn2-api.inferencelabs.com"
 
             hotkey = self._get_validator_hotkey()
-            body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            body = json.dumps(payload)
             signature = self._sign_request(body)
 
             if hotkey == "unknown" or not signature:
@@ -639,8 +716,7 @@ class DSperseManager:
                     content=body,
                     headers={
                         "Content-Type": "application/json",
-                        "X-Signature": signature,
-                        "X-Hotkey": hotkey,
+                        "X-Request-Signature": signature,
                     },
                 )
                 if response.status_code == 200:
@@ -655,18 +731,18 @@ class DSperseManager:
 
     def _get_validator_hotkey(self) -> str:
         try:
-            return cli_parser.config.wallet.hotkey.ss58_address
+            wallet = bt.Wallet(config=cli_parser.config)
+            return wallet.hotkey.ss58_address
         except Exception:
             return "unknown"
 
     def _sign_request(self, body: str) -> str:
         try:
-            import hashlib
+            import base64
 
-            wallet = cli_parser.config.wallet
-            message = hashlib.sha256(body.encode()).hexdigest()
-            signature = wallet.hotkey.sign(message.encode())
-            return signature.hex()
+            wallet = bt.Wallet(config=cli_parser.config)
+            signature = wallet.hotkey.sign(body.encode())
+            return base64.b64encode(signature).decode()
         except Exception:
             return ""
 
@@ -679,21 +755,10 @@ class DSperseManager:
         proof_system: ProofSystem,
     ) -> dict:
         """
-        Generate proof for a slice.
+        Generate proof for a slice using JSTprove.
 
-        In standard mode, both inputs and outputs are provided.
         In incremental mode (outputs=None), inference is run to compute outputs,
         which are returned in the result.
-
-        Args:
-            circuit_id: The circuit identifier
-            slice_num: Slice number (may include tile suffix like "0_tile_1")
-            inputs: Input tensor data
-            outputs: Expected output data (None for incremental mode)
-            proof_system: Proof system to use (JSTPROVE or EZKL)
-
-        Returns:
-            Dict with success, proof, proof_generation_time, and witness (for incremental)
         """
         incremental_mode = outputs is None
         circuit = self._get_circuit_by_id(circuit_id)
@@ -701,7 +766,6 @@ class DSperseManager:
         base_path = Path(circuit.paths.base_path)
         slice_id = f"slice_{base_slice_num}"
         model_dir = base_path / slice_id
-        dslice_path = base_path / f"{slice_id}.dslice"
         result = {
             "circuit_id": circuit_id,
             "slice_num": slice_num,
@@ -709,14 +773,7 @@ class DSperseManager:
             "proof_generation_time": None,
             "proof": None,
         }
-        if not model_dir.exists() and dslice_path.exists():
-            logging.info(f"Extracting {slice_id} from {dslice_path}")
-            try:
-                Converter.extract_single_slice(base_path, slice_id, base_path)
-            except Exception as e:
-                logging.error(f"Failed to extract {slice_id} from {dslice_path}: {e}")
-                return result
-        if not model_dir.exists():
+        if not self._ensure_slice_extracted(base_path, slice_id):
             logging.error(
                 f"Slice directory {model_dir} does not exist and no .dslice archive found"
             )
@@ -743,100 +800,28 @@ class DSperseManager:
                     incremental_mode=incremental_mode,
                 )
 
-            slice_copy = tmp_path / "slices"
-            shutil.copytree(model_dir, slice_copy)
-            runner = Runner(run_dir=tmp_path, threads=os.cpu_count() or 4, batch=True)
-            runner.run(input_json_path=input_file, slice_path=str(slice_copy))
-            run_dir = runner.last_run_dir
-            logging.info(f"Runner completed for slice_{slice_num}, run_dir: {run_dir}")
+            if proof_system != ProofSystem.JSTPROVE:
+                logging.error(f"Unsupported proof system: {proof_system}")
+                return result
 
-            if runner.run_metadata:
-                metadata_path = run_dir / "metadata.json"
-                with open(metadata_path, "w") as f:
-                    json.dump(runner.run_metadata.to_dict(), f)
+            jst_model_path = self._find_jstprove_circuit(
+                model_dir, base_slice_num, is_tiled=False
+            )
+            if jst_model_path is None or not jst_model_path.exists():
+                logging.error(f"JSTprove circuit not found for slice {slice_num}")
+                return result
 
             prove_start = time.time()
-
-            if proof_system == ProofSystem.JSTPROVE:
-                jst_model_path = self._find_jstprove_circuit(
-                    model_dir, base_slice_num, is_tiled=False
-                )
-                if jst_model_path is None or not jst_model_path.exists():
-                    logging.error(f"JSTprove circuit not found for slice {slice_num}")
-                    return result
-                success, proof_data, witness_data, _ = self._jstprove_witness_and_prove(
-                    jst_model_path,
-                    input_file,
-                    output_file,
-                    tmp_path,
-                    f"slice {slice_num}",
-                )
-                if incremental_mode and witness_data is not None:
-                    result["witness"] = witness_data
-                if not success and proof_data is None:
-                    return result
-
-            elif proof_system == ProofSystem.EZKL:
-                slice_id = f"slice_{base_slice_num}"
-                slice_meta = (
-                    runner.run_metadata.get_slice(slice_id)
-                    if runner.run_metadata
-                    else None
-                )
-                if not slice_meta:
-                    logging.error(
-                        f"No run metadata for {slice_id}, cannot prove with EZKL"
-                    )
-                    return result
-
-                ezkl_circuit_path = (
-                    slice_meta.ezkl_circuit_path or slice_meta.circuit_path
-                )
-                ezkl_pk_path = slice_meta.ezkl_pk_path or slice_meta.pk_path
-                ezkl_settings_path = (
-                    slice_meta.ezkl_settings_path or slice_meta.settings_path
-                )
-
-                if not ezkl_circuit_path or not ezkl_pk_path or not ezkl_settings_path:
-                    logging.error(
-                        f"Missing EZKL paths for {slice_id}: "
-                        f"circuit={ezkl_circuit_path}, pk={ezkl_pk_path}, settings={ezkl_settings_path}"
-                    )
-                    return result
-
-                ezkl_circuit = (
-                    Path(ezkl_circuit_path)
-                    if Path(ezkl_circuit_path).is_absolute()
-                    else model_dir / ezkl_circuit_path
-                )
-                ezkl_pk = (
-                    Path(ezkl_pk_path)
-                    if Path(ezkl_pk_path).is_absolute()
-                    else model_dir / ezkl_pk_path
-                )
-                ezkl_settings = (
-                    Path(ezkl_settings_path)
-                    if Path(ezkl_settings_path).is_absolute()
-                    else model_dir / ezkl_settings_path
-                )
-                witness_path = run_dir / slice_id / "output.json"
-                proof_path = tmp_path / "proof.json"
-
-                ezkl_runner = EZKL()
-                success, proof_file = ezkl_runner.prove(
-                    witness_path=str(witness_path),
-                    model_path=str(ezkl_circuit),
-                    proof_path=str(proof_path),
-                    pk_path=str(ezkl_pk),
-                    settings_path=str(ezkl_settings),
-                )
-
-                proof_data = None
-                if success and proof_path.exists():
-                    with open(proof_path, "r") as pf:
-                        proof_data = json.load(pf)
-            else:
-                logging.error(f"Unsupported proof system: {proof_system}")
+            success, proof_data, witness_data, _ = self._jstprove_witness_and_prove(
+                jst_model_path,
+                input_file,
+                output_file,
+                tmp_path,
+                f"slice {slice_num}",
+            )
+            if incremental_mode and witness_data is not None:
+                result["witness"] = witness_data
+            if not success:
                 return result
 
             proof_generation_time = time.time() - prove_start
@@ -995,12 +980,15 @@ class DSperseManager:
 
         circuit = self._get_circuit_by_id(circuit_id)
         base_slice_num, tile_idx = self._parse_slice_num(slice_num)
-        slice_dir = Path(circuit.paths.base_path) / f"slice_{base_slice_num}"
+        base_path = Path(circuit.paths.base_path)
+        slice_id = f"slice_{base_slice_num}"
+        slice_dir = base_path / slice_id
         metadata_path = slice_dir / "metadata.json"
 
         if not metadata_path.exists():
-            logging.error(f"Slice metadata not found: {metadata_path}")
-            return False, None
+            if not self._ensure_slice_extracted(base_path, slice_id):
+                logging.error(f"Slice metadata not found: {metadata_path}")
+                return False, None
 
         with open(metadata_path, "r") as f:
             slice_metadata = json.load(f)

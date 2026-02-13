@@ -91,6 +91,7 @@ class CircuitPaths:
     proof: str = field(init=False)
     srs: str = field(init=False)
     witness_executable: str = field(init=False)
+    full_model: str = field(init=False)
 
     def __post_init__(self):
         cache_path = os.path.join(CIRCUIT_CACHE_DIR, f"model_{self.model_id}")
@@ -133,6 +134,7 @@ class CircuitPaths:
         self.evaluation_data = os.path.join(
             self.external_base_path, "evaluation_data.json"
         )
+        self.full_model = os.path.join(self.external_base_path, "full_model.onnx")
 
     def set_proof_system_paths(self, proof_system: ProofSystem):
         """

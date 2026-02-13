@@ -8,6 +8,7 @@ Simple state machine:
 """
 
 import json
+import random
 import secrets
 import shutil
 import time
@@ -199,6 +200,7 @@ class IncrementalRunner:
         circuit: Circuit,
         inputs: Optional[dict] = None,
         run_source: RunSource = RunSource.BENCHMARK,
+        max_tiles: Optional[int] = None,
     ) -> str:
         """Start a new incremental run."""
         run_uid = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{secrets.token_hex(8)}"
@@ -273,6 +275,25 @@ class IncrementalRunner:
             start_time=time.perf_counter(),
         )
 
+        if max_tiles is not None:
+            truncated = []
+            tiles_seen = 0
+            for sid in execution_order:
+                meta = run_metadata.slices.get(sid)
+                has_circuit = meta and self._has_circuits(state, sid, meta)
+                if has_circuit:
+                    count = (
+                        meta.tiling.num_tiles
+                        if meta.tiling and meta.tiling.num_tiles > 1
+                        else 1
+                    )
+                    if tiles_seen + count > max_tiles and tiles_seen > 0:
+                        break
+                    tiles_seen += count
+                truncated.append(sid)
+            execution_order = truncated
+            state.execution_order = truncated
+
         total_tiles = 0
         slice_tile_counts: dict[str, int] = {}
         for slice_id in execution_order:
@@ -291,6 +312,7 @@ class IncrementalRunner:
         self._runs[run_uid] = state
         logging.info(
             f"Run {run_uid} initialized with {len(execution_order)} slices, {total_tiles} tiles"
+            + (f" (capped at max_tiles={max_tiles})" if max_tiles is not None else "")
         )
         return run_uid
 
@@ -350,20 +372,29 @@ class IncrementalRunner:
             state.current_idx += 1
             return []
 
-        overflow_info = self._preflight_jstprove_range_check(state, slice_id, meta)
-        if overflow_info:
-            logging.warning(
-                f"Slice {slice_id}: {overflow_info['overflow_count']}/{overflow_info['total_elements']} "
-                f"outputs exceed JSTprove {self.JSTPROVE_N_BITS}-bit range "
-                f"(max |val|={overflow_info['max_abs']:.0f}, limit={self.JSTPROVE_RANGE_LIMIT}), "
-                f"falling back to ONNX"
-            )
-            self._cleanup_extracted_slice(state, slice_id)
-            state.completed_slices.append(slice_id)
-            state.current_idx += 1
-            if self._on_jstprove_range_fallback:
-                self._on_jstprove_range_fallback(state.run_uid, slice_id, overflow_info)
-            return []
+        if state.run_source != RunSource.API:
+            overflow_info = self._preflight_jstprove_range_check(state, slice_id, meta)
+            if overflow_info:
+                tile_detail = (
+                    f" tile {overflow_info['tile_idx']}"
+                    if "tile_idx" in overflow_info
+                    else ""
+                )
+                logging.warning(
+                    f"Slice {slice_id}{tile_detail}: "
+                    f"{overflow_info['overflow_count']}/{overflow_info['total_elements']} "
+                    f"outputs exceed JSTprove {self.JSTPROVE_N_BITS}-bit range "
+                    f"(max |val|={overflow_info['max_abs']:.0f}, limit={self.JSTPROVE_RANGE_LIMIT}), "
+                    f"falling back to ONNX"
+                )
+                self._cleanup_extracted_slice(state, slice_id)
+                state.completed_slices.append(slice_id)
+                state.current_idx += 1
+                if self._on_jstprove_range_fallback:
+                    self._on_jstprove_range_fallback(
+                        state.run_uid, slice_id, overflow_info
+                    )
+                return []
 
         return self._create_work_items(state, slice_id, meta, is_tiled)
 
@@ -426,7 +457,14 @@ class IncrementalRunner:
             self._store_slice_output(state, meta, output)
 
         if not state.pending_work:
-            if state.failed_tasks:
+            is_api_sampled = (
+                state.run_source == RunSource.API
+                and meta
+                and meta.tiling
+                and meta.tiling.num_tiles > self.API_SAMPLE_TILES
+            )
+
+            if state.failed_tasks and not is_api_sampled:
                 logging.error(
                     f"Slice {slice_id} has {len(state.failed_tasks)} failed tasks, aborting run"
                 )
@@ -435,14 +473,25 @@ class IncrementalRunner:
                 self._on_complete(state)
                 return True
 
+            if state.failed_tasks and is_api_sampled:
+                logging.warning(
+                    f"Slice {slice_id} has {len(state.failed_tasks)} failed tasks "
+                    f"(API sampled run, continuing)"
+                )
+
             try:
-                if meta and meta.tiling and meta.tiling.num_tiles > 1:
-                    self._reconstruct_from_tiles(state, slice_id, meta.tiling)
+                if not is_api_sampled:
+                    if meta and meta.tiling and meta.tiling.num_tiles > 1:
+                        self._reconstruct_from_tiles(state, slice_id, meta.tiling)
+                if meta and meta.tiling:
                     self._cleanup_tile_cache(state, meta.tiling)
                 self._cleanup_extracted_slice(state, slice_id)
                 state.completed_slices.append(slice_id)
                 state.current_idx += 1
                 state.failed_tasks.clear()
+
+                if is_api_sampled:
+                    state.current_idx = len(state.execution_order)
 
                 if state.is_complete:
                     self._on_complete(state)
@@ -518,6 +567,39 @@ class IncrementalRunner:
         logging.warning(f"Run {run_uid} aborted (preempted)")
         self._on_complete(state)
 
+    def run_onnx_inference(self, circuit: Circuit, inputs: dict) -> Optional[Any]:
+        run_uid = self.start_run(circuit, inputs, RunSource.API)
+        state = self._runs[run_uid]
+        try:
+            max_steps = len(state.execution_order) * 200
+            for _ in range(max_steps):
+                if state.is_complete or state.aborted:
+                    break
+                slice_id = state.current_slice_id
+                if slice_id is None:
+                    break
+                meta = state.slice_metadata.get(slice_id)
+                if not meta:
+                    logging.warning(f"ONNX inference: no metadata for {slice_id}")
+                    break
+                required_inputs = meta.dependencies.filtered_inputs
+                missing = [i for i in required_inputs if i not in state.tensor_cache]
+                if missing:
+                    logging.warning(
+                        f"ONNX inference: missing inputs {missing} for {slice_id}"
+                    )
+                    break
+                self._ensure_extracted(state, slice_id)
+                try:
+                    self._run_onnx_locally(state, slice_id, meta)
+                finally:
+                    self._cleanup_extracted_slice(state, slice_id)
+                state.completed_slices.append(slice_id)
+                state.current_idx += 1
+            return self.get_final_output(run_uid)
+        finally:
+            self.cleanup_run(run_uid)
+
     def get_run_source(self, run_uid: str) -> RunSource | None:
         if run_uid not in self._runs:
             return None
@@ -534,6 +616,7 @@ class IncrementalRunner:
         if work_item.tile_idx is not None:
             slice_num = f"{slice_num}_tile_{work_item.tile_idx}"
 
+        state = self._runs.get(work_item.run_uid)
         return DSliceQueuedProofRequest(
             circuit=work_item.circuit,
             inputs=work_item.inputs,
@@ -544,6 +627,7 @@ class IncrementalRunner:
             is_tile=work_item.tile_idx is not None,
             tile_idx=work_item.tile_idx,
             task_id=work_item.task_id,
+            run_source=state.run_source if state else RunSource.BENCHMARK,
         )
 
     def _ensure_extracted(self, state: RunState, slice_id: str) -> None:
@@ -551,7 +635,10 @@ class IncrementalRunner:
         slice_dir = state.slices_path / slice_id
         dslice_path = state.slices_path / f"{slice_id}.dslice"
 
-        if not slice_dir.exists() and dslice_path.exists():
+        if not dslice_path.exists():
+            return
+
+        if not slice_dir.exists() or not (slice_dir / "payload").exists():
             logging.info(f"Extracting {slice_id} from {dslice_path}")
             Converter.extract_single_slice(
                 state.slices_path, slice_id, state.slices_path
@@ -616,11 +703,42 @@ class IncrementalRunner:
     ) -> Optional[dict]:
         """Run ONNX locally and check if outputs fit JSTprove's N_BITS range.
 
-        Returns overflow info dict if any values exceed the range, None otherwise.
-        On overflow, the ONNX results are already stored in tensor_cache
-        so the slice can be completed without miner dispatch.
+        Checks both individual tile outputs (for tiled slices) and the
+        reconstructed full output. Returns overflow info dict if any values
+        exceed the range, None otherwise. On overflow, the ONNX results are
+        already stored in tensor_cache so the slice can be completed without
+        miner dispatch.
         """
-        self._run_onnx_locally(state, slice_id, meta)
+        is_tiled = meta.tiling and meta.tiling.num_tiles > 1
+        self._run_onnx_locally(state, slice_id, meta, cleanup_tiles=not is_tiled)
+
+        if is_tiled:
+            tiling = meta.tiling
+            for tile_idx in range(tiling.num_tiles):
+                cache_name = f"tile_{tiling.slice_idx}_{tile_idx}_out"
+                tile_tensor = state.tensor_cache.get(cache_name)
+                if tile_tensor is None:
+                    continue
+                if not isinstance(tile_tensor, torch.Tensor):
+                    tile_tensor = torch.tensor(tile_tensor)
+                abs_vals = tile_tensor.abs()
+                max_abs = abs_vals.max().item()
+                if max_abs >= self.JSTPROVE_RANGE_LIMIT:
+                    overflow_count = int(
+                        (abs_vals >= self.JSTPROVE_RANGE_LIMIT).sum().item()
+                    )
+                    self._cleanup_tile_cache(state, tiling)
+                    return {
+                        "n_bits": self.JSTPROVE_N_BITS,
+                        "limit": self.JSTPROVE_RANGE_LIMIT,
+                        "max_abs": max_abs,
+                        "overflow_count": overflow_count,
+                        "total_elements": tile_tensor.numel(),
+                        "slice_id": slice_id,
+                        "circuit_id": state.circuit.id,
+                        "tile_idx": tile_idx,
+                    }
+            self._cleanup_tile_cache(state, tiling)
 
         output_names = meta.dependencies.output
         for name in output_names:
@@ -714,7 +832,11 @@ class IncrementalRunner:
             return None
 
     def _run_onnx_locally(
-        self, state: RunState, slice_id: str, meta: RunSliceMetadata
+        self,
+        state: RunState,
+        slice_id: str,
+        meta: RunSliceMetadata,
+        cleanup_tiles: bool = True,
     ) -> None:
         """Run slice locally using ONNX."""
         logging.info(f"Running {slice_id} locally with ONNX")
@@ -722,7 +844,7 @@ class IncrementalRunner:
         is_tiled = meta.tiling and meta.tiling.num_tiles > 1
 
         if is_tiled:
-            self._run_tiled_onnx(state, slice_id, meta)
+            self._run_tiled_onnx(state, slice_id, meta, cleanup=cleanup_tiles)
         else:
             self._run_single_onnx(state, slice_id, meta)
 
@@ -776,7 +898,11 @@ class IncrementalRunner:
             logging.info(f"Stored {stored} outputs for {slice_id} in tensor_cache")
 
     def _run_tiled_onnx(
-        self, state: RunState, slice_id: str, meta: RunSliceMetadata
+        self,
+        state: RunState,
+        slice_id: str,
+        meta: RunSliceMetadata,
+        cleanup: bool = True,
     ) -> None:
         """Run a tiled slice with ONNX."""
         tiling = meta.tiling
@@ -802,8 +928,11 @@ class IncrementalRunner:
         )
 
         tile_executor.reconstruct_from_tiles(slice_id, tiling)
-        self._cleanup_tile_cache(state, tiling)
+        if cleanup:
+            self._cleanup_tile_cache(state, tiling)
         logging.info(f"Completed {tiling.num_tiles} tiles for {slice_id}")
+
+    API_SAMPLE_TILES = 2
 
     def _create_work_items(
         self, state: RunState, slice_id: str, meta: RunSliceMetadata, is_tiled: bool
@@ -817,7 +946,19 @@ class IncrementalRunner:
             input_tensor = tile_executor.get_input_tensor(slice_id, tiling, meta)
             tile_executor.split_into_tiles(slice_id, tiling, input_tensor)
 
-            for tile_idx in range(tiling.num_tiles):
+            tile_indices = list(range(tiling.num_tiles))
+            if (
+                state.run_source == RunSource.API
+                and len(tile_indices) > self.API_SAMPLE_TILES
+            ):
+                tile_indices = sorted(
+                    random.sample(tile_indices, self.API_SAMPLE_TILES)
+                )
+                logging.info(
+                    f"API run: sampling tiles {tile_indices} from {tiling.num_tiles} for {slice_id}"
+                )
+
+            for tile_idx in tile_indices:
                 cache_name = f"tile_{tiling.slice_idx}_{tile_idx}_in"
                 tile_tensor = state.tensor_cache.get(cache_name)
                 if tile_tensor is None:

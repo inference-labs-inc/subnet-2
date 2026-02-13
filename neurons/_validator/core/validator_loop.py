@@ -47,6 +47,8 @@ from constants import (
     EXCEPTION_DELAY_SECONDS,
     FIVE_MINUTES,
     LOOP_DELAY_SECONDS,
+    PERFORMANCE_MIN_SAMPLES,
+    RunSource,
     MAX_CONCURRENT_REQUESTS,
     MAX_MINER_CAPACITY,
     ONE_HOUR,
@@ -321,6 +323,22 @@ class ValidatorLoop:
                         MAX_MINER_CAPACITY
                     )
                 )
+
+                snap = self.weights_manager.performance_tracker.snapshot()
+                ranked = sorted(
+                    (
+                        (uid, rate)
+                        for uid, (rate, count) in snap.items()
+                        if count >= PERFORMANCE_MIN_SAMPLES
+                        and uid in self.queryable_uids
+                    ),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )
+                top_count = max(1, len(ranked) // 5)
+                api_eligible_uids = (
+                    {uid for uid, _ in ranked[:top_count]} if ranked else set()
+                )
                 for uid in shuffled_uids:
                     if requests_sent >= slots_available:
                         break
@@ -348,7 +366,18 @@ class ValidatorLoop:
                                 uid, rwr_req
                             )
                         elif not self.relay.stacked_requests_queue.empty():
-                            request = self.request_pipeline._prepare_queued_request(uid)
+                            next_req = self.relay.stacked_requests_queue.get_nowait()
+                            if (
+                                api_eligible_uids
+                                and hasattr(next_req, "run_source")
+                                and next_req.run_source == RunSource.API
+                                and uid not in api_eligible_uids
+                            ):
+                                self.relay.stacked_requests_queue.put_nowait(next_req)
+                                break
+                            request = self.request_pipeline._prepare_queued_request(
+                                uid, next_req
+                            )
                         else:
                             break
 

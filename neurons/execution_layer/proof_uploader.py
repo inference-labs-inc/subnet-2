@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Optional
 
+import bittensor as bt
 import httpx
 
 import cli_parser
@@ -12,13 +13,18 @@ logger = logging.getLogger(__name__)
 
 SN2_API_URL = os.getenv("SN2_API_URL", "https://sn2-api.inferencelabs.com")
 
+_wallet_instance: Optional[bt.Wallet] = None
+
 
 def _get_api_url() -> str:
     return getattr(cli_parser.config, "sn2_api_url", None) or SN2_API_URL
 
 
-def _get_wallet():
-    return cli_parser.config.wallet
+def _get_wallet() -> bt.Wallet:
+    global _wallet_instance
+    if _wallet_instance is None:
+        _wallet_instance = bt.Wallet(config=cli_parser.config)
+    return _wallet_instance
 
 
 def _sign_body(body: str) -> str:
@@ -101,6 +107,21 @@ def upload_final_output(
         "output": output,
     }
     result = _authenticated_post(f"{api_url}/proofs/{run_uid}/output", payload)
+    return result.get("gcs_key")
+
+
+def upload_input_frame(run_uid: str, frame_bytes: bytes) -> Optional[str]:
+    api_url = _get_api_url()
+    hotkey = _get_wallet().hotkey.ss58_address
+    payload = {"validator_key": hotkey, "run_uid": run_uid}
+    result = _authenticated_post(
+        f"{api_url}/proofs/{run_uid}/frame-upload-url", payload
+    )
+    upload_url = result.get("upload_url")
+    if not upload_url:
+        return None
+    with httpx.Client(timeout=60.0) as client:
+        upload_artifact_bytes(client, upload_url, frame_bytes)
     return result.get("gcs_key")
 
 
