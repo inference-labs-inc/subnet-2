@@ -756,12 +756,6 @@ class RelayManager:
         if self._ws_process and self._ws_process.is_alive():
             self._ws_process.terminate()
             self._ws_process.join(timeout=5)
-        for fd_attr in ("_ws_notify_r", "_ws_notify_w"):
-            fd = getattr(self, fd_attr, -1)
-            if fd >= 0:
-                with contextlib.suppress(OSError):
-                    os.close(fd)
-                setattr(self, fd_attr, -1)
 
     def set_request_result(self, request_hash: str, result: dict) -> None:
         if request_hash in self.pending_requests:
