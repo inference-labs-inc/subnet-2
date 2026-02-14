@@ -194,7 +194,13 @@ class _RelayWSThread(threading.Thread):
 
     def request_stop(self) -> None:
         self._ready.wait()
-        self._loop.call_soon_threadsafe(self._stop_event.set)
+        if not self.is_alive() or self._loop is None:
+            return
+        try:
+            self._loop.call_soon_threadsafe(self._stop_event.set)
+            self._loop.call_soon_threadsafe(self._outgoing.put_nowait, None)
+        except RuntimeError:
+            pass
 
     async def _ws_loop(self) -> None:
         reconnect_delay = RELAY_RECONNECT_BASE_DELAY
@@ -240,6 +246,8 @@ class _RelayWSThread(threading.Thread):
                     async def _writer():
                         while ws.close_code is None:
                             msg = await self._outgoing.get()
+                            if msg is None:
+                                return
                             await ws.send(msg)
 
                     done, pending = await asyncio.wait(
@@ -763,6 +771,10 @@ class RelayManager:
         if self._ws_thread and self._ws_thread.is_alive():
             self._ws_thread.request_stop()
             self._ws_thread.join(timeout=5)
+            if self._ws_thread.is_alive():
+                bt.logging.warning(
+                    "Relay WS thread did not stop within 5s; it will be killed at process exit (daemon thread)"
+                )
 
     def set_request_result(self, request_hash: str, result: dict) -> None:
         if request_hash in self.pending_requests:
