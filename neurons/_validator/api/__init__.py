@@ -8,12 +8,11 @@ import copy
 import io
 import json
 import multiprocessing as mp
-import multiprocessing.synchronize
 import os
-import queue
 import threading
 import time
 import traceback
+from collections.abc import Callable
 
 import bittensor as bt
 import numpy as np
@@ -154,36 +153,37 @@ def _onnx_inference_worker(
         result_queue.put((run_uid, None, str(exc)))
 
 
-def _relay_ws_process(
-    relay_url: str,
-    wallet_name: str,
-    wallet_hotkey: str,
-    inbox: mp.Queue,
-    outbox: mp.Queue,
-    notify_event: mp.synchronize.Event,
-):
-    import logging
-    import signal
-    import sys
+class _RelayWSThread(threading.Thread):
+    def __init__(
+        self,
+        relay_url: str,
+        wallet: object,
+        on_message: Callable[[str], None],
+    ):
+        super().__init__(daemon=True)
+        self._relay_url = relay_url
+        self._wallet = wallet
+        self._on_message = on_message
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._outgoing: asyncio.Queue | None = None
+        self._ready = threading.Event()
 
-    import bittensor as bt
+    def run(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._outgoing = asyncio.Queue()
+        self._ready.set()
+        self._loop.run_until_complete(self._ws_loop())
 
-    logging.basicConfig(
-        stream=sys.stderr,
-        level=logging.INFO,
-        format="%(levelname)s:%(name)s:%(message)s",
-    )
-    log = logging.getLogger("relay_ws")
+    def send(self, msg: str) -> None:
+        self._ready.wait()
+        self._loop.call_soon_threadsafe(self._outgoing.put_nowait, msg)
 
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    wallet = bt.Wallet(name=wallet_name, hotkey=wallet_hotkey)
-
-    async def _run():
+    async def _ws_loop(self) -> None:
         reconnect_delay = RELAY_RECONNECT_BASE_DELAY
         while True:
             try:
                 async with websockets.connect(
-                    relay_url,
+                    self._relay_url,
                     open_timeout=RELAY_OPEN_TIMEOUT,
                     ping_interval=20,
                     ping_timeout=None,
@@ -196,12 +196,12 @@ def _relay_ws_process(
                     if msg.get("type") != "auth_challenge":
                         continue
                     challenge_bytes = base64.b64decode(msg["challenge"], validate=True)
-                    signature = wallet.hotkey.sign(challenge_bytes)
+                    signature = self._wallet.hotkey.sign(challenge_bytes)
                     await ws.send(
                         json.dumps(
                             {
                                 "type": "auth_response",
-                                "ss58": wallet.hotkey.ss58_address,
+                                "ss58": self._wallet.hotkey.ss58_address,
                                 "signature": base64.b64encode(signature).decode(),
                             }
                         )
@@ -212,27 +212,17 @@ def _relay_ws_process(
                     if json.loads(raw_result).get("type") != "auth_success":
                         continue
 
-                    log.info("Relay WS process: connected and authenticated")
+                    bt.logging.info("Relay WS thread: connected and authenticated")
                     reconnect_delay = RELAY_RECONNECT_BASE_DELAY
 
                     async def _reader():
                         async for message in ws:
-                            inbox.put(message)
+                            self._on_message(message)
 
                     async def _writer():
-                        loop = asyncio.get_running_loop()
                         while ws.close_code is None:
-                            try:
-                                msg = outbox.get_nowait()
-                                await ws.send(msg)
-                                continue
-                            except queue.Empty:
-                                pass
-                            notified = await loop.run_in_executor(
-                                None, notify_event.wait, 0.5
-                            )
-                            if notified:
-                                notify_event.clear()
+                            msg = await self._outgoing.get()
+                            await ws.send(msg)
 
                     done, pending = await asyncio.wait(
                         {
@@ -245,14 +235,18 @@ def _relay_ws_process(
                         t.cancel()
                     await asyncio.gather(*pending, return_exceptions=True)
 
-            except Exception as e:
-                log.warning(f"Relay WS process error: {e}")
+                    if ws.close_code == 4000:
+                        bt.logging.info(
+                            "Relay closed connection: replaced by new connection. Exiting thread."
+                        )
+                        return
 
-            log.info(f"Relay WS process: reconnecting in {reconnect_delay}s")
+            except Exception as e:
+                bt.logging.warning(f"Relay WS thread error: {e}")
+
+            bt.logging.info(f"Relay WS thread: reconnecting in {reconnect_delay}s")
             await asyncio.sleep(reconnect_delay)
             reconnect_delay = min(reconnect_delay * 2, RELAY_RECONNECT_MAX_DELAY)
-
-    asyncio.run(_run())
 
 
 class AuthenticationError(Exception):
@@ -284,10 +278,8 @@ class RelayManager:
         self._background_tasks: set[asyncio.Task] = set()
         threading.Thread(target=self._monitor_onnx_results, daemon=True).start()
 
-        self._ws_inbox: mp.Queue = _spawn_ctx.Queue()
-        self._ws_outbox: mp.Queue = _spawn_ctx.Queue()
-        self._ws_notify_event: mp.synchronize.Event = _spawn_ctx.Event()
-        self._ws_process: mp.Process | None = None
+        self._inbox: asyncio.Queue | None = None
+        self._ws_thread: _RelayWSThread | None = None
         self._should_run = True
         self._task: asyncio.Task | None = None
 
@@ -347,24 +339,13 @@ class RelayManager:
             for k in stale:
                 del self._onnx_outputs[k]
 
-    def _start_ws_process(self) -> None:
-        self._ws_notify_event.clear()
-        self._ws_process = _spawn_ctx.Process(
-            target=_relay_ws_process,
-            args=(
-                self.config.relay_url,
-                self.config.wallet.name,
-                self.config.wallet.hotkey_str,
-                self._ws_inbox,
-                self._ws_outbox,
-                self._ws_notify_event,
-            ),
-            daemon=True,
+    def _start_ws_thread(self, on_message: Callable[[str], None]) -> None:
+        self._ws_thread = _RelayWSThread(
+            self.config.relay_url,
+            self.config.wallet,
+            on_message,
         )
-        self._ws_process.start()
-
-    def _notify_ws_writer(self) -> None:
-        self._ws_notify_event.set()
+        self._ws_thread.start()
 
     def start(self) -> None:
         if not self.config.relay_enabled:
@@ -373,8 +354,14 @@ class RelayManager:
             )
             return
 
-        bt.logging.info("Starting SN2 Relay (spawn WS process)...")
-        self._start_ws_process()
+        bt.logging.info("Starting SN2 Relay (WS thread)...")
+        loop = asyncio.get_running_loop()
+        self._inbox = asyncio.Queue()
+
+        def on_message(msg: str) -> None:
+            loop.call_soon_threadsafe(self._inbox.put_nowait, msg)
+
+        self._start_ws_thread(on_message)
         self._task = asyncio.create_task(self._dispatch_loop())
         self._task.add_done_callback(self._on_task_done)
 
@@ -385,31 +372,21 @@ class RelayManager:
         if exc:
             bt.logging.error(f"Relay dispatch loop failed: {exc}")
 
-    def _check_ws_process_health(self) -> None:
-        if self._ws_process and not self._ws_process.is_alive():
-            exit_code = self._ws_process.exitcode
-            bt.logging.warning(
-                f"Relay WS process died (exit code {exit_code}), restarting..."
-            )
-            self._ws_process.close()
-            self._start_ws_process()
-
     async def _dispatch_loop(self) -> None:
         if self._dsperse_submit_sem is None:
             self._dsperse_submit_sem = asyncio.Semaphore(64)
-        loop = asyncio.get_running_loop()
-        health_check_counter = 0
         while self._should_run:
             try:
-                message = await loop.run_in_executor(
-                    self._relay_executor,
-                    lambda: self._ws_inbox.get(timeout=1.0),
-                )
-            except queue.Empty:
-                health_check_counter += 1
-                if health_check_counter >= 10:
-                    health_check_counter = 0
-                    self._check_ws_process_health()
+                message = await asyncio.wait_for(self._inbox.get(), timeout=10.0)
+            except asyncio.TimeoutError:
+                if self._ws_thread and not self._ws_thread.is_alive():
+                    bt.logging.warning("Relay WS thread died, restarting...")
+                    loop = asyncio.get_running_loop()
+
+                    def on_message(msg: str) -> None:
+                        loop.call_soon_threadsafe(self._inbox.put_nowait, msg)
+
+                    self._start_ws_thread(on_message)
                 continue
 
             bt.logging.debug(f"Received relay message: {str(message)[:100]}...")
@@ -427,15 +404,14 @@ class RelayManager:
                     "subnet-2.run_status": self.handle_run_status,
                 },
             )
-            self._ws_outbox.put(str(response))
-            self._notify_ws_writer()
+            self._ws_thread.send(str(response))
         except Exception as e:
             bt.logging.error(f"Error processing relay message: {e}")
             traceback.print_exc()
             request_id = None
             with contextlib.suppress(Exception):
                 request_id = json.loads(message).get("id")
-            self._ws_outbox.put(
+            self._ws_thread.send(
                 json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -444,7 +420,6 @@ class RelayManager:
                     }
                 )
             )
-            self._notify_ws_writer()
 
     async def _guarded_dsperse_submit(self, **params: object) -> dict[str, object]:
         if self._dsperse_submit_sem.locked():
@@ -469,7 +444,7 @@ class RelayManager:
                 daemon=True,
             ).start()
 
-        self._ws_outbox.put(
+        self._ws_thread.send(
             json.dumps(
                 {
                     "jsonrpc": "2.0",
@@ -482,7 +457,6 @@ class RelayManager:
                 }
             )
         )
-        self._notify_ws_writer()
 
     async def handle_proof_of_computation(self, **params: dict) -> dict:
         input_json = params.get("input")
@@ -753,9 +727,8 @@ class RelayManager:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-        if self._ws_process and self._ws_process.is_alive():
-            self._ws_process.terminate()
-            self._ws_process.join(timeout=5)
+        if self._ws_thread and self._ws_thread.is_alive():
+            self._ws_thread.join(timeout=5)
 
     def set_request_result(self, request_hash: str, result: dict) -> None:
         if request_hash in self.pending_requests:
