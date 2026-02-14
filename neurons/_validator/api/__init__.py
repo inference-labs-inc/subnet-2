@@ -171,10 +171,15 @@ class _RelayWSThread(threading.Thread):
         self.superseded = False
 
     def run(self) -> None:
-        self._loop = asyncio.new_event_loop()
-        self._outgoing = asyncio.Queue()
-        self._stop_event = asyncio.Event()
-        self._ready.set()
+        try:
+            self._loop = asyncio.new_event_loop()
+            self._outgoing = asyncio.Queue()
+            self._stop_event = asyncio.Event()
+        except Exception:
+            bt.logging.error("Relay WS thread failed to initialise event loop")
+            return
+        finally:
+            self._ready.set()
         self._loop.run_until_complete(self._ws_loop())
 
     def send(self, msg: str) -> None:
@@ -182,7 +187,10 @@ class _RelayWSThread(threading.Thread):
         if not self.is_alive():
             bt.logging.warning("Relay WS thread is dead; dropping outgoing message")
             return
-        self._loop.call_soon_threadsafe(self._outgoing.put_nowait, msg)
+        try:
+            self._loop.call_soon_threadsafe(self._outgoing.put_nowait, msg)
+        except RuntimeError:
+            bt.logging.warning("Relay WS event loop closed; dropping outgoing message")
 
     def request_stop(self) -> None:
         self._ready.wait()
