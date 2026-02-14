@@ -196,11 +196,9 @@ class _RelayWSThread(threading.Thread):
         self._ready.wait()
         if not self.is_alive() or self._loop is None:
             return
-        try:
+        with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(self._stop_event.set)
             self._loop.call_soon_threadsafe(self._outgoing.put_nowait, None)
-        except RuntimeError:
-            pass
 
     async def _ws_loop(self) -> None:
         reconnect_delay = RELAY_RECONNECT_BASE_DELAY
