@@ -7,8 +7,10 @@ import threading
 import torch
 import bittensor as bt
 from constants import (
-    CAPACITY_BACKOFF_FACTOR,
-    CAPACITY_RAMP_SUCCESSES,
+    CAPACITY_BACKOFF_THRESHOLD,
+    CAPACITY_MIN_AT_CAP,
+    CAPACITY_RAMP_THRESHOLD,
+    CAPACITY_WINDOW_SIZE,
     CIRCUIT_TIMEOUT_SECONDS,
     PERFORMANCE_CURVE_POWER,
     PERFORMANCE_MIN_SAMPLES,
@@ -41,7 +43,7 @@ class PerformanceTracker:
         self.window_size = window_size
         self.windows: dict[int, deque[tuple[bool, float]]] = {}
         self.adaptive_caps: dict[int, int] = {}
-        self.consecutive_at_cap: dict[int, int] = {}
+        self.at_cap_results: dict[int, deque[bool]] = {}
         self._lock = threading.Lock()
         self.persistence_path = persistence_path
         self._load()
@@ -88,14 +90,21 @@ class PerformanceTracker:
     def _ensure_cap_state(self, uid: int) -> None:
         if uid not in self.adaptive_caps:
             self.adaptive_caps[uid] = 1
-            self.consecutive_at_cap[uid] = 0
+        if uid not in self.at_cap_results:
+            self.at_cap_results[uid] = deque(maxlen=CAPACITY_WINDOW_SIZE)
 
-    def _backoff_capacity(self, uid: int) -> None:
+    def _update_capacity(self, uid: int) -> None:
         self._ensure_cap_state(uid)
-        self.adaptive_caps[uid] = max(
-            1, int(self.adaptive_caps[uid] * CAPACITY_BACKOFF_FACTOR)
-        )
-        self.consecutive_at_cap[uid] = 0
+        window = self.at_cap_results[uid]
+        if len(window) < CAPACITY_MIN_AT_CAP:
+            return
+        rate = sum(window) / len(window)
+        if rate >= CAPACITY_RAMP_THRESHOLD:
+            self.adaptive_caps[uid] += 1
+            window.clear()
+        elif rate < CAPACITY_BACKOFF_THRESHOLD and self.adaptive_caps[uid] > 1:
+            self.adaptive_caps[uid] -= 1
+            window.clear()
 
     def record(
         self,
@@ -110,22 +119,15 @@ class PerformanceTracker:
             self.windows[uid].append((success, response_time_sec))
 
             self._ensure_cap_state(uid)
-            if success and was_at_capacity:
-                self.consecutive_at_cap[uid] += 1
-                if self.consecutive_at_cap[uid] >= CAPACITY_RAMP_SUCCESSES:
-                    self.adaptive_caps[uid] += 1
-                    self.consecutive_at_cap[uid] = 0
-            elif success:
-                self.consecutive_at_cap[uid] = 0
-            else:
-                self._backoff_capacity(uid)
+            if was_at_capacity:
+                self.at_cap_results[uid].append(success)
+                self._update_capacity(uid)
 
     def record_reschedule(self, uid: int) -> None:
         with self._lock:
             if uid not in self.windows:
                 self.windows[uid] = deque(maxlen=self.window_size)
             self.windows[uid].append((False, PERFORMANCE_RESCHEDULE_PENALTY))
-            self._backoff_capacity(uid)
 
     def _uid_rate(self, w: deque[tuple[bool, float]], ref: float) -> float:
         if not w:
@@ -196,7 +198,7 @@ class PerformanceTracker:
             if uid in self.windows:
                 del self.windows[uid]
             self.adaptive_caps.pop(uid, None)
-            self.consecutive_at_cap.pop(uid, None)
+            self.at_cap_results.pop(uid, None)
 
     def save(self) -> None:
         if not self.persistence_path:
@@ -212,7 +214,7 @@ class PerformanceTracker:
                     "capacities": {
                         str(uid): [
                             self.adaptive_caps.get(uid, 1),
-                            self.consecutive_at_cap.get(uid, 0),
+                            list(self.at_cap_results.get(uid, deque())),
                         ]
                         for uid in self.windows
                     },
@@ -252,7 +254,13 @@ class PerformanceTracker:
                 uid = int(uid_str)
                 if isinstance(cap_data, list) and len(cap_data) == 2:
                     self.adaptive_caps[uid] = max(1, int(cap_data[0]))
-                    self.consecutive_at_cap[uid] = max(0, int(cap_data[1]))
+                    if isinstance(cap_data[1], list):
+                        self.at_cap_results[uid] = deque(
+                            (bool(v) for v in cap_data[1]),
+                            maxlen=CAPACITY_WINDOW_SIZE,
+                        )
+                    else:
+                        self.at_cap_results[uid] = deque(maxlen=CAPACITY_WINDOW_SIZE)
 
             bt.logging.info(
                 f"Loaded performance tracker with {len(self.windows)} UIDs, "
