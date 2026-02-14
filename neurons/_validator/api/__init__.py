@@ -8,6 +8,7 @@ import copy
 import io
 import json
 import multiprocessing as mp
+import multiprocessing.synchronize
 import os
 import queue
 import threading
@@ -159,7 +160,7 @@ def _relay_ws_process(
     wallet_hotkey: str,
     inbox: mp.Queue,
     outbox: mp.Queue,
-    notify_fd: int,
+    notify_event: mp.synchronize.Event,
 ):
     import logging
     import signal
@@ -221,41 +222,17 @@ def _relay_ws_process(
                     async def _writer():
                         loop = asyncio.get_running_loop()
                         while ws.close_code is None:
-                            ready = asyncio.Event()
-                            loop.add_reader(notify_fd, ready.set)
                             try:
-                                while ws.close_code is None:
-                                    ready.clear()
-                                    try:
-                                        os.read(notify_fd, 4096)
-                                    except BlockingIOError:
-                                        pass  # expected: non-blocking fd has no data yet
-                                    try:
-                                        msg = outbox.get_nowait()
-                                        await ws.send(msg)
-                                        continue
-                                    except queue.Empty:
-                                        pass  # feeder thread may not have delivered yet
-                                    try:
-                                        await asyncio.wait_for(
-                                            ready.wait(), timeout=0.01
-                                        )
-                                    except asyncio.TimeoutError:
-                                        pass
-                                    try:
-                                        msg = outbox.get_nowait()
-                                        await ws.send(msg)
-                                        continue
-                                    except queue.Empty:
-                                        pass  # nothing queued; wait for notification
-                                    try:
-                                        await asyncio.wait_for(
-                                            ready.wait(), timeout=5.0
-                                        )
-                                    except asyncio.TimeoutError:
-                                        pass  # periodic wake to check ws.close_code
-                            finally:
-                                loop.remove_reader(notify_fd)
+                                msg = outbox.get_nowait()
+                                await ws.send(msg)
+                                continue
+                            except queue.Empty:
+                                pass
+                            notified = await loop.run_in_executor(
+                                None, notify_event.wait, 0.5
+                            )
+                            if notified:
+                                notify_event.clear()
 
                     done, pending = await asyncio.wait(
                         {
@@ -309,8 +286,7 @@ class RelayManager:
 
         self._ws_inbox: mp.Queue = _spawn_ctx.Queue()
         self._ws_outbox: mp.Queue = _spawn_ctx.Queue()
-        self._ws_notify_r: int = -1
-        self._ws_notify_w: int = -1
+        self._ws_notify_event: mp.synchronize.Event = _spawn_ctx.Event()
         self._ws_process: mp.Process | None = None
         self._should_run = True
         self._task: asyncio.Task | None = None
@@ -372,17 +348,7 @@ class RelayManager:
                 del self._onnx_outputs[k]
 
     def _start_ws_process(self) -> None:
-        if self._ws_notify_w >= 0:
-            with contextlib.suppress(OSError):
-                os.close(self._ws_notify_r)
-            with contextlib.suppress(OSError):
-                os.close(self._ws_notify_w)
-        r, w = os.pipe()
-        os.set_blocking(r, False)
-        os.set_blocking(w, False)
-        os.set_inheritable(r, True)
-        self._ws_notify_r = r
-        self._ws_notify_w = w
+        self._ws_notify_event.clear()
         self._ws_process = _spawn_ctx.Process(
             target=_relay_ws_process,
             args=(
@@ -391,19 +357,14 @@ class RelayManager:
                 self.config.wallet.hotkey_str,
                 self._ws_inbox,
                 self._ws_outbox,
-                r,
+                self._ws_notify_event,
             ),
             daemon=True,
         )
         self._ws_process.start()
-        os.close(r)
-        self._ws_notify_r = -1
 
     def _notify_ws_writer(self) -> None:
-        try:
-            os.write(self._ws_notify_w, b"\x01")
-        except OSError:
-            pass  # non-blocking write; pipe full is harmless (writer will drain)
+        self._ws_notify_event.set()
 
     def start(self) -> None:
         if not self.config.relay_enabled:
