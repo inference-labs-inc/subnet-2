@@ -166,21 +166,31 @@ class _RelayWSThread(threading.Thread):
         self._on_message = on_message
         self._loop: asyncio.AbstractEventLoop | None = None
         self._outgoing: asyncio.Queue | None = None
+        self._stop_event: asyncio.Event | None = None
         self._ready = threading.Event()
+        self.superseded = False
 
     def run(self) -> None:
         self._loop = asyncio.new_event_loop()
         self._outgoing = asyncio.Queue()
+        self._stop_event = asyncio.Event()
         self._ready.set()
         self._loop.run_until_complete(self._ws_loop())
 
     def send(self, msg: str) -> None:
         self._ready.wait()
+        if not self.is_alive():
+            bt.logging.warning("Relay WS thread is dead; dropping outgoing message")
+            return
         self._loop.call_soon_threadsafe(self._outgoing.put_nowait, msg)
+
+    def request_stop(self) -> None:
+        self._ready.wait()
+        self._loop.call_soon_threadsafe(self._stop_event.set)
 
     async def _ws_loop(self) -> None:
         reconnect_delay = RELAY_RECONNECT_BASE_DELAY
-        while True:
+        while not self._stop_event.is_set():
             try:
                 async with websockets.connect(
                     self._relay_url,
@@ -239,13 +249,21 @@ class _RelayWSThread(threading.Thread):
                         bt.logging.info(
                             "Relay closed connection: replaced by new connection. Exiting thread."
                         )
+                        self.superseded = True
                         return
+
+                    while not self._outgoing.empty():
+                        self._outgoing.get_nowait()
 
             except Exception as e:
                 bt.logging.warning(f"Relay WS thread error: {e}")
 
             bt.logging.info(f"Relay WS thread: reconnecting in {reconnect_delay}s")
-            await asyncio.sleep(reconnect_delay)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=reconnect_delay)
+                return
+            except asyncio.TimeoutError:
+                pass
             reconnect_delay = min(reconnect_delay * 2, RELAY_RECONNECT_MAX_DELAY)
 
 
@@ -380,6 +398,11 @@ class RelayManager:
                 message = await asyncio.wait_for(self._inbox.get(), timeout=10.0)
             except asyncio.TimeoutError:
                 if self._ws_thread and not self._ws_thread.is_alive():
+                    if self._ws_thread.superseded:
+                        bt.logging.info(
+                            "Relay WS thread was superseded; not restarting."
+                        )
+                        continue
                     bt.logging.warning("Relay WS thread died, restarting...")
                     loop = asyncio.get_running_loop()
 
@@ -444,6 +467,8 @@ class RelayManager:
                 daemon=True,
             ).start()
 
+        if not self._ws_thread:
+            return
         self._ws_thread.send(
             json.dumps(
                 {
@@ -728,6 +753,7 @@ class RelayManager:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
         if self._ws_thread and self._ws_thread.is_alive():
+            self._ws_thread.request_stop()
             self._ws_thread.join(timeout=5)
 
     def set_request_result(self, request_hash: str, result: dict) -> None:
