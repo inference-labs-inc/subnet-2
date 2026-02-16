@@ -229,8 +229,20 @@ class ValidatorLoop:
 
     @with_rate_limit(period=ONE_MINUTE / 4)
     def log_health(self):
+        import psutil
+
+        rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+        timing_entries = sum(
+            len(t.slices) for t in self.dsperse_manager._run_timings.values()
+        )
+        tc_keys = 0
+        for state in self.dsperse_manager._incremental_runner._runs.values():
+            tc_keys += len(state.tensor_cache)
         bt.logging.info(
-            f"In-flight requests: {len(self.active_tasks)} / {self.current_concurrency}"
+            f"In-flight requests: {len(self.active_tasks)} / {self.current_concurrency} | "
+            f"RSS: {rss_mb:.0f}MB | "
+            f"tensor_cache_keys: {tc_keys} | "
+            f"timing_entries: {timing_entries}"
         )
         bt.logging.debug(f"Queryable UIDs: {len(self.queryable_uids)}")
 
