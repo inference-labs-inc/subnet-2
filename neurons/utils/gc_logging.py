@@ -92,27 +92,37 @@ class HealthMetricsBuffer:
     def flush(self) -> Optional[dict]:
         if not self._samples:
             return None
-        rss_values = [s["rss_mb"] for s in self._samples]
-        count = len(self._samples)
-        aggregated = {
-            "sample_count": count,
-            "avg_rss_mb": sum(rss_values) / count,
-            "min_rss_mb": min(rss_values),
-            "max_rss_mb": max(rss_values),
-            "avg_tensor_cache_keys": sum(s["tensor_cache_keys"] for s in self._samples)
-            / count,
-            "avg_timing_entries": sum(s["timing_entries"] for s in self._samples)
-            / count,
-            "avg_active_tasks": sum(s["active_tasks"] for s in self._samples) / count,
-            "avg_current_concurrency": sum(
-                s["current_concurrency"] for s in self._samples
+        try:
+            rss_values = [s["rss_mb"] for s in self._samples]
+            count = len(self._samples)
+            aggregated = {
+                "sample_count": count,
+                "avg_rss_mb": sum(rss_values) / count,
+                "min_rss_mb": min(rss_values),
+                "max_rss_mb": max(rss_values),
+                "avg_tensor_cache_keys": sum(
+                    s["tensor_cache_keys"] for s in self._samples
+                )
+                / count,
+                "avg_timing_entries": sum(s["timing_entries"] for s in self._samples)
+                / count,
+                "avg_active_tasks": sum(s["active_tasks"] for s in self._samples)
+                / count,
+                "avg_current_concurrency": sum(
+                    s["current_concurrency"] for s in self._samples
+                )
+                / count,
+                "avg_queue_size": sum(s["queue_size"] for s in self._samples) / count,
+            }
+            return aggregated
+        except (KeyError, TypeError) as e:
+            bt.logging.warning(
+                f"Health buffer flush failed, dropping {len(self._samples)} samples: {e}"
             )
-            / count,
-            "avg_queue_size": sum(s["queue_size"] for s in self._samples) / count,
-        }
-        self._samples.clear()
-        self._last_flush = time.monotonic()
-        return aggregated
+            return None
+        finally:
+            self._samples.clear()
+            self._last_flush = time.monotonic()
 
 
 def gc_log_health(

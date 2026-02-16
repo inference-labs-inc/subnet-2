@@ -236,13 +236,17 @@ class ValidatorLoop:
     def log_health(self):
         import psutil
 
-        rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
-        timing_entries = sum(
-            len(t.slices) for t in self.dsperse_manager._run_timings.values()
-        )
-        tc_keys = 0
-        for state in self.dsperse_manager._incremental_runner._runs.values():
-            tc_keys += len(state.tensor_cache)
+        try:
+            rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+            timing_entries = sum(
+                len(t.slices) for t in list(self.dsperse_manager._run_timings.values())
+            )
+            tc_keys = 0
+            for state in list(self.dsperse_manager._incremental_runner._runs.values()):
+                tc_keys += len(state.tensor_cache)
+        except Exception as e:
+            bt.logging.warning(f"Health diagnostics error: {e}")
+            return
         bt.logging.info(
             f"In-flight requests: {len(self.active_tasks)} / {self.current_concurrency} | "
             f"RSS: {rss_mb:.0f}MB | "
