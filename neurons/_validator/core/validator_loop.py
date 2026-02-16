@@ -54,7 +54,11 @@ from constants import (
     TEN_MINUTES,
 )
 from utils import AutoUpdate, clean_temp_files, with_rate_limit
-from utils.gc_logging import log_responses as gc_log_responses
+from utils.gc_logging import (
+    log_responses as gc_log_responses,
+    HealthMetricsBuffer,
+    gc_log_health,
+)
 
 # Set to True for synchronous request processing (easier debugging)
 DEBUG_SYNC_MODE = os.environ.get("DEBUG_SYNC_MODE", "").lower() in ("1", "true", "yes")
@@ -142,6 +146,7 @@ class ValidatorLoop:
             max_workers=32
         )
         self.recent_responses: list[MinerResponse] = []
+        self._health_buffer = HealthMetricsBuffer()
 
         if self.config.bt_config.prometheus_monitoring:
             start_prometheus_logging(self.config.bt_config.prometheus_port)
@@ -254,6 +259,26 @@ class ValidatorLoop:
             else 0
         )
         log_queue_metrics(queue_size, est_latency)
+
+        if not cli_parser.config.disable_metric_logging:
+            snapshot = {
+                "rss_mb": rss_mb,
+                "tensor_cache_keys": tc_keys,
+                "timing_entries": timing_entries,
+                "active_tasks": len(self.active_tasks),
+                "current_concurrency": self.current_concurrency,
+                "queue_size": queue_size,
+            }
+            aggregated = self._health_buffer.push(snapshot)
+            if aggregated is not None:
+                asyncio.get_event_loop().run_in_executor(
+                    self.thread_pool,
+                    lambda: gc_log_health(
+                        self.config.wallet.hotkey,
+                        self.config.user_uid,
+                        aggregated,
+                    ),
+                )
 
     @with_rate_limit(period=ONE_MINUTE)
     async def log_responses(self):

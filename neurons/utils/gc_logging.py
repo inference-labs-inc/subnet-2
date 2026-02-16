@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import time
 from typing import Optional, TYPE_CHECKING
 
 import bittensor as bt
@@ -20,6 +21,11 @@ LOGGING_URL = os.getenv(
 EVAL_LOGGING_URL = os.getenv(
     "EVAL_LOGGING_URL",
     "https://sn2-api.inferencelabs.com/statistics/eval/log/",
+)
+
+HEALTH_LOGGING_URL = os.getenv(
+    "HEALTH_LOGGING_URL",
+    "https://sn2-api.inferencelabs.com/statistics/health/log/",
 )
 
 session = requests.Session()
@@ -67,6 +73,74 @@ def log_responses(
         )
     except requests.exceptions.RequestException as e:
         bt.logging.error(f"Failed to log responses: {e}")
+        return None
+
+
+class HealthMetricsBuffer:
+    FLUSH_INTERVAL = 60
+
+    def __init__(self):
+        self._samples: list[dict] = []
+        self._last_flush = time.monotonic()
+
+    def push(self, snapshot: dict) -> Optional[dict]:
+        self._samples.append(snapshot)
+        if time.monotonic() - self._last_flush < self.FLUSH_INTERVAL:
+            return None
+        return self.flush()
+
+    def flush(self) -> Optional[dict]:
+        if not self._samples:
+            return None
+        rss_values = [s["rss_mb"] for s in self._samples]
+        count = len(self._samples)
+        aggregated = {
+            "sample_count": count,
+            "avg_rss_mb": sum(rss_values) / count,
+            "min_rss_mb": min(rss_values),
+            "max_rss_mb": max(rss_values),
+            "avg_tensor_cache_keys": sum(s["tensor_cache_keys"] for s in self._samples)
+            / count,
+            "avg_timing_entries": sum(s["timing_entries"] for s in self._samples)
+            / count,
+            "avg_active_tasks": sum(s["active_tasks"] for s in self._samples) / count,
+            "avg_current_concurrency": sum(
+                s["current_concurrency"] for s in self._samples
+            )
+            / count,
+            "avg_queue_size": sum(s["queue_size"] for s in self._samples) / count,
+        }
+        self._samples.clear()
+        self._last_flush = time.monotonic()
+        return aggregated
+
+
+def gc_log_health(
+    hotkey: bt.Keypair,
+    validator_uid: int,
+    payload: dict,
+) -> Optional[requests.Response]:
+    try:
+        data = {
+            "validator_key": hotkey.ss58_address,
+            "validator_uid": validator_uid,
+            **payload,
+        }
+        input_bytes = json.dumps(data).encode("utf-8")
+        signature = hotkey.sign(input_bytes)
+        signature_str = base64.b64encode(signature).decode("utf-8")
+
+        return session.post(
+            HEALTH_LOGGING_URL,
+            data=input_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "X-Request-Signature": signature_str,
+            },
+            timeout=5,
+        )
+    except requests.exceptions.RequestException as e:
+        bt.logging.error(f"Failed to log health metrics: {e}")
         return None
 
 
