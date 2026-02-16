@@ -336,6 +336,7 @@ class DSperseManager:
         timing = self._run_timings.setdefault(run_uid, _RunTiming())
         timing.total_response_time_sec += response_time_sec
         timing.total_verification_time_sec += verification_time_sec
+        is_api = self._incremental_runner.get_run_source(run_uid) == RunSource.API
         timing.slices.append(
             _SliceMetric(
                 slice_num=slice_num,
@@ -343,7 +344,7 @@ class DSperseManager:
                 verification_time_sec=verification_time_sec,
                 success=success,
                 is_tile=False,
-                proof_data=proof if success else None,
+                proof_data=proof if success and is_api else None,
                 proof_system=proof_system,
             )
         )
@@ -421,6 +422,7 @@ class DSperseManager:
         timing = self._run_timings.setdefault(run_uid, _RunTiming())
         timing.total_response_time_sec += response_time_sec
         timing.total_verification_time_sec += verification_time_sec
+        is_api = self._incremental_runner.get_run_source(run_uid) == RunSource.API
         timing.slices.append(
             _SliceMetric(
                 slice_num=tile_slice_num,
@@ -428,7 +430,7 @@ class DSperseManager:
                 verification_time_sec=verification_time_sec,
                 success=success,
                 is_tile=True,
-                proof_data=proof if success else None,
+                proof_data=proof if success and is_api else None,
                 proof_system=proof_system,
             )
         )
