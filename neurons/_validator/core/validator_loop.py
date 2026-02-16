@@ -275,13 +275,20 @@ class ValidatorLoop:
             }
             aggregated = self._health_buffer.push(snapshot)
             if aggregated is not None:
-                asyncio.get_event_loop().run_in_executor(
+                fut = asyncio.get_event_loop().run_in_executor(
                     self.thread_pool,
                     lambda: gc_log_health(
                         self.config.wallet.hotkey,
                         self.config.user_uid,
                         aggregated,
                     ),
+                )
+                fut.add_done_callback(
+                    lambda f: (
+                        bt.logging.error(f"gc_log_health failed: {f.exception()}")
+                        if f.exception()
+                        else None
+                    )
                 )
 
     @with_rate_limit(period=ONE_MINUTE)
