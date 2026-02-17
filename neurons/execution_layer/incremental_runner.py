@@ -637,7 +637,7 @@ class IncrementalRunner:
             if run_uid in self._runs:
                 del self._runs[run_uid]
 
-    def get_runs_snapshot(self) -> list:
+    def get_runs_snapshot(self) -> list[RunState]:
         with self._runs_lock:
             return list(self._runs.values())
 

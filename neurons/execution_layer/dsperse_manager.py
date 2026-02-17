@@ -540,9 +540,16 @@ class DSperseManager:
         )
 
     def mark_slice_failed(self, run_uid: str, slice_num: str) -> None:
-        fut = self._runner_executor.submit(
-            self._mark_slice_failed_impl, run_uid, slice_num
-        )
+        try:
+            fut = self._runner_executor.submit(
+                self._mark_slice_failed_impl, run_uid, slice_num
+            )
+        except RuntimeError:
+            logging.warning(
+                f"mark_slice_failed skipped (executor shut down) "
+                f"run={run_uid} slice={slice_num}"
+            )
+            return
 
         def _on_done(f):
             exc = f.exception()
