@@ -853,6 +853,34 @@ class ValidatorLoop:
                 f"slice={response.dsperse_slice_num}: {e}"
             )
             traceback.print_exc()
+            run_uid = response.dsperse_run_uid
+            slice_num = response.dsperse_slice_num
+            if run_uid and slice_num is not None:
+                try:
+                    is_tile = "_tile_" in str(slice_num)
+                    if is_tile:
+                        parts = str(slice_num).split("_tile_")
+                        base_slice = parts[0]
+                        tile_idx = int(parts[1])
+                        slice_id = f"slice_{base_slice}"
+                        self.dsperse_manager.on_incremental_tile_result(
+                            run_uid=run_uid,
+                            task_id=f"{slice_id}_tile_{tile_idx}",
+                            slice_id=slice_id,
+                            tile_idx=tile_idx,
+                            success=False,
+                        )
+                    else:
+                        self.dsperse_manager.on_incremental_slice_result(
+                            run_uid=run_uid,
+                            slice_num=str(slice_num),
+                            success=False,
+                        )
+                except Exception:
+                    bt.logging.error(
+                        f"Failed to mark slice as failed after transition error "
+                        f"for run={run_uid} slice={slice_num}"
+                    )
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
