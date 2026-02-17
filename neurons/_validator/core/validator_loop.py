@@ -783,7 +783,9 @@ class ValidatorLoop:
             )
 
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
-        self._fail_dslice_by_id(queued.run_uid, str(queued.slice_num))
+        self._slice_transition_executor.submit(
+            self._fail_dslice_by_id, queued.run_uid, str(queued.slice_num)
+        )
 
     def _compute_dslice_transition(self, response: MinerResponse) -> tuple[bool, list]:
         run_uid = response.dsperse_run_uid
@@ -966,7 +968,7 @@ class ValidatorLoop:
         stop_prometheus_logging()
         clean_temp_files()
         self.dsperse_manager.total_cleanup()
-        self._slice_transition_executor.shutdown(wait=False)
+        self._slice_transition_executor.shutdown(wait=True, cancel_futures=True)
         self.thread_pool.shutdown(wait=False)
         self.response_thread_pool.shutdown(wait=False)
         sys.exit(0)
