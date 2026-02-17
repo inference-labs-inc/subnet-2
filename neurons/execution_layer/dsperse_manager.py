@@ -601,7 +601,7 @@ class DSperseManager:
             self._schedule_async(
                 self.event_client.emit_runner_executor_duration(
                     run_uid=run_uid,
-                    slice_num=slice_id,
+                    slice_num=self._normalize_slice_id(slice_id),
                     response_time_sec=executor_elapsed,
                 )
             )
