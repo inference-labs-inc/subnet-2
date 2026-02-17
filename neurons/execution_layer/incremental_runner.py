@@ -381,9 +381,7 @@ class IncrementalRunner:
 
         if not has_circuits:
             self._run_onnx_locally(state, slice_id, meta)
-            self._cleanup_extracted_slice(state, slice_id)
-            state.completed_slices.append(slice_id)
-            state.current_idx += 1
+            self._advance_slice(state, slice_id)
             return []
 
         if state.run_source != RunSource.API:
@@ -401,9 +399,7 @@ class IncrementalRunner:
                     f"(max |val|={overflow_info['max_abs']:.0f}, limit={self.JSTPROVE_RANGE_LIMIT}), "
                     f"falling back to ONNX"
                 )
-                self._cleanup_extracted_slice(state, slice_id)
-                state.completed_slices.append(slice_id)
-                state.current_idx += 1
+                self._advance_slice(state, slice_id)
                 if self._on_jstprove_range_fallback:
                     self._on_jstprove_range_fallback(
                         state.run_uid, slice_id, overflow_info
@@ -499,11 +495,8 @@ class IncrementalRunner:
                         self._reconstruct_from_tiles(state, slice_id, meta.tiling)
                 if meta and meta.tiling:
                     self._cleanup_tile_cache(state, meta.tiling)
-                self._cleanup_extracted_slice(state, slice_id)
-                state.completed_slices.append(slice_id)
-                state.current_idx += 1
+                self._advance_slice(state, slice_id)
                 state.failed_tasks.clear()
-                self._evict_unused_tensors(state)
 
                 if is_api_sampled:
                     state.current_idx = len(state.execution_order)
@@ -1081,6 +1074,12 @@ class IncrementalRunner:
             logging.info(
                 f"Cleaned {removed} tile cache entries for slice_idx={slice_idx}"
             )
+
+    def _advance_slice(self, state: RunState, slice_id: str) -> None:
+        self._cleanup_extracted_slice(state, slice_id)
+        state.completed_slices.append(slice_id)
+        state.current_idx += 1
+        self._evict_unused_tensors(state)
 
     def _evict_unused_tensors(self, state: RunState) -> None:
         """Evict tensor_cache entries no longer referenced by any remaining slice.
