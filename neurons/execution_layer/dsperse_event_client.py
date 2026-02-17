@@ -267,7 +267,7 @@ class DsperseEventClient:
                 "run_uid": run_uid,
                 "slice_num": slice_num,
                 "response_time_sec": response_time_sec,
-                "total_slices": tensor_cache_entries,
+                "tensor_cache_entries": tensor_cache_entries,
             }
         )
 
