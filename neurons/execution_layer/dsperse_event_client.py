@@ -224,6 +224,85 @@ class DsperseEventClient:
             }
         )
 
+    async def emit_slice_transition_started(
+        self,
+        run_uid: str,
+        slice_num: str,
+    ):
+        await self.emit(
+            {
+                "event_type": "slice_transition_started",
+                "run_uid": run_uid,
+                "slice_num": slice_num,
+            }
+        )
+
+    async def emit_work_items_created(
+        self,
+        run_uid: str,
+        slice_num: str,
+        total_tiles: int,
+        response_time_sec: float,
+    ):
+        await self.emit(
+            {
+                "event_type": "work_items_created",
+                "run_uid": run_uid,
+                "slice_num": slice_num,
+                "total_tiles": total_tiles,
+                "response_time_sec": response_time_sec,
+            }
+        )
+
+    async def emit_onnx_slice_completed(
+        self,
+        run_uid: str,
+        slice_num: str,
+        response_time_sec: float,
+        total_elements: int | None = None,
+    ):
+        await self.emit(
+            {
+                "event_type": "onnx_slice_completed",
+                "run_uid": run_uid,
+                "slice_num": slice_num,
+                "response_time_sec": response_time_sec,
+                "total_elements": total_elements,
+            }
+        )
+
+    async def emit_slice_transition_complete(
+        self,
+        run_uid: str,
+        slice_num: str,
+        total_tiles: int,
+        response_time_sec: float,
+    ):
+        await self.emit(
+            {
+                "event_type": "slice_transition_complete",
+                "run_uid": run_uid,
+                "slice_num": slice_num,
+                "total_tiles": total_tiles,
+                "response_time_sec": response_time_sec,
+            }
+        )
+
+    async def emit_runner_executor_duration(
+        self,
+        run_uid: str,
+        slice_num: str,
+        response_time_sec: float,
+    ):
+        await self.emit(
+            {
+                "event_type": "runner_executor_duration",
+                "run_uid": run_uid,
+                "slice_num": slice_num,
+                "response_time_sec": response_time_sec,
+            }
+        )
+
     async def _flush_loop(self):
         while self._running:
             try:
