@@ -11,6 +11,7 @@ import json
 import random
 import secrets
 import shutil
+import threading
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -164,6 +165,7 @@ class IncrementalRunner:
         ] = None,
     ):
         self._runs: dict[str, RunState] = {}
+        self._runs_lock = threading.Lock()
         self._on_run_complete = on_run_complete
         self._on_jstprove_range_fallback = on_jstprove_range_fallback
         self._on_tile_onnx_fallback = on_tile_onnx_fallback
@@ -327,7 +329,8 @@ class IncrementalRunner:
                     last_needed[name] = len(execution_order)
         state.tensor_last_needed_at = last_needed
 
-        self._runs[run_uid] = state
+        with self._runs_lock:
+            self._runs[run_uid] = state
         logging.info(
             f"Run {run_uid} initialized with {len(execution_order)} slices, {total_tiles} tiles"
             + (f" (capped at max_tiles={max_tiles})" if max_tiles is not None else "")
@@ -630,8 +633,13 @@ class IncrementalRunner:
 
     def cleanup_run(self, run_uid: str) -> None:
         """Clean up run state."""
-        if run_uid in self._runs:
-            del self._runs[run_uid]
+        with self._runs_lock:
+            if run_uid in self._runs:
+                del self._runs[run_uid]
+
+    def get_runs_snapshot(self) -> list:
+        with self._runs_lock:
+            return list(self._runs.values())
 
     def create_queued_request(self, work_item: WorkItem) -> DSliceQueuedProofRequest:
         """Convert WorkItem to DSliceQueuedProofRequest."""

@@ -123,7 +123,7 @@ class ValidatorLoop:
         self.relay.dsperse_manager = self.dsperse_manager
         self.relay.dispatch_event = self._dispatch_event
         self.dsperse_manager.on_api_run_complete = self.relay.on_api_run_complete
-        self.dsperse_manager._enqueue_fn = self._enqueue_dslice
+        self.dsperse_manager.enqueue_fn = self._enqueue_dslice
         self.request_pipeline = RequestPipeline(
             self.config, self.score_manager, self.relay
         )

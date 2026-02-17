@@ -82,7 +82,7 @@ class DSperseManager:
         self._runner_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="runner"
         )
-        self._enqueue_fn: Callable[[DSliceQueuedProofRequest], None] | None = None
+        self.enqueue_fn: Callable[[DSliceQueuedProofRequest], None] | None = None
         self._purge_old_runs()
 
     @staticmethod
@@ -573,9 +573,9 @@ class DSperseManager:
                 success=False,
             )
             next_requests = [next_req] if next_req else []
-        if next_requests and not is_complete and self._enqueue_fn and self._loop:
+        if next_requests and not is_complete and self.enqueue_fn and self._loop:
             for req in next_requests:
-                self._loop.call_soon_threadsafe(self._enqueue_fn, req)
+                self._loop.call_soon_threadsafe(self.enqueue_fn, req)
 
     async def generate_requests_async(self) -> list[DSliceQueuedProofRequest]:
         loop = asyncio.get_running_loop()
@@ -587,7 +587,7 @@ class DSperseManager:
         with self._run_timings_lock:
             timing_entries = sum(len(t.slices) for t in self._run_timings.values())
         tc_keys = sum(
-            len(s.tensor_cache) for s in list(self._incremental_runner._runs.values())
+            len(s.tensor_cache) for s in self._incremental_runner.get_runs_snapshot()
         )
         return timing_entries, tc_keys
 
@@ -685,8 +685,7 @@ class DSperseManager:
             active_uids = list(self._incremental_runs)
         aborted = []
         for run_uid in active_uids:
-            state = self._incremental_runner._runs.get(run_uid)
-            if state and not state.aborted and not state.is_complete:
+            if not self._incremental_runner.is_complete(run_uid):
                 self._incremental_runner.abort_run(run_uid)
                 aborted.append(run_uid)
         if aborted:
