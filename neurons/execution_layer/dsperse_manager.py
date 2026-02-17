@@ -1147,6 +1147,20 @@ class DSperseManager:
             self._incremental_runs.discard(run_uid)
             self._incremental_run_circuits.pop(run_uid, None)
 
+    def evict_stale_runs(self, max_age_seconds: float = 1800) -> int:
+        now = time.perf_counter()
+        with self._incremental_runs_lock:
+            run_uids = list(self._incremental_runs)
+        stale = []
+        for run_uid in run_uids:
+            state = self._incremental_runner._runs.get(run_uid)
+            if state and (now - state.start_time) > max_age_seconds:
+                stale.append(run_uid)
+        for run_uid in stale:
+            logging.warning(f"Evicting stale run {run_uid} (age > {max_age_seconds}s)")
+            self.cleanup_run(run_uid)
+        return len(stale)
+
     def total_cleanup(self):
         logging.info("Performing total cleanup of all DSperse run data...")
         with self._incremental_runs_lock:
