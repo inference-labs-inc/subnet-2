@@ -783,9 +783,21 @@ class ValidatorLoop:
             )
 
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
-        self._slice_transition_executor.submit(
-            self._fail_dslice_by_id, queued.run_uid, str(queued.slice_num)
+        run_uid = queued.run_uid
+        slice_num = str(queued.slice_num)
+        fut = self._slice_transition_executor.submit(
+            self._fail_dslice_by_id, run_uid, slice_num
         )
+
+        def _on_fail_done(f: concurrent.futures.Future) -> None:
+            exc = f.exception()
+            if exc is not None:
+                bt.logging.error(
+                    f"_fail_dslice_by_id raised for run={run_uid} "
+                    f"slice={slice_num}: {exc}"
+                )
+
+        fut.add_done_callback(_on_fail_done)
 
     def _compute_dslice_transition(self, response: MinerResponse) -> tuple[bool, list]:
         run_uid = response.dsperse_run_uid
