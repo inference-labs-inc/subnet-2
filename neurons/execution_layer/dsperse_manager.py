@@ -73,6 +73,7 @@ class DSperseManager:
         self._incremental_runs_lock = threading.Lock()
         self._completed_run_statuses: dict[str, tuple[float, RunStatus]] = {}
         self._run_timings: dict[str, _RunTiming] = {}
+        self._run_timings_lock = threading.Lock()
         self._api_round_robin_idx = 0
         self.on_api_run_complete: (
             Callable[[str, str, bool, list[dict]], None] | None
@@ -334,21 +335,22 @@ class DSperseManager:
             f"slice_{slice_num}" if not slice_num.startswith("slice_") else slice_num
         )
 
-        timing = self._run_timings.setdefault(run_uid, _RunTiming())
-        timing.total_response_time_sec += response_time_sec
-        timing.total_verification_time_sec += verification_time_sec
         is_api = self._incremental_runner.get_run_source(run_uid) == RunSource.API
-        timing.slices.append(
-            _SliceMetric(
-                slice_num=slice_num,
-                response_time_sec=response_time_sec,
-                verification_time_sec=verification_time_sec,
-                success=success,
-                is_tile=False,
-                proof_data=proof if success and is_api else None,
-                proof_system=proof_system,
+        with self._run_timings_lock:
+            timing = self._run_timings.setdefault(run_uid, _RunTiming())
+            timing.total_response_time_sec += response_time_sec
+            timing.total_verification_time_sec += verification_time_sec
+            timing.slices.append(
+                _SliceMetric(
+                    slice_num=slice_num,
+                    response_time_sec=response_time_sec,
+                    verification_time_sec=verification_time_sec,
+                    success=success,
+                    is_tile=False,
+                    proof_data=proof if success and is_api else None,
+                    proof_system=proof_system,
+                )
             )
-        )
 
         slice_complete = self._incremental_runner.apply_result(
             run_uid=run_uid,
@@ -420,21 +422,22 @@ class DSperseManager:
             Tuple of (is_run_complete, next_requests)
         """
         tile_slice_num = f"{slice_id.removeprefix('slice_')}_tile_{tile_idx}"
-        timing = self._run_timings.setdefault(run_uid, _RunTiming())
-        timing.total_response_time_sec += response_time_sec
-        timing.total_verification_time_sec += verification_time_sec
         is_api = self._incremental_runner.get_run_source(run_uid) == RunSource.API
-        timing.slices.append(
-            _SliceMetric(
-                slice_num=tile_slice_num,
-                response_time_sec=response_time_sec,
-                verification_time_sec=verification_time_sec,
-                success=success,
-                is_tile=True,
-                proof_data=proof if success and is_api else None,
-                proof_system=proof_system,
+        with self._run_timings_lock:
+            timing = self._run_timings.setdefault(run_uid, _RunTiming())
+            timing.total_response_time_sec += response_time_sec
+            timing.total_verification_time_sec += verification_time_sec
+            timing.slices.append(
+                _SliceMetric(
+                    slice_num=tile_slice_num,
+                    response_time_sec=response_time_sec,
+                    verification_time_sec=verification_time_sec,
+                    success=success,
+                    is_tile=True,
+                    proof_data=proof if success and is_api else None,
+                    proof_system=proof_system,
+                )
             )
-        )
 
         slice_complete = self._incremental_runner.apply_result(
             run_uid=run_uid,
@@ -614,7 +617,8 @@ class DSperseManager:
             self._incremental_runs.discard(run_uid)
             self._incremental_run_circuits.pop(run_uid, None)
 
-        run_timing = self._run_timings.pop(run_uid, _RunTiming())
+        with self._run_timings_lock:
+            run_timing = self._run_timings.pop(run_uid, _RunTiming())
 
         if status and circuit_id:
             threading.Thread(
@@ -1166,7 +1170,8 @@ class DSperseManager:
     def cleanup_run(self, run_uid: str):
         self._incremental_runner.cleanup_run(run_uid)
         self._completed_run_statuses.pop(run_uid, None)
-        self._run_timings.pop(run_uid, None)
+        with self._run_timings_lock:
+            self._run_timings.pop(run_uid, None)
         with self._incremental_runs_lock:
             self._incremental_runs.discard(run_uid)
             self._incremental_run_circuits.pop(run_uid, None)
@@ -1184,4 +1189,5 @@ class DSperseManager:
             self._incremental_runs.clear()
             self._incremental_run_circuits.clear()
         self._completed_run_statuses.clear()
-        self._run_timings.clear()
+        with self._run_timings_lock:
+            self._run_timings.clear()

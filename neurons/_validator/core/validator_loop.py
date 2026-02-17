@@ -241,9 +241,11 @@ class ValidatorLoop:
 
         try:
             rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
-            timing_entries = sum(
-                len(t.slices) for t in list(self.dsperse_manager._run_timings.values())
-            )
+            with self.dsperse_manager._run_timings_lock:
+                timing_entries = sum(
+                    len(t.slices)
+                    for t in list(self.dsperse_manager._run_timings.values())
+                )
             tc_keys = 0
             for state in list(self.dsperse_manager._incremental_runner._runs.values()):
                 tc_keys += len(state.tensor_cache)
@@ -837,13 +839,20 @@ class ValidatorLoop:
 
     async def _mark_dslice_complete(self, response: MinerResponse) -> None:
         loop = asyncio.get_running_loop()
-        is_complete, next_requests = await loop.run_in_executor(
-            self._slice_transition_executor,
-            self._compute_dslice_transition,
-            response,
-        )
-        for req in next_requests:
-            self._enqueue_dslice(req)
+        try:
+            is_complete, next_requests = await loop.run_in_executor(
+                self._slice_transition_executor,
+                self._compute_dslice_transition,
+                response,
+            )
+            for req in next_requests:
+                self._enqueue_dslice(req)
+        except Exception as e:
+            bt.logging.error(
+                f"Slice transition failed for run={response.dsperse_run_uid} "
+                f"slice={response.dsperse_slice_num}: {e}"
+            )
+            traceback.print_exc()
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
@@ -940,4 +949,7 @@ class ValidatorLoop:
         stop_prometheus_logging()
         clean_temp_files()
         self.dsperse_manager.total_cleanup()
+        self._slice_transition_executor.shutdown(wait=False)
+        self.thread_pool.shutdown(wait=False)
+        self.response_thread_pool.shutdown(wait=False)
         sys.exit(0)
