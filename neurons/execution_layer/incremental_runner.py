@@ -114,6 +114,7 @@ class RunState:
     run_source: RunSource = RunSource.BENCHMARK
     start_time: float = 0.0
     aborted: bool = False
+    tensor_last_needed_at: dict[str, int] = field(default_factory=dict)
 
     @property
     def current_slice_id(self) -> Optional[str]:
@@ -308,6 +309,19 @@ class IncrementalRunner:
                 total_tiles += count
         state.total_tiles = total_tiles
         state.slice_tile_counts = slice_tile_counts
+
+        last_needed: dict[str, int] = {}
+        for idx, sid in enumerate(execution_order):
+            meta = state.slice_metadata.get(sid)
+            if meta:
+                for name in meta.dependencies.filtered_inputs:
+                    last_needed[name] = idx
+        if execution_order:
+            last_meta = state.slice_metadata.get(execution_order[-1])
+            if last_meta:
+                for name in last_meta.dependencies.output:
+                    last_needed[name] = len(execution_order)
+        state.tensor_last_needed_at = last_needed
 
         self._runs[run_uid] = state
         logging.info(
@@ -1071,28 +1085,20 @@ class IncrementalRunner:
     def _evict_unused_tensors(self, state: RunState) -> None:
         """Evict tensor_cache entries no longer referenced by any remaining slice.
 
-        Walks state.execution_order[current_idx:] collecting each slice's
-        filtered_inputs from state.slice_metadata, plus the last slice's
-        output names (needed by get_final_output). Keys starting with
-        "tile_" are skipped — those are managed by _cleanup_tile_cache.
-        Builds a snapshot list of evictable keys before mutating
-        state.tensor_cache to avoid dict-changed-size-during-iteration.
+        Uses state.tensor_last_needed_at (precomputed at run start from
+        slice_metadata) which maps each tensor name to the last slice index
+        that references it. The last slice's outputs are mapped to
+        len(execution_order) so they survive for get_final_output. Keys
+        starting with "tile_" are skipped — those are managed by
+        _cleanup_tile_cache. Builds a snapshot list before mutating
+        state.tensor_cache.
         """
-        remaining = state.execution_order[state.current_idx :]
-        needed: set[str] = set()
-        for sid in remaining:
-            meta = state.slice_metadata.get(sid)
-            if meta:
-                needed.update(meta.dependencies.filtered_inputs)
-        last_slice = state.execution_order[-1] if state.execution_order else None
-        if last_slice:
-            last_meta = state.slice_metadata.get(last_slice)
-            if last_meta:
-                needed.update(last_meta.dependencies.output)
+        idx = state.current_idx
+        last_needed = state.tensor_last_needed_at
         evictable = [
             k
             for k in state.tensor_cache
-            if k not in needed and not k.startswith("tile_")
+            if not k.startswith("tile_") and last_needed.get(k, -1) < idx
         ]
         for k in evictable:
             del state.tensor_cache[k]
