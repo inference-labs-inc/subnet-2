@@ -761,27 +761,29 @@ class ValidatorLoop:
         else:
             self._enqueue_dslice(queued)
 
-    def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
-        if getattr(queued, "is_tile", False):
-            parts = str(queued.slice_num).split("_tile_")
+    def _fail_dslice_by_id(self, run_uid: str, slice_num: str) -> None:
+        is_tile = "_tile_" in str(slice_num)
+        if is_tile:
+            parts = str(slice_num).split("_tile_")
             base_slice = parts[0]
             tile_idx = int(parts[1])
             slice_id = f"slice_{base_slice}"
-            task_id = getattr(queued, "task_id", f"{slice_id}_tile_{tile_idx}")
-
             self.dsperse_manager.on_incremental_tile_result(
-                run_uid=queued.run_uid,
-                task_id=task_id,
+                run_uid=run_uid,
+                task_id=f"{slice_id}_tile_{tile_idx}",
                 slice_id=slice_id,
                 tile_idx=tile_idx,
                 success=False,
             )
         else:
             self.dsperse_manager.on_incremental_slice_result(
-                run_uid=queued.run_uid,
-                slice_num=str(queued.slice_num),
+                run_uid=run_uid,
+                slice_num=str(slice_num),
                 success=False,
             )
+
+    def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
+        self._fail_dslice_by_id(queued.run_uid, str(queued.slice_num))
 
     def _compute_dslice_transition(self, response: MinerResponse) -> tuple[bool, list]:
         run_uid = response.dsperse_run_uid
@@ -857,25 +859,7 @@ class ValidatorLoop:
             slice_num = response.dsperse_slice_num
             if run_uid and slice_num is not None:
                 try:
-                    is_tile = "_tile_" in str(slice_num)
-                    if is_tile:
-                        parts = str(slice_num).split("_tile_")
-                        base_slice = parts[0]
-                        tile_idx = int(parts[1])
-                        slice_id = f"slice_{base_slice}"
-                        self.dsperse_manager.on_incremental_tile_result(
-                            run_uid=run_uid,
-                            task_id=f"{slice_id}_tile_{tile_idx}",
-                            slice_id=slice_id,
-                            tile_idx=tile_idx,
-                            success=False,
-                        )
-                    else:
-                        self.dsperse_manager.on_incremental_slice_result(
-                            run_uid=run_uid,
-                            slice_num=str(slice_num),
-                            success=False,
-                        )
+                    self._fail_dslice_by_id(run_uid, str(slice_num))
                 except Exception:
                     bt.logging.error(
                         f"Failed to mark slice as failed after transition error "
