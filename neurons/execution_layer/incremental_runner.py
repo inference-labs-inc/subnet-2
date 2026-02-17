@@ -1069,6 +1069,15 @@ class IncrementalRunner:
             )
 
     def _evict_unused_tensors(self, state: RunState) -> None:
+        """Evict tensor_cache entries no longer referenced by any remaining slice.
+
+        Walks state.execution_order[current_idx:] collecting each slice's
+        filtered_inputs from state.slice_metadata, plus the last slice's
+        output names (needed by get_final_output). Keys starting with
+        "tile_" are skipped — those are managed by _cleanup_tile_cache.
+        Builds a snapshot list of evictable keys before mutating
+        state.tensor_cache to avoid dict-changed-size-during-iteration.
+        """
         remaining = state.execution_order[state.current_idx :]
         needed: set[str] = set()
         for sid in remaining:
