@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import json
 import os
 import random
@@ -78,6 +79,10 @@ class DSperseManager:
         self.on_api_run_complete: (
             Callable[[str, str, bool, list[dict]], None] | None
         ) = None
+        self._runner_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="runner"
+        )
+        self._enqueue_fn: Callable[[DSliceQueuedProofRequest], None] | None = None
         self._purge_old_runs()
 
     @staticmethod
@@ -474,6 +479,120 @@ class DSperseManager:
             return False, []
 
         return False, self.get_next_incremental_work(run_uid)
+
+    async def apply_slice_result(
+        self,
+        run_uid: str,
+        slice_num: str,
+        success: bool,
+        computed_outputs: dict | None = None,
+        proof: str | None = None,
+        proof_system: ProofSystem | None = None,
+        response_time_sec: float = 0.0,
+        verification_time_sec: float = 0.0,
+    ) -> tuple[bool, list[DSliceQueuedProofRequest]]:
+        loop = asyncio.get_running_loop()
+        is_complete, next_req = await loop.run_in_executor(
+            self._runner_executor,
+            lambda: self.on_incremental_slice_result(
+                run_uid=run_uid,
+                slice_num=slice_num,
+                success=success,
+                computed_outputs=computed_outputs,
+                proof=proof,
+                proof_system=proof_system,
+                response_time_sec=response_time_sec,
+                verification_time_sec=verification_time_sec,
+            ),
+        )
+        return is_complete, [next_req] if next_req else []
+
+    async def apply_tile_result(
+        self,
+        run_uid: str,
+        task_id: str,
+        slice_id: str,
+        tile_idx: int,
+        success: bool,
+        computed_outputs: dict | None = None,
+        proof: str | None = None,
+        witness: str | None = None,
+        proof_system: ProofSystem | None = None,
+        response_time_sec: float = 0.0,
+        verification_time_sec: float = 0.0,
+    ) -> tuple[bool, list[DSliceQueuedProofRequest]]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._runner_executor,
+            lambda: self.on_incremental_tile_result(
+                run_uid=run_uid,
+                task_id=task_id,
+                slice_id=slice_id,
+                tile_idx=tile_idx,
+                success=success,
+                computed_outputs=computed_outputs,
+                proof=proof,
+                witness=witness,
+                proof_system=proof_system,
+                response_time_sec=response_time_sec,
+                verification_time_sec=verification_time_sec,
+            ),
+        )
+
+    def mark_slice_failed(self, run_uid: str, slice_num: str) -> None:
+        fut = self._runner_executor.submit(
+            self._mark_slice_failed_impl, run_uid, slice_num
+        )
+
+        def _on_done(f):
+            exc = f.exception()
+            if exc:
+                logging.error(
+                    f"mark_slice_failed error run={run_uid} slice={slice_num}: {exc}"
+                )
+
+        fut.add_done_callback(_on_done)
+
+    def _mark_slice_failed_impl(self, run_uid: str, slice_num: str) -> None:
+        is_tile = "_tile_" in slice_num
+        if is_tile:
+            parts = slice_num.split("_tile_")
+            base_slice, tile_idx = parts[0], int(parts[1])
+            slice_id = f"slice_{base_slice}"
+            is_complete, next_requests = self.on_incremental_tile_result(
+                run_uid=run_uid,
+                task_id=f"{slice_id}_tile_{tile_idx}",
+                slice_id=slice_id,
+                tile_idx=tile_idx,
+                success=False,
+            )
+        else:
+            is_complete, next_req = self.on_incremental_slice_result(
+                run_uid=run_uid,
+                slice_num=slice_num,
+                success=False,
+            )
+            next_requests = [next_req] if next_req else []
+        if next_requests and not is_complete and self._enqueue_fn and self._loop:
+            for req in next_requests:
+                self._loop.call_soon_threadsafe(self._enqueue_fn, req)
+
+    async def generate_requests_async(self) -> list[DSliceQueuedProofRequest]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._runner_executor, self.generate_dslice_requests
+        )
+
+    def get_health_snapshot(self) -> tuple[int, int]:
+        with self._run_timings_lock:
+            timing_entries = sum(len(t.slices) for t in self._run_timings.values())
+        tc_keys = sum(
+            len(s.tensor_cache) for s in list(self._incremental_runner._runs.values())
+        )
+        return timing_entries, tc_keys
+
+    def shutdown(self) -> None:
+        self._runner_executor.shutdown(wait=True, cancel_futures=True)
 
     def has_work_in_flight(self) -> bool:
         with self._incremental_runs_lock:

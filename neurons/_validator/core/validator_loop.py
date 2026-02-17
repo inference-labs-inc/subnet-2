@@ -123,6 +123,7 @@ class ValidatorLoop:
         self.relay.dsperse_manager = self.dsperse_manager
         self.relay.dispatch_event = self._dispatch_event
         self.dsperse_manager.on_api_run_complete = self.relay.on_api_run_complete
+        self.dsperse_manager._enqueue_fn = self._enqueue_dslice
         self.request_pipeline = RequestPipeline(
             self.config, self.score_manager, self.relay
         )
@@ -144,9 +145,6 @@ class ValidatorLoop:
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=32)
         self.response_thread_pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=32
-        )
-        self._slice_transition_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="slice-transition"
         )
         self.recent_responses: list[MinerResponse] = []
         self._health_buffer = HealthMetricsBuffer()
@@ -241,14 +239,7 @@ class ValidatorLoop:
 
         try:
             rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
-            with self.dsperse_manager._run_timings_lock:
-                timing_entries = sum(
-                    len(t.slices)
-                    for t in list(self.dsperse_manager._run_timings.values())
-                )
-            tc_keys = 0
-            for state in list(self.dsperse_manager._incremental_runner._runs.values()):
-                tc_keys += len(state.tensor_cache)
+            timing_entries, tc_keys = self.dsperse_manager.get_health_snapshot()
         except Exception as e:
             bt.logging.warning(f"Health diagnostics error: {e}")
             return
@@ -358,9 +349,7 @@ class ValidatorLoop:
                     or self.relay.api_requests_queue.empty()
                 ):
                     new_requests = list(
-                        await asyncio.to_thread(
-                            self.dsperse_manager.generate_dslice_requests
-                        )
+                        await self.dsperse_manager.generate_requests_async()
                     )
                     if new_requests:
                         bt.logging.info(
@@ -761,129 +750,61 @@ class ValidatorLoop:
         else:
             self._enqueue_dslice(queued)
 
-    def _fail_dslice_by_id(self, run_uid: str, slice_num: str) -> None:
-        is_tile = "_tile_" in str(slice_num)
-        if is_tile:
-            parts = str(slice_num).split("_tile_")
-            base_slice = parts[0]
-            tile_idx = int(parts[1])
-            slice_id = f"slice_{base_slice}"
-            self.dsperse_manager.on_incremental_tile_result(
-                run_uid=run_uid,
-                task_id=f"{slice_id}_tile_{tile_idx}",
-                slice_id=slice_id,
-                tile_idx=tile_idx,
-                success=False,
-            )
-        else:
-            self.dsperse_manager.on_incremental_slice_result(
-                run_uid=run_uid,
-                slice_num=str(slice_num),
-                success=False,
-            )
-
     def _mark_dslice_failed(self, queued: DSliceQueuedProofRequest) -> None:
-        run_uid = queued.run_uid
-        slice_num = str(queued.slice_num)
-        fut = self._slice_transition_executor.submit(
-            self._fail_dslice_by_id, run_uid, slice_num
-        )
+        self.dsperse_manager.mark_slice_failed(queued.run_uid, str(queued.slice_num))
 
-        def _on_fail_done(f: concurrent.futures.Future) -> None:
-            exc = f.exception()
-            if exc is not None:
-                bt.logging.error(
-                    f"_fail_dslice_by_id raised for run={run_uid} "
-                    f"slice={slice_num}: {exc}"
-                )
-
-        fut.add_done_callback(_on_fail_done)
-
-    def _compute_dslice_transition(self, response: MinerResponse) -> tuple[bool, list]:
+    async def _mark_dslice_complete(self, response: MinerResponse) -> None:
         run_uid = response.dsperse_run_uid
         slice_num = response.dsperse_slice_num
         if not run_uid or slice_num is None:
             bt.logging.warning(
                 f"Cannot mark DSLICE complete: missing run_uid={run_uid} or slice_num={slice_num}"
             )
-            return True, []
-
-        is_tile = "_tile_" in str(slice_num)
-
-        if is_tile:
-            parts = str(slice_num).split("_tile_")
-            base_slice = parts[0]
-            tile_idx = int(parts[1])
-            slice_id = f"slice_{base_slice}"
-            task_id = f"{slice_id}_tile_{tile_idx}"
-
-            is_complete, next_requests = (
-                self.dsperse_manager.on_incremental_tile_result(
-                    run_uid=run_uid,
-                    task_id=task_id,
-                    slice_id=slice_id,
-                    tile_idx=tile_idx,
-                    success=True,
-                    computed_outputs=response.computed_outputs,
-                    proof=response.proof_content,
-                    witness=response.witness,
-                    proof_system=response.proof_system,
-                    response_time_sec=response.response_time,
-                    verification_time_sec=response.verification_time or 0.0,
-                )
-            )
-            if next_requests and not is_complete:
-                return False, list(next_requests)
-            return is_complete, []
-        else:
-            is_complete, next_request = (
-                self.dsperse_manager.on_incremental_slice_result(
-                    run_uid=run_uid,
-                    slice_num=str(slice_num),
-                    success=True,
-                    computed_outputs=response.computed_outputs,
-                    proof=response.proof_content,
-                    proof_system=response.proof_system,
-                    response_time_sec=response.response_time,
-                    verification_time_sec=response.verification_time or 0.0,
-                )
-            )
-            if next_request and not is_complete:
-                bt.logging.debug(f"Queued next incremental slice for run {run_uid}")
-                return False, [next_request]
-            return is_complete, []
-
-    async def _mark_dslice_complete(self, response: MinerResponse) -> None:
-        loop = asyncio.get_running_loop()
+            return
         try:
-            is_complete, next_requests = await loop.run_in_executor(
-                self._slice_transition_executor,
-                self._compute_dslice_transition,
-                response,
-            )
+            is_tile = "_tile_" in str(slice_num)
+            if is_tile:
+                parts = str(slice_num).split("_tile_")
+                base_slice, tile_idx = parts[0], int(parts[1])
+                slice_id = f"slice_{base_slice}"
+                task_id = f"{slice_id}_tile_{tile_idx}"
+                is_complete, next_requests = (
+                    await self.dsperse_manager.apply_tile_result(
+                        run_uid=run_uid,
+                        task_id=task_id,
+                        slice_id=slice_id,
+                        tile_idx=tile_idx,
+                        success=True,
+                        computed_outputs=response.computed_outputs,
+                        proof=response.proof_content,
+                        witness=response.witness,
+                        proof_system=response.proof_system,
+                        response_time_sec=response.response_time,
+                        verification_time_sec=response.verification_time or 0.0,
+                    )
+                )
+            else:
+                is_complete, next_requests = (
+                    await self.dsperse_manager.apply_slice_result(
+                        run_uid=run_uid,
+                        slice_num=str(slice_num),
+                        success=True,
+                        computed_outputs=response.computed_outputs,
+                        proof=response.proof_content,
+                        proof_system=response.proof_system,
+                        response_time_sec=response.response_time,
+                        verification_time_sec=response.verification_time or 0.0,
+                    )
+                )
             for req in next_requests:
                 self._enqueue_dslice(req)
         except Exception as e:
             bt.logging.error(
-                f"Slice transition failed for run={response.dsperse_run_uid} "
-                f"slice={response.dsperse_slice_num}: {e}"
+                f"Slice transition failed for run={run_uid} slice={slice_num}: {e}"
             )
             traceback.print_exc()
-            run_uid = response.dsperse_run_uid
-            slice_num = response.dsperse_slice_num
             if run_uid and slice_num is not None:
-                try:
-                    await loop.run_in_executor(
-                        self._slice_transition_executor,
-                        self._fail_dslice_by_id,
-                        run_uid,
-                        str(slice_num),
-                    )
-                except Exception:
-                    bt.logging.error(
-                        f"Failed to mark slice as failed after transition error "
-                        f"for run={run_uid} slice={slice_num}"
-                    )
+                self.dsperse_manager.mark_slice_failed(run_uid, str(slice_num))
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
@@ -980,7 +901,7 @@ class ValidatorLoop:
         stop_prometheus_logging()
         clean_temp_files()
         self.dsperse_manager.total_cleanup()
-        self._slice_transition_executor.shutdown(wait=True, cancel_futures=True)
+        self.dsperse_manager.shutdown()
         self.thread_pool.shutdown(wait=False)
         self.response_thread_pool.shutdown(wait=False)
         sys.exit(0)
