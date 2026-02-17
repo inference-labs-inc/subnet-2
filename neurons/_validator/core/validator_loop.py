@@ -145,6 +145,9 @@ class ValidatorLoop:
         self.response_thread_pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=32
         )
+        self._slice_transition_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="slice-transition"
+        )
         self.recent_responses: list[MinerResponse] = []
         self._health_buffer = HealthMetricsBuffer()
 
@@ -778,14 +781,14 @@ class ValidatorLoop:
                 success=False,
             )
 
-    def _mark_dslice_complete(self, response: MinerResponse) -> None:
+    def _compute_dslice_transition(self, response: MinerResponse) -> tuple[bool, list]:
         run_uid = response.dsperse_run_uid
         slice_num = response.dsperse_slice_num
         if not run_uid or slice_num is None:
             bt.logging.warning(
                 f"Cannot mark DSLICE complete: missing run_uid={run_uid} or slice_num={slice_num}"
             )
-            return
+            return True, []
 
         is_tile = "_tile_" in str(slice_num)
 
@@ -812,8 +815,8 @@ class ValidatorLoop:
                 )
             )
             if next_requests and not is_complete:
-                for req in next_requests:
-                    self._enqueue_dslice(req)
+                return False, list(next_requests)
+            return is_complete, []
         else:
             is_complete, next_request = (
                 self.dsperse_manager.on_incremental_slice_result(
@@ -828,8 +831,19 @@ class ValidatorLoop:
                 )
             )
             if next_request and not is_complete:
-                self._enqueue_dslice(next_request)
                 bt.logging.debug(f"Queued next incremental slice for run {run_uid}")
+                return False, [next_request]
+            return is_complete, []
+
+    async def _mark_dslice_complete(self, response: MinerResponse) -> None:
+        loop = asyncio.get_running_loop()
+        is_complete, next_requests = await loop.run_in_executor(
+            self._slice_transition_executor,
+            self._compute_dslice_transition,
+            response,
+        )
+        for req in next_requests:
+            self._enqueue_dslice(req)
 
     async def _handle_response(self, response: MinerResponse) -> None:
         """
@@ -885,7 +899,7 @@ class ValidatorLoop:
                 response.request_type == RequestType.DSLICE
                 and response.verification_result
             ):
-                self._mark_dslice_complete(response)
+                await self._mark_dslice_complete(response)
 
             if response.verification_result and response.save:
                 save_proof_of_weights(

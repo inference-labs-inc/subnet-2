@@ -159,11 +159,15 @@ class IncrementalRunner:
         on_run_complete: Optional[Callable[[str, bool], None]] = None,
         on_jstprove_range_fallback: Optional[Callable[[str, str, dict], None]] = None,
         on_tile_onnx_fallback: Optional[Callable[[str, str, str, int], None]] = None,
+        on_preflight_complete: Optional[
+            Callable[[str, str, float, bool, Optional[dict]], None]
+        ] = None,
     ):
         self._runs: dict[str, RunState] = {}
         self._on_run_complete = on_run_complete
         self._on_jstprove_range_fallback = on_jstprove_range_fallback
         self._on_tile_onnx_fallback = on_tile_onnx_fallback
+        self._on_preflight_complete = on_preflight_complete
 
     def _build_from_dslice_zips(
         self, slices_path: Path, dslice_files: list[Path]
@@ -385,7 +389,18 @@ class IncrementalRunner:
             return []
 
         if state.run_source != RunSource.API:
+            preflight_start = time.perf_counter()
             overflow_info = self._preflight_jstprove_range_check(state, slice_id, meta)
+            preflight_time_sec = time.perf_counter() - preflight_start
+            overflow_detected = overflow_info is not None
+            if self._on_preflight_complete:
+                self._on_preflight_complete(
+                    state.run_uid,
+                    slice_id,
+                    preflight_time_sec,
+                    overflow_detected,
+                    overflow_info,
+                )
             if overflow_info:
                 tile_detail = (
                     f" tile {overflow_info['tile_idx']}"

@@ -170,6 +170,29 @@ class DsperseEventClient:
             }
         )
 
+    async def emit_preflight_complete(
+        self,
+        run_uid: str,
+        slice_num: str,
+        preflight_time_sec: float,
+        overflow_detected: bool,
+        overflow_info: dict | None = None,
+    ):
+        event: dict = {
+            "event_type": "preflight_complete",
+            "run_uid": run_uid,
+            "slice_num": slice_num,
+            "preflight_time_sec": preflight_time_sec,
+            "overflow_detected": overflow_detected,
+        }
+        if overflow_info:
+            event["overflow_count"] = overflow_info.get("overflow_count")
+            event["total_elements"] = overflow_info.get("total_elements")
+            event["max_abs"] = overflow_info.get("max_abs")
+            event["n_bits_limit"] = overflow_info.get("n_bits")
+            event["fallback"] = "onnx"
+        await self.emit(event)
+
     async def emit_tile_onnx_fallback(
         self,
         run_uid: str,

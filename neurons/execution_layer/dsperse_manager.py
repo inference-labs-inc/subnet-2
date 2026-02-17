@@ -66,6 +66,7 @@ class DSperseManager:
             on_run_complete=self._on_incremental_run_complete,
             on_jstprove_range_fallback=self._on_jstprove_range_fallback,
             on_tile_onnx_fallback=self._on_tile_onnx_fallback,
+            on_preflight_complete=self._on_preflight_complete,
         )
         self._incremental_runs: set[str] = set()
         self._incremental_run_circuits: dict[str, str] = {}
@@ -492,6 +493,29 @@ class DSperseManager:
                 self.event_client.emit_jstprove_range_overflow(
                     run_uid=run_uid,
                     slice_num=slice_id,
+                    overflow_info=overflow_info,
+                )
+            )
+
+    def _on_preflight_complete(
+        self,
+        run_uid: str,
+        slice_id: str,
+        preflight_time_sec: float,
+        overflow_detected: bool,
+        overflow_info: dict | None,
+    ) -> None:
+        logging.info(
+            f"Preflight complete for run {run_uid} {slice_id}: "
+            f"{preflight_time_sec:.2f}s, overflow={overflow_detected}"
+        )
+        if self.event_client:
+            self._schedule_async(
+                self.event_client.emit_preflight_complete(
+                    run_uid=run_uid,
+                    slice_num=slice_id,
+                    preflight_time_sec=preflight_time_sec,
+                    overflow_detected=overflow_detected,
                     overflow_info=overflow_info,
                 )
             )
