@@ -259,7 +259,7 @@ class DsperseEventClient:
         run_uid: str,
         slice_num: str,
         response_time_sec: float,
-        total_elements: int | None = None,
+        tensor_cache_entries: int | None = None,
     ):
         await self.emit(
             {
@@ -267,7 +267,7 @@ class DsperseEventClient:
                 "run_uid": run_uid,
                 "slice_num": slice_num,
                 "response_time_sec": response_time_sec,
-                "total_elements": total_elements,
+                "total_tiles": tensor_cache_entries,
             }
         )
 

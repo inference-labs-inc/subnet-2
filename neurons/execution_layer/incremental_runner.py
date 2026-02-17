@@ -395,12 +395,12 @@ class IncrementalRunner:
         if not has_circuits:
             onnx_start = time.perf_counter()
             self._run_onnx_locally(state, slice_id, meta)
-            self._advance_slice(state, slice_id)
             onnx_elapsed = time.perf_counter() - onnx_start
             if self._on_onnx_slice_completed:
                 self._on_onnx_slice_completed(
                     state.run_uid, slice_id, onnx_elapsed, len(state.tensor_cache)
                 )
+            self._advance_slice(state, slice_id)
             return []
 
         if state.run_source != RunSource.API:

@@ -57,6 +57,10 @@ _extraction_locks_guard = threading.Lock()
 
 
 class DSperseManager:
+    @staticmethod
+    def _normalize_slice_id(slice_num: str) -> str:
+        return slice_num if slice_num.startswith("slice_") else f"slice_{slice_num}"
+
     def __init__(
         self,
         event_client: "DsperseEventClient | None" = None,
@@ -338,9 +342,7 @@ class DSperseManager:
         Returns:
             Tuple of (is_run_complete, next_slice_request)
         """
-        task_id = (
-            f"slice_{slice_num}" if not slice_num.startswith("slice_") else slice_num
-        )
+        task_id = self._normalize_slice_id(slice_num)
 
         is_api = self._incremental_runner.get_run_source(run_uid) == RunSource.API
         with self._run_timings_lock:
@@ -392,14 +394,11 @@ class DSperseManager:
         if not slice_complete:
             return False, None
 
-        slice_id = (
-            f"slice_{slice_num}" if not slice_num.startswith("slice_") else slice_num
-        )
         if self.event_client:
             self._schedule_async(
                 self.event_client.emit_slice_transition_started(
                     run_uid=run_uid,
-                    slice_num=slice_id,
+                    slice_num=task_id,
                 )
             )
 
@@ -411,7 +410,7 @@ class DSperseManager:
             self._schedule_async(
                 self.event_client.emit_slice_transition_complete(
                     run_uid=run_uid,
-                    slice_num=slice_id,
+                    slice_num=task_id,
                     total_tiles=len(next_requests),
                     response_time_sec=transition_elapsed,
                 )
@@ -556,15 +555,10 @@ class DSperseManager:
         )
         executor_elapsed = time.perf_counter() - executor_start
         if self.event_client and executor_elapsed > 1.0:
-            slice_id = (
-                f"slice_{slice_num}"
-                if not slice_num.startswith("slice_")
-                else slice_num
-            )
             self._schedule_async(
                 self.event_client.emit_runner_executor_duration(
                     run_uid=run_uid,
-                    slice_num=slice_id,
+                    slice_num=self._normalize_slice_id(slice_num),
                     response_time_sec=executor_elapsed,
                 )
             )
@@ -753,11 +747,15 @@ class DSperseManager:
             )
 
     def _on_onnx_slice_completed(
-        self, run_uid: str, slice_id: str, elapsed_sec: float, cache_size: int
+        self,
+        run_uid: str,
+        slice_id: str,
+        elapsed_sec: float,
+        tensor_cache_entries: int,
     ) -> None:
         logging.info(
             f"ONNX slice {slice_id} completed for run {run_uid}: "
-            f"{elapsed_sec:.3f}s, cache_size={cache_size}"
+            f"{elapsed_sec:.3f}s, cache_entries={tensor_cache_entries}"
         )
         if self.event_client:
             self._schedule_async(
@@ -765,7 +763,7 @@ class DSperseManager:
                     run_uid=run_uid,
                     slice_num=slice_id,
                     response_time_sec=elapsed_sec,
-                    total_elements=cache_size,
+                    tensor_cache_entries=tensor_cache_entries,
                 )
             )
 
