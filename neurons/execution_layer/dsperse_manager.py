@@ -573,9 +573,17 @@ class DSperseManager:
                 success=False,
             )
             next_requests = [next_req] if next_req else []
-        if next_requests and not is_complete and self.enqueue_fn and self._loop:
-            for req in next_requests:
-                self._loop.call_soon_threadsafe(self.enqueue_fn, req)
+        if next_requests and not is_complete:
+            if self.enqueue_fn and self._loop:
+                for req in next_requests:
+                    self._loop.call_soon_threadsafe(self.enqueue_fn, req)
+            else:
+                logging.warning(
+                    f"Dropping {len(next_requests)} next_requests for "
+                    f"run={run_uid} slice={slice_num}: "
+                    f"enqueue_fn={'set' if self.enqueue_fn else 'None'} "
+                    f"loop={'set' if self._loop else 'None'}"
+                )
 
     async def generate_requests_async(self) -> list[DSliceQueuedProofRequest]:
         loop = asyncio.get_running_loop()
