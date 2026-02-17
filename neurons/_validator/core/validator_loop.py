@@ -859,7 +859,12 @@ class ValidatorLoop:
             slice_num = response.dsperse_slice_num
             if run_uid and slice_num is not None:
                 try:
-                    self._fail_dslice_by_id(run_uid, str(slice_num))
+                    await loop.run_in_executor(
+                        self._slice_transition_executor,
+                        self._fail_dslice_by_id,
+                        run_uid,
+                        str(slice_num),
+                    )
                 except Exception:
                     bt.logging.error(
                         f"Failed to mark slice as failed after transition error "
