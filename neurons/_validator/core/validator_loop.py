@@ -291,12 +291,6 @@ class ValidatorLoop:
                     )
                 )
 
-    @with_rate_limit(period=FIVE_MINUTES)
-    def evict_stale_runs(self):
-        evicted = self.dsperse_manager.evict_stale_runs(max_age_seconds=1800)
-        if evicted:
-            bt.logging.info(f"Evicted {evicted} stale runs (>30min)")
-
     @with_rate_limit(period=ONE_MINUTE)
     async def log_responses(self):
         if self.recent_responses:
@@ -543,7 +537,6 @@ class ValidatorLoop:
                 self.save_performance_tracker()
                 self.update_queryable_uids()
                 self.log_health()
-                self.evict_stale_runs()
                 await self.log_responses()
                 self.last_periodic_task_time = time.time()
                 await asyncio.sleep(LOOP_DELAY_SECONDS)

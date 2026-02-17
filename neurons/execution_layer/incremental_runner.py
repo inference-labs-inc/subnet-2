@@ -489,6 +489,7 @@ class IncrementalRunner:
                 state.completed_slices.append(slice_id)
                 state.current_idx += 1
                 state.failed_tasks.clear()
+                self._evict_unused_tensors(state)
 
                 if is_api_sampled:
                     state.current_idx = len(state.execution_order)
@@ -1065,6 +1066,31 @@ class IncrementalRunner:
         if removed:
             logging.info(
                 f"Cleaned {removed} tile cache entries for slice_idx={slice_idx}"
+            )
+
+    def _evict_unused_tensors(self, state: RunState) -> None:
+        remaining = state.execution_order[state.current_idx :]
+        needed: set[str] = set()
+        for sid in remaining:
+            meta = state.slice_metadata.get(sid)
+            if meta:
+                needed.update(meta.dependencies.filtered_inputs)
+        last_slice = state.execution_order[-1] if state.execution_order else None
+        if last_slice:
+            last_meta = state.slice_metadata.get(last_slice)
+            if last_meta:
+                needed.update(last_meta.dependencies.output)
+        evictable = [
+            k
+            for k in state.tensor_cache
+            if k not in needed and not k.startswith("tile_")
+        ]
+        for k in evictable:
+            del state.tensor_cache[k]
+        if evictable:
+            logging.info(
+                f"Run {state.run_uid}: evicted {len(evictable)} unused tensors "
+                f"from cache ({len(state.tensor_cache)} remaining)"
             )
 
     def _on_complete(self, state: RunState) -> None:
