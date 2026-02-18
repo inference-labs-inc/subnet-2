@@ -1,0 +1,23 @@
+[package]
+name = "sn2-verify"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sn2-verify"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+rmp-serde = "1"
+serde = { version = "1", features = ["derive"] }
+hex = "0.4"
+num-bigint = "0.4"
+num-traits = "0.2"
+num-integer = "0.1"
+tempfile = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zstd = "0.13"
+anyhow = "1"
+which = "7"

@@ -1,0 +1,65 @@
+use anyhow::{Context, Result, bail};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tokio::process::Command;
+
+const BINARY_SEARCH_PATHS: &[&str] = &[
+    "./Expander/target/release/expander-exec",
+];
+
+const TIMEOUT: Duration = Duration::from_secs(120);
+
+fn find_expander_binary() -> Result<PathBuf> {
+    if let Ok(p) = which::which("expander-exec") {
+        return Ok(p);
+    }
+    for path in BINARY_SEARCH_PATHS {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    bail!("expander-exec binary not found in PATH or search paths")
+}
+
+pub async fn run_expander_verify(
+    circuit_path: &Path,
+    witness_path: &Path,
+    proof_path: &Path,
+    pcs_type: &str,
+) -> Result<bool> {
+    let binary = find_expander_binary()?;
+
+    let child = Command::new(&binary)
+        .args([
+            "-p",
+            pcs_type,
+            "verify",
+            "-c",
+            circuit_path.to_str().context("circuit_path not utf8")?,
+            "-w",
+            witness_path.to_str().context("witness_path not utf8")?,
+            "-i",
+            proof_path.to_str().context("proof_path not utf8")?,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("spawning expander-exec")?;
+
+    let output = tokio::time::timeout(TIMEOUT, child.wait_with_output())
+        .await
+        .context("expander-exec timed out after 120s")?
+        .context("waiting for expander-exec")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::warn!(
+            exit_code = output.status.code(),
+            stderr = %stderr,
+            "expander-exec verification failed"
+        );
+    }
+
+    Ok(output.status.success())
+}

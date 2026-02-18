@@ -20,6 +20,7 @@ from dsperse.src.backends.jstprove import JSTprove
 from dsperse.src.slice.utils.converter import Converter
 from constants import RunSource
 from execution_layer.circuit import Circuit, CircuitType, ProofSystem
+from execution_layer.verify_client import VerifyClient
 import numpy as np
 
 from execution_layer.incremental_runner import IncrementalRunner, RunStatus
@@ -95,6 +96,16 @@ class DSperseManager:
             max_workers=4, thread_name_prefix="transition"
         )
         self.enqueue_fn: Callable[[DSliceQueuedProofRequest], None] | None = None
+        self._verify_client = VerifyClient()
+        try:
+            self._verify_client.start_service()
+            self._use_rust_verify = True
+            logging.info("sn2-verify Rust service started")
+        except (FileNotFoundError, TimeoutError) as e:
+            logging.warning(
+                "sn2-verify unavailable, falling back to Python verification: %s", e
+            )
+            self._use_rust_verify = False
         self._purge_old_runs()
 
     @staticmethod
@@ -738,6 +749,8 @@ class DSperseManager:
     def shutdown(self) -> None:
         self._work_executor.shutdown(wait=True, cancel_futures=True)
         self._transition_executor.shutdown(wait=True, cancel_futures=True)
+        if self._use_rust_verify:
+            self._verify_client.shutdown()
 
     def has_work_in_flight(self) -> bool:
         with self._incremental_runs_lock:
@@ -1408,13 +1421,6 @@ class DSperseManager:
                 f"Slice {slice_num}: runtime_shapes={runtime_shapes} -> num_inputs={num_inputs}"
             )
 
-        try:
-            witness_bytes = bytes.fromhex(witness_hex)
-            proof_bytes = bytes.fromhex(proof_hex)
-        except ValueError as e:
-            logging.error(f"Invalid hex encoding: {e}")
-            return False, None
-
         circuit_path = self._find_jstprove_circuit(
             slice_dir, base_slice_num, is_tiled=(tile_idx is not None)
         )
@@ -1423,6 +1429,81 @@ class DSperseManager:
             return False, None
 
         flat_inputs = self._flatten_inputs(original_inputs)
+
+        if self._use_rust_verify:
+            return self._verify_via_rust(
+                circuit_id,
+                slice_num,
+                circuit_path,
+                witness_hex,
+                proof_hex,
+                num_inputs,
+                flat_inputs,
+                output_shape,
+            )
+
+        return self._verify_via_python(
+            circuit_path,
+            witness_hex,
+            proof_hex,
+            num_inputs,
+            flat_inputs,
+            output_shape,
+        )
+
+    def _verify_via_rust(
+        self,
+        circuit_id: str,
+        slice_num: str,
+        circuit_path: Path,
+        witness_hex: str,
+        proof_hex: str,
+        num_inputs: int,
+        flat_inputs: list,
+        output_shape: list | None,
+    ) -> tuple[bool, Optional[torch.Tensor]]:
+        request_id = f"{circuit_id}_{slice_num}_{time.monotonic_ns()}"
+        try:
+            response = self._verify_client.verify_sync(
+                request_id=request_id,
+                circuit_path=str(circuit_path),
+                witness_hex=witness_hex,
+                proof_hex=proof_hex,
+                num_inputs=num_inputs,
+                expected_inputs=flat_inputs,
+            )
+        except Exception as e:
+            logging.error("sn2-verify request failed: %s", e)
+            return False, None
+
+        if not response.get("success"):
+            logging.error("sn2-verify: %s", response.get("error", "unknown error"))
+            return False, None
+
+        rescaled = response.get("rescaled_outputs")
+        if rescaled is None:
+            return False, None
+
+        output_tensor = torch.tensor(rescaled)
+        if output_shape is not None:
+            output_tensor = output_tensor.reshape(output_shape)
+        return True, output_tensor
+
+    def _verify_via_python(
+        self,
+        circuit_path: Path,
+        witness_hex: str,
+        proof_hex: str,
+        num_inputs: int,
+        flat_inputs: list,
+        output_shape: list | None,
+    ) -> tuple[bool, Optional[torch.Tensor]]:
+        try:
+            witness_bytes = bytes.fromhex(witness_hex)
+            proof_bytes = bytes.fromhex(proof_hex)
+        except ValueError as e:
+            logging.error(f"Invalid hex encoding: {e}")
+            return False, None
 
         jstprove = JSTprove()
         success, extracted_io = jstprove.verify_with_io_extraction(
@@ -1436,7 +1517,6 @@ class DSperseManager:
         if not success or extracted_io is None:
             return False, None
 
-        logging.debug("Input verification passed")
         output_tensor = torch.tensor(extracted_io["rescaled_outputs"])
         if output_shape is not None:
             output_tensor = output_tensor.reshape(output_shape)
