@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint};
 use std::io::{Cursor, Read};
 use std::path::Path;
 
@@ -25,7 +25,7 @@ pub struct Witness {
 pub struct ExtractedIO {
     pub inputs: Vec<BigUint>,
     pub raw_outputs: Vec<BigUint>,
-    pub signed_outputs: Vec<i128>,
+    pub signed_outputs: Vec<BigInt>,
     pub rescaled_outputs: Vec<f64>,
     pub scale_base: u64,
     pub scale_exponent: u64,
@@ -62,13 +62,19 @@ pub fn load_witness_from_bytes(raw: &[u8]) -> Result<WitnessData> {
     let num_public_inputs = read_u64_le(&mut cursor)?;
     let modulus = read_u256_le(&mut cursor)?;
 
-    let total_elements = num_witnesses as usize * (num_inputs as usize + num_public_inputs as usize);
-    let total_bytes = total_elements * 32;
+    let per_witness = (num_inputs as usize)
+        .checked_add(num_public_inputs as usize)
+        .context("witness header overflow: num_inputs + num_public_inputs")?;
+    let total_elements = (num_witnesses as usize)
+        .checked_mul(per_witness)
+        .context("witness header overflow: num_witnesses * per_witness")?;
+    let total_bytes = total_elements
+        .checked_mul(32)
+        .context("witness header overflow: total_elements * 32")?;
     let mut bulk = vec![0u8; total_bytes];
     cursor.read_exact(&mut bulk).context("witness data truncated")?;
 
     let mut witnesses = Vec::with_capacity(num_witnesses as usize);
-    let per_witness = num_inputs as usize + num_public_inputs as usize;
 
     for w in 0..num_witnesses as usize {
         let base = w * per_witness;
@@ -138,7 +144,7 @@ pub fn extract_io(witness_data: &WitnessData, num_inputs: usize) -> Result<Extra
         .to_u64()
         .context("scale_exponent does not fit in u64")?;
 
-    let signed_outputs: Vec<i128> = raw_outputs
+    let signed_outputs: Vec<BigInt> = raw_outputs
         .iter()
         .map(|v| crate::field::from_field_repr(v, modulus))
         .collect();

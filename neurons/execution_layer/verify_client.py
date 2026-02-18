@@ -8,12 +8,9 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import msgpack
-
-if TYPE_CHECKING:
-    pass
 
 SOCKET_PATH = "/tmp/sn2-verify.sock"
 SHM_DIR = "/dev/shm" if os.path.isdir("/dev/shm") else "/tmp"
@@ -49,17 +46,24 @@ class VerifyClient:
                 return str(p)
         return None
 
+    @staticmethod
+    def _probe_socket(path: str) -> bool:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.settimeout(1.0)
+            s.connect(path)
+            return True
+        except (ConnectionRefusedError, OSError):
+            return False
+        finally:
+            s.close()
+
     def start_service(self) -> None:
         if Path(self._socket_path).exists():
-            try:
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.settimeout(1.0)
-                s.connect(self._socket_path)
-                s.close()
+            if self._probe_socket(self._socket_path):
                 logging.info("sn2-verify already running at %s", self._socket_path)
                 return
-            except (ConnectionRefusedError, OSError):
-                os.unlink(self._socket_path)
+            os.unlink(self._socket_path)
 
         binary = self._find_binary()
         if binary is None:
@@ -72,20 +76,15 @@ class VerifyClient:
             [binary],
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
 
         for _ in range(50):
-            if Path(self._socket_path).exists():
-                try:
-                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    s.settimeout(1.0)
-                    s.connect(self._socket_path)
-                    s.close()
-                    logging.info("sn2-verify started, pid=%d", self._process.pid)
-                    return
-                except (ConnectionRefusedError, OSError):
-                    pass
+            if Path(self._socket_path).exists() and self._probe_socket(
+                self._socket_path
+            ):
+                logging.info("sn2-verify started, pid=%d", self._process.pid)
+                return
             time.sleep(0.1)
 
         raise TimeoutError("sn2-verify did not start within 5s")
@@ -136,18 +135,25 @@ class VerifyClient:
 
         frame = struct.pack(">I", len(msg)) + msg
 
-        for attempt in range(2):
+        try:
+            for attempt in range(2):
+                try:
+                    sock = self._get_connection()
+                    sock.sendall(frame)
+                    length_bytes = _recvall(sock, 4)
+                    length = struct.unpack(">I", length_bytes)[0]
+                    data = _recvall(sock, length)
+                    return msgpack.unpackb(data, raw=False)
+                except (ConnectionError, BrokenPipeError, OSError):
+                    self._close_connection()
+                    if attempt == 1:
+                        raise
+        except Exception:
             try:
-                sock = self._get_connection()
-                sock.sendall(frame)
-                length_bytes = _recvall(sock, 4)
-                length = struct.unpack(">I", length_bytes)[0]
-                data = _recvall(sock, length)
-                return msgpack.unpackb(data, raw=False)
-            except (ConnectionError, BrokenPipeError, OSError):
-                self._close_connection()
-                if attempt == 1:
-                    raise
+                os.unlink(shm_path)
+            except OSError:
+                pass
+            raise
 
         raise ConnectionError("verify_sync failed after retries")
 

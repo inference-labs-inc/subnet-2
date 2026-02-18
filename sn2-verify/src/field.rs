@@ -1,4 +1,4 @@
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint, Sign};
 use num_integer::Integer;
 use num_traits::ToPrimitive;
 
@@ -7,13 +7,13 @@ pub fn to_field_repr(value: &BigUint, modulus: &BigUint) -> BigUint {
     value.mod_floor(modulus)
 }
 
-pub fn from_field_repr(value: &BigUint, modulus: &BigUint) -> i128 {
+pub fn from_field_repr(value: &BigUint, modulus: &BigUint) -> BigInt {
     let half = modulus >> 1;
     if *value > half {
         let diff = modulus - value;
-        -(diff.to_i128().unwrap_or(i128::MIN))
+        BigInt::from_biguint(Sign::Minus, diff)
     } else {
-        value.to_i128().unwrap_or(i128::MAX)
+        BigInt::from_biguint(Sign::Plus, value.clone())
     }
 }
 
@@ -56,12 +56,18 @@ pub fn scale_to_field(
         .collect()
 }
 
-pub fn descale_outputs(outputs: &[i128], scale_base: u64, scale_exp: u64) -> Vec<f64> {
+pub fn descale_outputs(outputs: &[BigInt], scale_base: u64, scale_exp: u64) -> Vec<f64> {
     if scale_base == 0 || scale_exp == 0 {
-        return outputs.iter().map(|v| *v as f64).collect();
+        return outputs
+            .iter()
+            .map(|v| v.to_f64().unwrap_or(0.0))
+            .collect();
     }
     let scale = (scale_base as f64).powi(scale_exp as i32);
-    outputs.iter().map(|v| *v as f64 / scale).collect()
+    outputs
+        .iter()
+        .map(|v| v.to_f64().unwrap_or(0.0) / scale)
+        .collect()
 }
 
 pub fn compare_field_values(
@@ -97,14 +103,26 @@ mod tests {
     fn test_from_field_repr_positive() {
         let modulus = BigUint::from(100u64);
         let val = BigUint::from(30u64);
-        assert_eq!(from_field_repr(&val, &modulus), 30);
+        assert_eq!(from_field_repr(&val, &modulus), BigInt::from(30));
     }
 
     #[test]
     fn test_from_field_repr_negative() {
         let modulus = BigUint::from(100u64);
         let val = BigUint::from(80u64);
-        assert_eq!(from_field_repr(&val, &modulus), -20);
+        assert_eq!(from_field_repr(&val, &modulus), BigInt::from(-20));
+    }
+
+    #[test]
+    fn test_from_field_repr_large_modulus() {
+        let modulus = BigUint::parse_bytes(
+            b"30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001",
+            16,
+        )
+        .unwrap();
+        let val = &modulus - BigUint::from(42u64);
+        let result = from_field_repr(&val, &modulus);
+        assert_eq!(result, BigInt::from(-42));
     }
 
     #[test]

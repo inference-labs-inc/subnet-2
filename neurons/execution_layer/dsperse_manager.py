@@ -101,7 +101,7 @@ class DSperseManager:
             self._verify_client.start_service()
             self._use_rust_verify = True
             logging.info("sn2-verify Rust service started")
-        except (FileNotFoundError, TimeoutError) as e:
+        except (FileNotFoundError, TimeoutError, OSError) as e:
             logging.warning(
                 "sn2-verify unavailable, falling back to Python verification: %s", e
             )
@@ -1472,9 +1472,16 @@ class DSperseManager:
                 num_inputs=num_inputs,
                 expected_inputs=flat_inputs,
             )
-        except Exception as e:
-            logging.error("sn2-verify request failed: %s", e)
-            return False, None
+        except (ConnectionError, BrokenPipeError, OSError) as e:
+            logging.warning("sn2-verify connection lost, falling back to Python: %s", e)
+            return self._verify_via_python(
+                circuit_path,
+                witness_hex,
+                proof_hex,
+                num_inputs,
+                flat_inputs,
+                output_shape,
+            )
 
         if not response.get("success"):
             logging.error("sn2-verify: %s", response.get("error", "unknown error"))
