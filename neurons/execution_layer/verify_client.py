@@ -5,6 +5,7 @@ import os
 import socket
 import struct
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -12,8 +13,9 @@ from typing import Any
 
 import msgpack
 
-SOCKET_PATH = "/tmp/sn2-verify.sock"
-SHM_DIR = "/dev/shm" if os.path.isdir("/dev/shm") else "/tmp"
+_SHM_PATH = Path("/dev") / "shm"
+SOCKET_PATH = os.path.join(tempfile.gettempdir(), "sn2-verify.sock")
+SHM_DIR = str(_SHM_PATH) if _SHM_PATH.is_dir() else tempfile.gettempdir()
 RECV_TIMEOUT_SEC = 180
 
 
