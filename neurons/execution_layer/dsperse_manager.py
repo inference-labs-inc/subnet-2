@@ -339,7 +339,6 @@ class DSperseManager:
         return []
 
     def _schedule_transition(self, run_uid: str, slice_id: str) -> None:
-        self._transitioning_runs.add(run_uid)
         if self.event_client:
             self._schedule_async(
                 self.event_client.emit_slice_transition_started(
@@ -350,12 +349,12 @@ class DSperseManager:
 
         def _do_transition():
             try:
-                with self._incremental_runs_lock:
-                    if run_uid not in self._incremental_runs:
-                        return
-                transition_start = time.perf_counter()
                 lock = self._get_run_lock(run_uid)
                 with lock:
+                    with self._incremental_runs_lock:
+                        if run_uid not in self._incremental_runs:
+                            return
+                    transition_start = time.perf_counter()
                     next_requests = self.get_next_incremental_work(run_uid)
                 transition_elapsed = time.perf_counter() - transition_start
                 if self.event_client:
@@ -468,6 +467,8 @@ class DSperseManager:
 
             is_complete = self._incremental_runner.is_complete(run_uid)
             need_transition = slice_complete and not is_complete
+            if need_transition:
+                self._transitioning_runs.add(run_uid)
 
         if need_transition:
             self._schedule_transition(run_uid, task_id)
@@ -556,6 +557,8 @@ class DSperseManager:
 
             is_complete = self._incremental_runner.is_complete(run_uid)
             need_transition = slice_complete and not is_complete
+            if need_transition:
+                self._transitioning_runs.add(run_uid)
 
         if need_transition:
             self._schedule_transition(run_uid, slice_id)
@@ -655,6 +658,8 @@ class DSperseManager:
             return
 
         def _on_done(f):
+            if f.cancelled():
+                return
             exc = f.exception()
             if exc:
                 logging.error(
@@ -669,7 +674,7 @@ class DSperseManager:
             parts = slice_num.split("_tile_")
             base_slice, tile_idx = parts[0], int(parts[1])
             slice_id = f"slice_{base_slice}"
-            is_complete, next_requests = self.on_incremental_tile_result(
+            self.on_incremental_tile_result(
                 run_uid=run_uid,
                 task_id=f"{slice_id}_tile_{tile_idx}",
                 slice_id=slice_id,
@@ -677,23 +682,11 @@ class DSperseManager:
                 success=False,
             )
         else:
-            is_complete, next_req = self.on_incremental_slice_result(
+            self.on_incremental_slice_result(
                 run_uid=run_uid,
                 slice_num=slice_num,
                 success=False,
             )
-            next_requests = [next_req] if next_req else []
-        if next_requests and not is_complete:
-            if self.enqueue_fn and self._loop:
-                for req in next_requests:
-                    self._loop.call_soon_threadsafe(self.enqueue_fn, req)
-            else:
-                logging.warning(
-                    f"Dropping {len(next_requests)} next_requests for "
-                    f"run={run_uid} slice={slice_num}: "
-                    f"enqueue_fn={'set' if self.enqueue_fn else 'None'} "
-                    f"loop={'set' if self._loop else 'None'}"
-                )
 
     async def generate_requests_async(self) -> list[DSliceQueuedProofRequest]:
         loop = asyncio.get_running_loop()
