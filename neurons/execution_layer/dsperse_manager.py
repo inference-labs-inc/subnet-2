@@ -373,7 +373,14 @@ class DSperseManager:
                     )
                 if next_requests and self.enqueue_fn and self._loop:
                     for req in next_requests:
-                        self._loop.call_soon_threadsafe(self.enqueue_fn, req)
+                        try:
+                            self._loop.call_soon_threadsafe(self.enqueue_fn, req)
+                        except RuntimeError:
+                            logging.warning(
+                                f"Event loop closed during enqueue for "
+                                f"run={run_uid} slice={slice_id}"
+                            )
+                            break
                 elif next_requests:
                     logging.warning(
                         f"Dropping {len(next_requests)} transition requests for "
@@ -485,7 +492,8 @@ class DSperseManager:
                         )
                     )
 
-            is_complete = self._incremental_runner.is_complete(run_uid)
+            with self._incremental_runs_lock:
+                is_complete = run_uid not in self._incremental_runs
             need_transition = slice_complete and not is_complete
             if need_transition:
                 self._transitioning_runs.add(run_uid)
@@ -576,7 +584,8 @@ class DSperseManager:
                         )
                     )
 
-            is_complete = self._incremental_runner.is_complete(run_uid)
+            with self._incremental_runs_lock:
+                is_complete = run_uid not in self._incremental_runs
             need_transition = slice_complete and not is_complete
             if need_transition:
                 self._transitioning_runs.add(run_uid)
