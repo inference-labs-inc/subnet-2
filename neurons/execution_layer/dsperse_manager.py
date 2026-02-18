@@ -343,21 +343,22 @@ class DSperseManager:
         return []
 
     def _schedule_transition(self, run_uid: str, slice_id: str) -> None:
-        if self.event_client:
-            self._schedule_async(
-                self.event_client.emit_slice_transition_started(
-                    run_uid=run_uid,
-                    slice_num=slice_id,
-                )
-            )
-
         def _do_transition():
+            started = False
             try:
                 lock = self._get_run_lock(run_uid)
                 with lock:
                     with self._incremental_runs_lock:
                         if run_uid not in self._incremental_runs:
                             return
+                    if self.event_client:
+                        started = True
+                        self._schedule_async(
+                            self.event_client.emit_slice_transition_started(
+                                run_uid=run_uid,
+                                slice_num=slice_id,
+                            )
+                        )
                     transition_start = time.perf_counter()
                     next_requests = self.get_next_incremental_work(run_uid)
                 transition_elapsed = time.perf_counter() - transition_start
@@ -383,6 +384,15 @@ class DSperseManager:
                 logging.error(
                     f"Transition failed for run={run_uid} slice={slice_id}: {e}"
                 )
+                if started and self.event_client:
+                    self._schedule_async(
+                        self.event_client.emit_slice_transition_complete(
+                            run_uid=run_uid,
+                            slice_num=slice_id,
+                            total_tiles=0,
+                            response_time_sec=0.0,
+                        )
+                    )
             finally:
                 self._transitioning_runs.discard(run_uid)
 
