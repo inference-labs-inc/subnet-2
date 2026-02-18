@@ -304,6 +304,8 @@ class DSperseManager:
                     continue
                 lock = self._get_run_lock(run_uid)
                 with lock:
+                    if run_uid in self._transitioning_runs:
+                        continue
                     requests = self.get_next_incremental_work(run_uid)
                 if requests:
                     logging.info(
@@ -316,6 +318,8 @@ class DSperseManager:
                 continue
             lock = self._get_run_lock(run_uid)
             with lock:
+                if run_uid in self._transitioning_runs:
+                    continue
                 requests = self.get_next_incremental_work(run_uid)
             if requests:
                 logging.info(f"Generating {len(requests)} work items for run {run_uid}")
@@ -382,8 +386,13 @@ class DSperseManager:
             finally:
                 self._transitioning_runs.discard(run_uid)
 
+        def _on_transition_done(f):
+            if f.cancelled():
+                self._transitioning_runs.discard(run_uid)
+
         try:
-            self._transition_executor.submit(_do_transition)
+            fut = self._transition_executor.submit(_do_transition)
+            fut.add_done_callback(_on_transition_done)
         except RuntimeError:
             self._transitioning_runs.discard(run_uid)
             logging.warning(
@@ -437,6 +446,7 @@ class DSperseManager:
                 )
             )
 
+        need_transition = False
         lock = self._get_run_lock(run_uid)
         with lock:
             slice_complete = self._incremental_runner.apply_result(
@@ -526,6 +536,7 @@ class DSperseManager:
                 )
             )
 
+        need_transition = False
         lock = self._get_run_lock(run_uid)
         with lock:
             slice_complete = self._incremental_runner.apply_result(
