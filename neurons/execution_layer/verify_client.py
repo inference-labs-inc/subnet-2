@@ -14,6 +14,7 @@ import msgpack
 
 SOCKET_PATH = "/tmp/sn2-verify.sock"
 SHM_DIR = "/dev/shm" if os.path.isdir("/dev/shm") else "/tmp"
+RECV_TIMEOUT_SEC = 180
 
 
 def _recvall(sock: socket.socket, n: int) -> bytes:
@@ -94,6 +95,7 @@ class VerifyClient:
         if sock is not None:
             return sock
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(RECV_TIMEOUT_SEC)
         sock.connect(self._socket_path)
         self._local.sock = sock
         return sock
@@ -135,27 +137,24 @@ class VerifyClient:
 
         frame = struct.pack(">I", len(msg)) + msg
 
-        try:
-            for attempt in range(2):
-                try:
-                    sock = self._get_connection()
-                    sock.sendall(frame)
-                    length_bytes = _recvall(sock, 4)
-                    length = struct.unpack(">I", length_bytes)[0]
-                    data = _recvall(sock, length)
-                    return msgpack.unpackb(data, raw=False)
-                except (ConnectionError, BrokenPipeError, OSError):
-                    self._close_connection()
-                    if attempt == 1:
-                        raise
-        except Exception:
+        last_err: Exception | None = None
+        for attempt in range(2):
             try:
-                os.unlink(shm_path)
-            except OSError:
-                pass
-            raise
+                sock = self._get_connection()
+                sock.sendall(frame)
+                length_bytes = _recvall(sock, 4)
+                length = struct.unpack(">I", length_bytes)[0]
+                data = _recvall(sock, length)
+                return msgpack.unpackb(data, raw=False)
+            except (ConnectionError, BrokenPipeError, OSError) as e:
+                last_err = e
+                self._close_connection()
 
-        raise ConnectionError("verify_sync failed after retries")
+        try:
+            os.unlink(shm_path)
+        except OSError:
+            pass
+        raise last_err  # type: ignore[misc]
 
     def shutdown(self) -> None:
         self._close_connection()
