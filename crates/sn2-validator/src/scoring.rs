@@ -1,0 +1,148 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use tracing::{info, warn};
+
+use sn2_types::{DEFAULT_MAX_SCORE, PERFORMANCE_CURVE_POWER, PERFORMANCE_MIN_SAMPLES};
+
+const RATE_OF_DECAY: f64 = 0.4;
+const RATE_OF_RECOVERY: f64 = 0.1;
+const RESPONSE_TIME_WEIGHT: f64 = 1.0;
+const MAXIMUM_RESPONSE_TIME_DECIMAL: f64 = 0.99;
+
+pub struct ScoreManager {
+    scores: HashMap<u16, f64>,
+    persistence_path: PathBuf,
+}
+
+impl ScoreManager {
+    pub fn new(persistence_path: PathBuf) -> Self {
+        let mut mgr = Self {
+            scores: HashMap::new(),
+            persistence_path,
+        };
+        if let Err(e) = mgr.load() {
+            warn!(error = %e, "no existing scores found, starting fresh");
+        }
+        mgr
+    }
+
+    pub fn get_score(&self, uid: u16) -> f64 {
+        self.scores.get(&uid).copied().unwrap_or(0.0)
+    }
+
+    pub fn update_score(
+        &mut self,
+        uid: u16,
+        verified: bool,
+        response_time: f64,
+        max_response_time: f64,
+        min_response_time: f64,
+    ) {
+        let previous_score = self.get_score(uid);
+        let maximum_score = DEFAULT_MAX_SCORE;
+
+        let rate_of_change = if verified {
+            RATE_OF_RECOVERY
+        } else {
+            RATE_OF_DECAY
+        };
+
+        let response_time_normalized = if max_response_time > min_response_time {
+            let raw = (response_time - min_response_time) / (max_response_time - min_response_time);
+            raw.clamp(0.0, MAXIMUM_RESPONSE_TIME_DECIMAL)
+        } else {
+            0.0
+        };
+
+        let response_time_metric =
+            RESPONSE_TIME_WEIGHT * (1.0 - normalized_tangent_curve(response_time_normalized));
+
+        let calculated_score_fraction = response_time_metric.clamp(0.0, 1.0);
+        let effective_max = maximum_score * calculated_score_fraction;
+
+        let (distance, new_score) = if verified {
+            let distance = effective_max - previous_score;
+            let change = rate_of_change * distance;
+            (distance, previous_score + change)
+        } else {
+            let distance = previous_score;
+            let change = rate_of_change * distance;
+            (distance, previous_score - change)
+        };
+
+        let _ = distance;
+        self.scores.insert(uid, new_score.max(0.0));
+    }
+
+    pub fn sync_uids(&mut self, active_uids: &[u16]) {
+        self.scores.retain(|uid, _| active_uids.contains(uid));
+        for &uid in active_uids {
+            self.scores.entry(uid).or_insert(0.0);
+        }
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let json = serde_json::to_string_pretty(&self.scores)?;
+        std::fs::write(&self.persistence_path, json)
+            .with_context(|| format!("writing scores to {}", self.persistence_path.display()))?;
+        Ok(())
+    }
+
+    fn load(&mut self) -> Result<()> {
+        let data = std::fs::read_to_string(&self.persistence_path)?;
+        self.scores = serde_json::from_str(&data)?;
+        info!(count = self.scores.len(), "loaded scores from disk");
+        Ok(())
+    }
+
+    pub fn compute_throughput_weights(
+        &self,
+        uids: &[u16],
+        snap: &HashMap<u16, (f64, usize, usize)>,
+        owner_uid: Option<u16>,
+    ) -> (Vec<u16>, Vec<u16>) {
+        let mut raw_weights: Vec<f64> = uids
+            .iter()
+            .map(|&uid| {
+                let (rate, cap, count) = snap.get(&uid).copied().unwrap_or((0.0, 1, 0));
+                if count >= PERFORMANCE_MIN_SAMPLES {
+                    let throughput = rate * cap as f64;
+                    throughput.powf(PERFORMANCE_CURVE_POWER)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
+        let total: f64 = raw_weights.iter().sum();
+        if total > 0.0 {
+            for w in &mut raw_weights {
+                *w /= total;
+            }
+        }
+
+        if let Some(owner) = owner_uid {
+            if let Some(idx) = uids.iter().position(|&u| u == owner) {
+                for w in &mut raw_weights {
+                    *w *= 0.2;
+                }
+                raw_weights[idx] = 0.8;
+            }
+        }
+
+        let weights: Vec<u16> = raw_weights
+            .iter()
+            .map(|&w| (w * u16::MAX as f64) as u16)
+            .collect();
+
+        (uids.to_vec(), weights)
+    }
+}
+
+fn normalized_tangent_curve(x: f64) -> f64 {
+    let shifted = x - 0.5;
+    let scaled = shifted * std::f64::consts::PI * 0.9;
+    (scaled.tan() / (std::f64::consts::PI * 0.45).tan() + 1.0) / 2.0
+}

@@ -1,0 +1,334 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use sn2_types::{
+    Circuit, CircuitMetadata, CircuitPaths, CircuitType, ProofSystem, CIRCUIT_API_URL,
+    CIRCUIT_CACHE_DIR, CIRCUIT_TIMEOUT_SECONDS, IGNORED_MODEL_HASHES,
+};
+use tracing::{info, warn};
+
+const SKIP_AUTO_DOWNLOAD: &[&str] = &["metadata.json", "full_model.onnx"];
+const CIRCUIT_METADATA_FILENAME: &str = "circuit_metadata.json";
+const REFRESH_INTERVAL_SECS: u64 = 600;
+
+pub struct CircuitStore {
+    circuits: HashMap<String, Circuit>,
+    api_url: String,
+    cache_dir: PathBuf,
+    http: reqwest::Client,
+}
+
+impl CircuitStore {
+    pub fn new() -> Self {
+        let cache_dir = shellexpand::tilde(CIRCUIT_CACHE_DIR).to_string();
+        Self {
+            circuits: HashMap::new(),
+            api_url: CIRCUIT_API_URL.to_string(),
+            cache_dir: PathBuf::from(cache_dir),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default(),
+        }
+    }
+
+    pub async fn load_circuits(&mut self) -> Result<()> {
+        let api_circuits = self.fetch_circuits_from_api().await.unwrap_or_else(|e| {
+            warn!(error = %e, "failed to fetch circuits from API, loading from cache only");
+            Vec::new()
+        });
+
+        let active_ids: std::collections::HashSet<String> = api_circuits
+            .iter()
+            .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+
+        self.load_from_cache(&active_ids);
+
+        for circuit_data in &api_circuits {
+            if let Some(id) = circuit_data.get("id").and_then(|v| v.as_str()) {
+                if self.circuits.contains_key(id) || IGNORED_MODEL_HASHES.contains(&id) {
+                    continue;
+                }
+                match self.cache_and_load_circuit(id, circuit_data).await {
+                    Ok(circuit) => {
+                        info!(id = id, name = %circuit.metadata.name, "loaded circuit from API");
+                        self.circuits.insert(id.to_string(), circuit);
+                    }
+                    Err(e) => {
+                        warn!(id = id, error = %e, "failed to cache circuit");
+                    }
+                }
+            }
+        }
+
+        info!(count = self.circuits.len(), "circuits loaded");
+        Ok(())
+    }
+
+    pub async fn ensure_circuit(&mut self, circuit_id: &str) -> Result<Circuit> {
+        if IGNORED_MODEL_HASHES.contains(&circuit_id) {
+            anyhow::bail!("circuit {} is in the ignored list", circuit_id);
+        }
+
+        if let Some(circuit) = self.circuits.get(circuit_id) {
+            return Ok(circuit.clone());
+        }
+
+        info!(id = circuit_id, "circuit not loaded, fetching from API");
+        let url = format!("{}/circuits/{}", self.api_url, circuit_id);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("fetching circuit from API")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("API returned {} for circuit {}", resp.status(), circuit_id);
+        }
+
+        let data: serde_json::Value = resp.json().await.context("parsing circuit response")?;
+        let circuit = self.cache_and_load_circuit(circuit_id, &data).await?;
+        self.circuits.insert(circuit_id.to_string(), circuit.clone());
+        Ok(circuit)
+    }
+
+    pub async fn refresh_circuits(&mut self) -> Result<()> {
+        let api_circuits = self.fetch_circuits_from_api().await?;
+        let active_ids: std::collections::HashSet<String> = api_circuits
+            .iter()
+            .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+
+        for circuit_data in &api_circuits {
+            if let Some(id) = circuit_data.get("id").and_then(|v| v.as_str()) {
+                if self.circuits.contains_key(id) || IGNORED_MODEL_HASHES.contains(&id) {
+                    continue;
+                }
+                match self.cache_and_load_circuit(id, circuit_data).await {
+                    Ok(circuit) => {
+                        info!(id = id, name = %circuit.metadata.name, "loaded new circuit");
+                        self.circuits.insert(id.to_string(), circuit);
+                    }
+                    Err(e) => {
+                        warn!(id = id, error = %e, "failed to load new circuit");
+                    }
+                }
+            }
+        }
+
+        let removed: Vec<String> = self
+            .circuits
+            .keys()
+            .filter(|id| !active_ids.contains(id.as_str()))
+            .cloned()
+            .collect();
+
+        for id in &removed {
+            info!(id = id, "removing deactivated circuit");
+            self.circuits.remove(id);
+        }
+
+        Ok(())
+    }
+
+    pub fn get_benchmark_circuits(&self) -> Vec<Circuit> {
+        self.circuits
+            .values()
+            .filter(|c| c.metadata.circuit_type != CircuitType::DSPERSE_PROOF_GENERATION)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_circuit(&self, circuit_id: &str) -> Option<&Circuit> {
+        self.circuits.get(circuit_id)
+    }
+
+    pub fn circuit_count(&self) -> usize {
+        self.circuits.len()
+    }
+
+    pub const REFRESH_INTERVAL: u64 = REFRESH_INTERVAL_SECS;
+
+    async fn fetch_circuits_from_api(&self) -> Result<Vec<serde_json::Value>> {
+        let url = format!("{}/circuits", self.api_url);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("fetching circuits list")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("API returned {}", resp.status());
+        }
+
+        let data: serde_json::Value = resp.json().await.context("parsing circuits response")?;
+        let circuits = data
+            .get("circuits")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(circuits)
+    }
+
+    async fn cache_and_load_circuit(
+        &self,
+        circuit_id: &str,
+        data: &serde_json::Value,
+    ) -> Result<Circuit> {
+        let cache_path = self.cache_dir.join(format!("model_{circuit_id}"));
+        std::fs::create_dir_all(&cache_path)
+            .with_context(|| format!("creating cache dir {}", cache_path.display()))?;
+
+        let metadata_value = data
+            .get("metadata")
+            .context("circuit data missing metadata")?;
+
+        let metadata: CircuitMetadata =
+            serde_json::from_value(metadata_value.clone()).context("parsing circuit metadata")?;
+
+        let metadata_path = cache_path.join(CIRCUIT_METADATA_FILENAME);
+        std::fs::write(
+            &metadata_path,
+            serde_json::to_string_pretty(metadata_value)?,
+        )
+        .context("writing metadata")?;
+
+        if let Some(files) = data.get("files").and_then(|v| v.as_object()) {
+            for (filename, url_val) in files {
+                if SKIP_AUTO_DOWNLOAD.contains(&filename.as_str()) {
+                    continue;
+                }
+                let dest = cache_path.join(filename);
+                if dest.exists() {
+                    continue;
+                }
+                if let Some(url) = url_val.as_str() {
+                    if let Err(e) = self.download_file(url, &dest).await {
+                        warn!(file = %filename, error = %e, "failed to download circuit file");
+                    }
+                }
+            }
+        }
+
+        let settings = load_settings(&cache_path);
+        let proof_system = parse_proof_system(&metadata.proof_system);
+
+        Ok(Circuit {
+            id: circuit_id.to_string(),
+            paths: CircuitPaths::new(
+                &format!("model_{circuit_id}"),
+                &self.cache_dir.to_string_lossy(),
+            ),
+            metadata,
+            proof_system,
+            settings,
+            timeout: CIRCUIT_TIMEOUT_SECONDS as f64,
+        })
+    }
+
+    fn load_from_cache(&mut self, active_ids: &std::collections::HashSet<String>) {
+        let cache_dir = &self.cache_dir;
+        let entries = match std::fs::read_dir(cache_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            let circuit_id = match dir_name.strip_prefix("model_") {
+                Some(id) if id.len() == 64 => id.to_string(),
+                _ => continue,
+            };
+
+            if !active_ids.is_empty() && !active_ids.contains(&circuit_id) {
+                continue;
+            }
+            if self.circuits.contains_key(&circuit_id) {
+                continue;
+            }
+
+            let metadata_path = entry.path().join(CIRCUIT_METADATA_FILENAME);
+            if !metadata_path.exists() {
+                continue;
+            }
+
+            match load_circuit_from_cache(&circuit_id, &entry.path(), &self.cache_dir) {
+                Ok(circuit) => {
+                    self.circuits.insert(circuit_id, circuit);
+                }
+                Err(e) => {
+                    warn!(id = circuit_id, error = %e, "failed to load cached circuit");
+                }
+            }
+        }
+    }
+
+    async fn download_file(&self, url: &str, dest: &Path) -> Result<()> {
+        let resp = self
+            .http
+            .get(url)
+            .timeout(std::time::Duration::from_secs(300))
+            .send()
+            .await
+            .context("downloading file")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("download returned {}", resp.status());
+        }
+
+        let bytes = resp.bytes().await.context("reading download body")?;
+        std::fs::write(dest, &bytes)
+            .with_context(|| format!("writing {}", dest.display()))?;
+
+        Ok(())
+    }
+}
+
+fn load_circuit_from_cache(
+    circuit_id: &str,
+    dir: &Path,
+    cache_dir: &Path,
+) -> Result<Circuit> {
+    let metadata_path = dir.join(CIRCUIT_METADATA_FILENAME);
+    let metadata_str = std::fs::read_to_string(&metadata_path).context("reading metadata")?;
+    let metadata: CircuitMetadata =
+        serde_json::from_str(&metadata_str).context("parsing cached metadata")?;
+    let settings = load_settings(dir);
+    let proof_system = parse_proof_system(&metadata.proof_system);
+
+    Ok(Circuit {
+        id: circuit_id.to_string(),
+        paths: CircuitPaths::new(
+            &format!("model_{circuit_id}"),
+            &cache_dir.to_string_lossy(),
+        ),
+        metadata,
+        proof_system,
+        settings,
+        timeout: CIRCUIT_TIMEOUT_SECONDS as f64,
+    })
+}
+
+fn load_settings(dir: &Path) -> HashMap<String, serde_json::Value> {
+    let settings_path = dir.join("settings.json");
+    std::fs::read_to_string(&settings_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn parse_proof_system(s: &str) -> ProofSystem {
+    match s {
+        "ZKML" => ProofSystem::ZKML,
+        "CIRCOM" => ProofSystem::CIRCOM,
+        "JOLT" => ProofSystem::JOLT,
+        "EZKL" => ProofSystem::EZKL,
+        "JSTPROVE" => ProofSystem::JSTPROVE,
+        _ => ProofSystem::JSTPROVE,
+    }
+}

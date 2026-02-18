@@ -1,0 +1,1476 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::Ipv4Addr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+use btlightning::QuicAxonInfo;
+use sn2_chain::WeightsSetter;
+use sn2_types::*;
+use tokio::sync::{Notify, RwLock};
+use tokio::task::JoinSet;
+use tracing::{error, info, warn};
+
+use crate::circuit_store::CircuitStore;
+use crate::config::ValidatorConfig;
+use crate::dsperse::DSperseManager;
+use crate::miner_client::MinerQueryClient;
+use crate::performance::PerformanceTracker;
+use crate::relay::{DsperseSubmission, RelayManager, RwrSubmission};
+use crate::request_pipeline::RequestPipeline;
+use crate::response_processor::ResponseProcessor;
+use crate::scoring::ScoreManager;
+use crate::{metrics_server, metrics_server as metrics};
+
+struct PowItem {
+    miner_uid: u16,
+    validator_uid: u16,
+    verified: bool,
+    response_time: f64,
+    proof_size: u64,
+    previous_score: f64,
+    maximum_score: f64,
+    maximum_response_time: f64,
+    minimum_response_time: f64,
+    block_number: u64,
+}
+
+struct PowManager {
+    queue: VecDeque<PowItem>,
+}
+
+impl PowManager {
+    fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+        }
+    }
+
+    fn push(&mut self, item: PowItem) {
+        self.queue.push_back(item);
+    }
+
+    fn should_batch(&self) -> bool {
+        self.queue.len() >= MAX_POW_QUEUE_SIZE
+    }
+
+    fn drain_batch(&mut self) -> Vec<PowItem> {
+        self.queue
+            .drain(..MAX_POW_QUEUE_SIZE.min(self.queue.len()))
+            .collect()
+    }
+
+    fn prepare_inputs(items: &[PowItem]) -> serde_json::Value {
+        let n = items.len();
+        let mut maximum_score = Vec::with_capacity(n);
+        let mut previous_score = Vec::with_capacity(n);
+        let mut verified = Vec::with_capacity(n);
+        let mut proof_size = Vec::with_capacity(n);
+        let mut response_time = Vec::with_capacity(n);
+        let mut maximum_response_time = Vec::with_capacity(n);
+        let mut minimum_response_time = Vec::with_capacity(n);
+        let mut block_number = Vec::with_capacity(n);
+        let mut validator_uid = Vec::with_capacity(n);
+        let mut miner_uid = Vec::with_capacity(n);
+
+        for item in items {
+            maximum_score.push(item.maximum_score);
+            previous_score.push(item.previous_score);
+            verified.push(if item.verified { 1u8 } else { 0u8 });
+            proof_size.push(item.proof_size);
+            response_time.push(item.response_time);
+            maximum_response_time.push(item.maximum_response_time);
+            minimum_response_time.push(item.minimum_response_time);
+            block_number.push(item.block_number);
+            validator_uid.push(item.validator_uid);
+            miner_uid.push(item.miner_uid);
+        }
+
+        serde_json::json!({
+            "maximum_score": maximum_score,
+            "previous_score": previous_score,
+            "verified": verified,
+            "proof_size": proof_size,
+            "response_time": response_time,
+            "maximum_response_time": maximum_response_time,
+            "minimum_response_time": minimum_response_time,
+            "block_number": block_number,
+            "validator_uid": validator_uid,
+            "miner_uid": miner_uid,
+        })
+    }
+}
+
+enum RetryPayload {
+    Rwr(RwrSubmission),
+    DSlice(DSliceRequest),
+    None,
+}
+
+struct TaskResult {
+    tokio_task_id: tokio::task::Id,
+    uid: u16,
+    request_type: RequestType,
+    guard_hash: Option<String>,
+    external_request_hash: Option<String>,
+    retry_count: u32,
+    was_at_capacity: bool,
+    slice_num: Option<String>,
+    run_uid: Option<String>,
+    is_tile: bool,
+    task_id: Option<String>,
+    tile_idx: Option<u32>,
+    outcome: TaskOutcome,
+    retry_payload: RetryPayload,
+}
+
+enum TaskOutcome {
+    Success(MinerResponse),
+    Failure(String),
+}
+
+pub struct ValidatorLoop {
+    config: ValidatorConfig,
+    score_manager: ScoreManager,
+    performance_tracker: PerformanceTracker,
+    weights_setter: WeightsSetter,
+    miner_client: Arc<RwLock<MinerQueryClient>>,
+    relay: RelayManager,
+    pipeline: RequestPipeline,
+    response_processor: ResponseProcessor,
+    dsperse: DSperseManager,
+    circuit_store: CircuitStore,
+    tasks: JoinSet<TaskResult>,
+    miner_active_count: HashMap<u16, usize>,
+    api_dslice_queue: VecDeque<DSliceRequest>,
+    stacked_dslice_queue: VecDeque<DSliceRequest>,
+    rwr_queue: VecDeque<RwrSubmission>,
+    dsperse_rx: tokio::sync::mpsc::Receiver<DsperseSubmission>,
+    rwr_rx: tokio::sync::mpsc::Receiver<RwrSubmission>,
+    last_metagraph_sync: Instant,
+    last_weight_update: Instant,
+    last_score_save: Instant,
+    last_circuit_refresh: Instant,
+    uid_hotkeys: HashMap<u16, String>,
+    pow_manager: PowManager,
+    dispatch_notify: Arc<Notify>,
+    last_perf_save: Instant,
+    last_health_log: Instant,
+    task_meta: HashMap<tokio::task::Id, (u16, Option<String>)>,
+}
+
+impl ValidatorLoop {
+    pub async fn new(config: ValidatorConfig) -> Result<Self> {
+        metrics_server::init_metrics(config.metrics_port)?;
+
+        let score_path = dirs_next::home_dir()
+            .unwrap_or_default()
+            .join(".bittensor")
+            .join("subnet-2")
+            .join("scores.json");
+
+        let score_manager = ScoreManager::new(score_path);
+        let perf_path = dirs_next::home_dir()
+            .unwrap_or_default()
+            .join(".bittensor")
+            .join("subnet-2")
+            .join("performance_tracker.json");
+        let performance_tracker = PerformanceTracker::new_with_persistence(perf_path);
+        let weights_setter = WeightsSetter::new(config.netuid);
+
+        let miner_client = Arc::new(RwLock::new(
+            MinerQueryClient::new(config.wallet.hotkey.clone(), &config.wallet.hotkey_ss58)?,
+        ));
+
+        let (dsperse_tx, dsperse_rx) = tokio::sync::mpsc::channel::<DsperseSubmission>(256);
+        let (rwr_tx, rwr_rx) = tokio::sync::mpsc::channel::<RwrSubmission>(256);
+
+        let relay = RelayManager::new(
+            config.relay_url.clone(),
+            config.wallet.hotkey.clone(),
+            config.wallet.hotkey_ss58.clone(),
+            config.relay_enabled,
+            dsperse_tx,
+            rwr_tx,
+        );
+
+        let pipeline = RequestPipeline::new();
+        let response_processor = ResponseProcessor::new();
+        let dsperse = DSperseManager::new(config.dsperse_socket.clone());
+        let circuit_store = CircuitStore::new();
+
+        let now = Instant::now();
+
+        Ok(Self {
+            config,
+            score_manager,
+            performance_tracker,
+            weights_setter,
+            miner_client,
+            relay,
+            pipeline,
+            response_processor,
+            dsperse,
+            circuit_store,
+            tasks: JoinSet::new(),
+            miner_active_count: HashMap::new(),
+            api_dslice_queue: VecDeque::new(),
+            stacked_dslice_queue: VecDeque::new(),
+            rwr_queue: VecDeque::new(),
+            dsperse_rx,
+            rwr_rx,
+            last_metagraph_sync: now,
+            last_weight_update: now,
+            last_score_save: now,
+            last_circuit_refresh: now,
+            uid_hotkeys: HashMap::new(),
+            pow_manager: PowManager::new(),
+            dispatch_notify: Arc::new(Notify::new()),
+            last_perf_save: now,
+            last_health_log: now,
+            task_meta: HashMap::new(),
+        })
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        self.circuit_store.load_circuits().await?;
+        self.relay.start().await?;
+
+        info!(
+            uid = self.config.user_uid,
+            netuid = self.config.netuid,
+            neurons = self.config.metagraph.n,
+            benchmark = !self.config.disable_benchmark,
+            api_pct = self.config.api_miners_pct,
+            circuits = self.circuit_store.circuit_count(),
+            "validator loop starting"
+        );
+
+        let mut tick = tokio::time::interval(Duration::from_millis(
+            (LOOP_DELAY_SECONDS * 1000.0) as u64,
+        ));
+
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    if let Err(e) = self.step().await {
+                        error!(error = %e, "validator step error");
+                        tokio::time::sleep(Duration::from_secs(EXCEPTION_DELAY_SECONDS)).await;
+                    }
+                }
+                Some(result) = self.tasks.join_next() => {
+                    match result {
+                        Ok(task_result) => {
+                            self.task_meta.remove(&task_result.tokio_task_id);
+                            self.handle_task_result(task_result).await;
+                        }
+                        Err(e) => {
+                            if let Some((uid, guard_hash)) = self.task_meta.remove(&e.id()) {
+                                warn!(uid = uid, "recovering leaked state from panicked task");
+                                if let Some(count) = self.miner_active_count.get_mut(&uid) {
+                                    *count = count.saturating_sub(1);
+                                }
+                                if let Some(hash) = &guard_hash {
+                                    if !hash.is_empty() {
+                                        self.pipeline.release_hash(hash);
+                                    }
+                                }
+                            }
+                            error!(error = %e, "task panicked");
+                        }
+                    }
+                    self.dispatch_notify.notify_one();
+                }
+                Some(submission) = self.dsperse_rx.recv() => {
+                    self.handle_dsperse_submission(submission).await;
+                    self.dispatch_notify.notify_one();
+                }
+                Some(rwr) = self.rwr_rx.recv() => {
+                    self.rwr_queue.push_back(rwr);
+                    self.dispatch_notify.notify_one();
+                }
+                _ = self.dispatch_notify.notified() => {
+                    if let Err(e) = self.dispatch_requests().await {
+                        error!(error = %e, "dispatch error on notify");
+                    }
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    info!("shutting down validator");
+                    self.shutdown().await;
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    async fn step(&mut self) -> Result<()> {
+        self.run_periodic_tasks().await?;
+        self.dispatch_requests().await?;
+        Ok(())
+    }
+
+    async fn handle_dsperse_submission(&mut self, submission: DsperseSubmission) {
+        let circuit = match self.circuit_store.ensure_circuit(&submission.circuit_id).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(circuit = %submission.circuit_id, error = %e, "unknown circuit in dsperse submission");
+                if let Some(req_id) = &submission.request_id {
+                    self.relay
+                        .send_response(
+                            req_id,
+                            serde_json::json!({"error": format!("unknown circuit: {e}")}),
+                        )
+                        .await;
+                }
+                return;
+            }
+        };
+
+        let run_result = self
+            .dsperse
+            .start_incremental_run(
+                &circuit.id,
+                &submission.inputs,
+                "api",
+                Some(1),
+            )
+            .await;
+
+        match run_result {
+            Ok(result) => {
+                let run_uid = result
+                    .get("run_uid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+
+                info!(run_uid = %run_uid, circuit = %circuit.id, "started incremental run");
+
+                self.relay.register_pending(&run_uid).await;
+
+                if let Some(req_id) = &submission.request_id {
+                    self.relay.send_response(req_id, result.clone()).await;
+                }
+
+                self.enqueue_dsperse_work(&run_uid, &circuit).await;
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to start incremental run");
+                if let Some(req_id) = &submission.request_id {
+                    self.relay
+                        .send_response(
+                            req_id,
+                            serde_json::json!({"error": e.to_string()}),
+                        )
+                        .await;
+                }
+            }
+        }
+    }
+
+    async fn enqueue_dsperse_work(&mut self, run_uid: &str, circuit: &Circuit) {
+        let work = match self.dsperse.get_next_work(run_uid).await {
+            Ok(w) => w,
+            Err(e) => {
+                warn!(run_uid = %run_uid, error = %e, "failed to get next dsperse work");
+                return;
+            }
+        };
+
+        let items = work
+            .get("items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        for item in items {
+            let slice_num = item
+                .get("slice_num")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string();
+            let task_id = item
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let is_tile = item.get("is_tile").and_then(|v| v.as_bool()).unwrap_or(false);
+            let tile_idx = item.get("tile_idx").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let proof_system_str = item
+                .get("proof_system")
+                .and_then(|v| v.as_str())
+                .unwrap_or("JSTPROVE");
+            let proof_system = match proof_system_str {
+                "ZKML" => ProofSystem::ZKML,
+                "CIRCOM" => ProofSystem::CIRCOM,
+                "JOLT" => ProofSystem::JOLT,
+                "EZKL" => ProofSystem::EZKL,
+                _ => ProofSystem::JSTPROVE,
+            };
+            let inputs = item.get("inputs").cloned().unwrap_or(serde_json::Value::Null);
+            let outputs = item.get("outputs").cloned();
+            let run_source_str = item
+                .get("run_source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("api");
+            let run_source = match run_source_str {
+                "benchmark" => RunSource::Benchmark,
+                _ => RunSource::Api,
+            };
+
+            let request = DSliceRequest {
+                circuit: circuit.clone(),
+                inputs,
+                request_type: RequestType::DSlice,
+                proof_system,
+                slice_num,
+                run_uid: run_uid.to_string(),
+                outputs,
+                is_tile,
+                tile_idx,
+                task_id,
+                run_source,
+                retry_count: 0,
+            };
+            match request.run_source {
+                RunSource::Api => self.api_dslice_queue.push_back(request),
+                RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
+            };
+        }
+    }
+
+    async fn replenish_dslice_queues(&mut self) {
+        let response = match self.dsperse.generate_requests().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "dsperse generate_requests failed");
+                return;
+            }
+        };
+
+        let items = response
+            .get("items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let item_count = items.len();
+
+        for item in items {
+            let circuit_id = match item.get("circuit_id").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+            let circuit = match self.circuit_store.ensure_circuit(&circuit_id).await {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(circuit = %circuit_id, error = %e, "unknown circuit in generated request");
+                    continue;
+                }
+            };
+            let run_uid = item
+                .get("run_uid")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let slice_num = item
+                .get("slice_num")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string();
+            let task_id = item.get("task_id").and_then(|v| v.as_str()).map(String::from);
+            let is_tile = item.get("is_tile").and_then(|v| v.as_bool()).unwrap_or(false);
+            let tile_idx = item.get("tile_idx").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let proof_system_str = item
+                .get("proof_system")
+                .and_then(|v| v.as_str())
+                .unwrap_or("JSTPROVE");
+            let proof_system = match proof_system_str {
+                "ZKML" => ProofSystem::ZKML,
+                "CIRCOM" => ProofSystem::CIRCOM,
+                "JOLT" => ProofSystem::JOLT,
+                "EZKL" => ProofSystem::EZKL,
+                _ => ProofSystem::JSTPROVE,
+            };
+            let inputs = item.get("inputs").cloned().unwrap_or(serde_json::Value::Null);
+            let outputs = item.get("outputs").cloned();
+            let run_source_str = item
+                .get("run_source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("benchmark");
+            let run_source = match run_source_str {
+                "api" => RunSource::Api,
+                _ => RunSource::Benchmark,
+            };
+
+            let request = DSliceRequest {
+                circuit,
+                inputs,
+                request_type: RequestType::DSlice,
+                proof_system,
+                slice_num,
+                run_uid,
+                outputs,
+                is_tile,
+                tile_idx,
+                task_id,
+                run_source,
+                retry_count: 0,
+            };
+            match request.run_source {
+                RunSource::Api => self.api_dslice_queue.push_back(request),
+                RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
+            };
+        }
+
+        if item_count > 0 {
+            info!(count = item_count, "replenished dslice queues from dsperse");
+            self.dispatch_notify.notify_one();
+        }
+    }
+
+    async fn dispatch_requests(&mut self) -> Result<()> {
+        let active_count = self.tasks.len();
+        let available_slots = self.config.max_concurrency.saturating_sub(active_count);
+        if available_slots == 0 {
+            return Ok(());
+        }
+
+        metrics::set_active_tasks(active_count);
+
+        let capacities = self.performance_tracker.miner_capacities();
+        let adaptive_timeout = self.performance_tracker.adaptive_timeout();
+
+        let queryable = self.get_queryable_neurons();
+        let mut neurons: Vec<sn2_chain::NeuronInfo> = queryable
+            .into_iter()
+            .cloned()
+            .collect();
+        rand::seq::SliceRandom::shuffle(neurons.as_mut_slice(), &mut rand::thread_rng());
+
+        let neuron_refs: Vec<&sn2_chain::NeuronInfo> = neurons.iter().collect();
+        let api_eligible = self.compute_api_eligible(&neuron_refs);
+        let benchmark_circuits = self.circuit_store.get_benchmark_circuits();
+
+        let pow_ready = self.pow_manager.should_batch();
+        let pow_circuit = if pow_ready {
+            self.circuit_store
+                .ensure_circuit(BATCHED_PROOF_OF_WEIGHTS_MODEL_ID)
+                .await
+                .ok()
+        } else {
+            None
+        };
+
+        let mut dispatched = 0usize;
+
+        for neuron in &neurons {
+            if dispatched >= available_slots {
+                break;
+            }
+
+            let uid = neuron.uid;
+            let cap = capacities.get(&uid).copied().unwrap_or(1);
+            let active_now = self.miner_active_count.get(&uid).copied().unwrap_or(0);
+            if active_now >= cap {
+                continue;
+            }
+            let slots_for_miner = (cap - active_now).min(available_slots - dispatched);
+
+            for _slot in 0..slots_for_miner {
+            if dispatched >= available_slots {
+                break;
+            }
+            let active = self.miner_active_count.get(&uid).copied().unwrap_or(0);
+            let was_at_capacity = active + 1 >= cap;
+
+            let request_type;
+            let guard_hash;
+            let external_request_hash;
+            let body: serde_json::Value;
+            let synapse_name: &str;
+            let retry_count: u32;
+            let slice_num: Option<String>;
+            let run_uid: Option<String>;
+            let is_tile: bool;
+            let task_id: Option<String>;
+            let tile_idx: Option<u32>;
+            let task_circuit: Option<Circuit>;
+            let task_inputs: Option<serde_json::Value>;
+            let task_proof_system: Option<ProofSystem>;
+            let retry_payload: RetryPayload;
+
+            if let Some(ref pow_circ) = pow_circuit {
+                if self.pow_manager.should_batch() {
+                    let items = self.pow_manager.drain_batch();
+                    let inputs = PowManager::prepare_inputs(&items);
+                    request_type = RequestType::Rwr;
+                    external_request_hash = None;
+                    retry_count = 0;
+                    slice_num = None;
+                    run_uid = None;
+                    is_tile = false;
+                    task_id = None;
+                    tile_idx = None;
+                    synapse_name = ProofOfWeightsDataModel::NAME;
+                    body = serde_json::json!({
+                        "subnet_uid": self.config.netuid,
+                        "verification_key_hash": pow_circ.id,
+                        "proof_system": pow_circ.proof_system.to_string(),
+                        "inputs": inputs,
+                        "proof": "",
+                        "public_signals": "",
+                    });
+                    guard_hash = Some(String::new());
+                    task_circuit = Some(pow_circ.clone());
+                    task_inputs = None;
+                    task_proof_system = Some(pow_circ.proof_system);
+                    retry_payload = RetryPayload::None;
+                } else {
+                    break;
+                }
+            } else if let Some(rwr) = self.rwr_queue.pop_front() {
+                retry_payload = RetryPayload::Rwr(rwr.clone());
+                let circuit = match self.circuit_store.ensure_circuit(&rwr.circuit_id).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(circuit = %rwr.circuit_id, error = %e, "unknown circuit for RWR");
+                        if let Some(req_id) = &rwr.request_id {
+                            self.relay.send_response(
+                                req_id,
+                                serde_json::json!({"success": false, "error": format!("unknown circuit: {e}")}),
+                            ).await;
+                        }
+                        break;
+                    }
+                };
+                request_type = RequestType::Rwr;
+                external_request_hash = rwr.request_id.clone();
+                retry_count = rwr.retry_count;
+                slice_num = None;
+                run_uid = None;
+                is_tile = false;
+                task_id = None;
+                tile_idx = None;
+                synapse_name = QueryZkProof::NAME;
+                task_circuit = Some(circuit.clone());
+                task_inputs = Some(rwr.inputs.clone());
+                task_proof_system = Some(circuit.proof_system);
+                body = serde_json::json!({
+                    "model_id": circuit.id,
+                    "query_input": rwr.inputs,
+                });
+                guard_hash = self.pipeline.check_hash(&body);
+                if guard_hash.is_none() {
+                    self.rwr_queue.push_back(rwr);
+                    break;
+                }
+            } else if api_eligible.contains(&uid) && !self.api_dslice_queue.is_empty() {
+                let dslice = self.api_dslice_queue.pop_front().unwrap();
+                retry_payload = RetryPayload::DSlice(dslice.clone());
+                request_type = RequestType::DSlice;
+                external_request_hash = None;
+                retry_count = dslice.retry_count;
+                slice_num = Some(dslice.slice_num.clone());
+                run_uid = Some(dslice.run_uid.clone());
+                is_tile = dslice.is_tile;
+                task_id = dslice.task_id.clone();
+                tile_idx = dslice.tile_idx;
+                task_circuit = Some(dslice.circuit.clone());
+                task_inputs = Some(dslice.inputs.clone());
+                task_proof_system = Some(dslice.proof_system);
+                synapse_name = DSliceProofGenerationDataModel::NAME;
+                let dslice_model = self.pipeline.prepare_dslice_request(
+                    uid,
+                    &dslice.circuit,
+                    dslice.inputs.clone(),
+                    dslice.outputs.clone(),
+                    &dslice.slice_num,
+                    &dslice.run_uid,
+                    dslice.proof_system,
+                );
+                body = serde_json::to_value(&dslice_model).unwrap_or_default();
+                guard_hash = self.pipeline.check_hash(&body);
+                if guard_hash.is_none() {
+                    self.api_dslice_queue.push_back(dslice);
+                    break;
+                }
+            } else if let Some(dslice) = self.stacked_dslice_queue.pop_front() {
+                retry_payload = RetryPayload::DSlice(dslice.clone());
+                request_type = RequestType::DSlice;
+                external_request_hash = None;
+                retry_count = dslice.retry_count;
+                slice_num = Some(dslice.slice_num.clone());
+                run_uid = Some(dslice.run_uid.clone());
+                is_tile = dslice.is_tile;
+                task_id = dslice.task_id.clone();
+                tile_idx = dslice.tile_idx;
+                task_circuit = Some(dslice.circuit.clone());
+                task_inputs = Some(dslice.inputs.clone());
+                task_proof_system = Some(dslice.proof_system);
+                synapse_name = DSliceProofGenerationDataModel::NAME;
+                let dslice_model = self.pipeline.prepare_dslice_request(
+                    uid,
+                    &dslice.circuit,
+                    dslice.inputs.clone(),
+                    dslice.outputs.clone(),
+                    &dslice.slice_num,
+                    &dslice.run_uid,
+                    dslice.proof_system,
+                );
+                body = serde_json::to_value(&dslice_model).unwrap_or_default();
+                guard_hash = self.pipeline.check_hash(&body);
+                if guard_hash.is_none() {
+                    self.stacked_dslice_queue.push_back(dslice);
+                    break;
+                }
+            } else if !self.config.disable_benchmark && !benchmark_circuits.is_empty() {
+                let weights: Vec<f64> = benchmark_circuits
+                    .iter()
+                    .map(|c| c.metadata.benchmark_choice_weight.unwrap_or(1.0))
+                    .collect();
+                let dist = match rand::distributions::WeightedIndex::new(&weights) {
+                    Ok(d) => d,
+                    Err(_) => break,
+                };
+                let circuit_idx = rand::Rng::sample(&mut rand::thread_rng(), &dist);
+                let circuit = &benchmark_circuits[circuit_idx];
+                request_type = RequestType::Benchmark;
+                external_request_hash = None;
+                retry_count = 0;
+                slice_num = None;
+                run_uid = None;
+                is_tile = false;
+                task_id = None;
+                tile_idx = None;
+                task_circuit = Some(circuit.clone());
+                task_proof_system = Some(circuit.proof_system);
+                retry_payload = RetryPayload::None;
+                synapse_name = QueryZkProof::NAME;
+                let inputs = circuit
+                    .settings
+                    .get("default_input")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+                match self.pipeline.prepare_benchmark_request(uid, circuit, inputs) {
+                    Some(req) => {
+                        task_inputs = Some(req.inputs.clone());
+                        body = serde_json::json!({
+                            "model_id": req.circuit.id,
+                            "query_input": req.inputs,
+                        });
+                        guard_hash = Some(String::new());
+                    }
+                    None => break,
+                }
+            } else {
+                break;
+            }
+
+            let ip = neuron.axon_ip.clone();
+            let port = neuron.axon_port;
+            let protocol = neuron.axon_protocol;
+            let hotkey = neuron.hotkey.clone();
+            let timeout = if api_eligible.contains(&uid) {
+                API_TIMEOUT_SECONDS
+            } else {
+                adaptive_timeout
+            };
+
+            let client = Arc::clone(&self.miner_client);
+
+            let task_slice_num = slice_num.clone();
+            let task_run_uid = run_uid.clone();
+            let task_task_id = task_id.clone();
+            let task_circuit_clone = task_circuit;
+            let task_inputs_clone = task_inputs;
+            let task_proof_system_clone = task_proof_system;
+            let task_retry_payload = retry_payload;
+            let task_guard_hash = guard_hash.clone();
+
+            let abort_handle = self.tasks.spawn(async move {
+                let tokio_task_id = tokio::task::id();
+                let guard = client.read().await;
+                let query_result = if protocol > 0 {
+                    let axon = QuicAxonInfo {
+                        hotkey,
+                        ip: ip.clone(),
+                        port,
+                        protocol,
+                        placeholder1: 0,
+                        placeholder2: 0,
+                    };
+                    let data: HashMap<String, serde_json::Value> =
+                        serde_json::from_value(body.clone()).unwrap_or_default();
+                    guard.query_miner_quic(&axon, synapse_name, data, timeout).await
+                } else {
+                    let headers = guard.build_signing_headers(&body, &hotkey);
+                    guard
+                        .query_miner_http(&ip, port, synapse_name, &body, &headers, timeout)
+                        .await
+                };
+                drop(guard);
+
+                let outcome = match query_result {
+                    Ok((resp_body, elapsed)) => {
+                        let mut response = MinerResponse {
+                            uid,
+                            verification_result: false,
+                            external_request_hash: external_request_hash
+                                .clone()
+                                .unwrap_or_default(),
+                            response_time: elapsed,
+                            proof_size: 0,
+                            circuit: task_circuit_clone,
+                            proof_system: task_proof_system_clone,
+                            verification_time: None,
+                            proof_content: resp_body
+                                .get("query_output")
+                                .cloned()
+                                .or_else(|| resp_body.get("proof").cloned()),
+                            public_json: None,
+                            inputs: task_inputs_clone,
+                            request_type: Some(request_type),
+                            dsperse_slice_num: task_slice_num
+                                .as_deref()
+                                .and_then(|s| s.parse().ok()),
+                            dsperse_run_uid: task_run_uid.clone(),
+                            raw: Some(resp_body),
+                            error: None,
+                            save: false,
+                            computed_outputs: None,
+                            is_incremental: request_type == RequestType::DSlice,
+                            witness: None,
+                        };
+                        response.proof_size = response
+                            .proof_content
+                            .as_ref()
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.len())
+                            .unwrap_or(0);
+
+                        if let Some(raw) = &response.raw {
+                            response.witness = raw
+                                .get("witness")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            response.computed_outputs = raw.get("computed_outputs").cloned();
+                            if let Some(ps) = raw.get("public_signals") {
+                                response.public_json = ps.as_array().map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                });
+                            }
+                        }
+                        TaskOutcome::Success(response)
+                    }
+                    Err(e) => TaskOutcome::Failure(e.to_string()),
+                };
+
+                TaskResult {
+                    tokio_task_id,
+                    uid,
+                    request_type,
+                    guard_hash: guard_hash.clone(),
+                    external_request_hash: external_request_hash.clone(),
+                    retry_count,
+                    was_at_capacity,
+                    slice_num,
+                    run_uid,
+                    is_tile,
+                    task_id: task_task_id,
+                    tile_idx,
+                    outcome,
+                    retry_payload: task_retry_payload,
+                }
+            });
+            self.task_meta.insert(abort_handle.id(), (uid, task_guard_hash));
+
+            *self.miner_active_count.entry(uid).or_insert(0) += 1;
+            dispatched += 1;
+            metrics::record_request_sent(&request_type.to_string());
+            } // end inner slot loop
+        }
+
+        Ok(())
+    }
+
+    fn get_queryable_neurons(&self) -> Vec<&sn2_chain::NeuronInfo> {
+        let target_uids: Option<HashSet<u16>> = std::env::var("TARGET_UIDS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|v| v.trim().parse::<u16>().ok())
+                    .collect()
+            });
+
+        self.config
+            .metagraph
+            .active_neurons()
+            .filter(|n| {
+                if let Some(targets) = &target_uids {
+                    return targets.contains(&n.uid);
+                }
+                if n.stake >= VALIDATOR_STAKE_THRESHOLD {
+                    return false;
+                }
+                if n.axon_ip.is_empty() || n.axon_port == 0 {
+                    return false;
+                }
+                is_valid_ip(&n.axon_ip)
+            })
+            .collect()
+    }
+
+    fn compute_api_eligible(&self, neurons: &[&sn2_chain::NeuronInfo]) -> HashSet<u16> {
+        if neurons.is_empty() || self.config.api_miners_pct == 0 {
+            return HashSet::new();
+        }
+
+        let snap = self.performance_tracker.snapshot();
+        let queryable: HashSet<u16> = neurons.iter().map(|n| n.uid).collect();
+
+        let mut ranked: Vec<(u16, f64)> = snap
+            .iter()
+            .filter(|(uid, (_, count))| {
+                *count >= PERFORMANCE_MIN_SAMPLES && queryable.contains(uid)
+            })
+            .map(|(&uid, &(rate, _))| (uid, rate))
+            .collect();
+
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let top_count = (ranked.len() as u32 * self.config.api_miners_pct / 100).max(1) as usize;
+        ranked
+            .into_iter()
+            .take(top_count)
+            .map(|(uid, _)| uid)
+            .collect()
+    }
+
+    async fn handle_task_result(&mut self, mut result: TaskResult) {
+        let uid = result.uid;
+        let was_at_capacity = result.was_at_capacity;
+        let request_type = result.request_type;
+        let run_uid = result.run_uid.clone();
+        let slice_num = result.slice_num.clone();
+        let is_tile = result.is_tile;
+        let task_id = result.task_id.clone();
+        let tile_idx = result.tile_idx;
+        let external_request_hash = result.external_request_hash.clone();
+        let retry_count = result.retry_count;
+        let retry_payload = std::mem::replace(&mut result.retry_payload, RetryPayload::None);
+        let guard_hash = result.guard_hash.clone();
+
+        if let Some(count) = self.miner_active_count.get_mut(&uid) {
+            *count = count.saturating_sub(1);
+        }
+
+        let failed = match result.outcome {
+            TaskOutcome::Success(ref mut response) => {
+                let verify_result = self.response_processor.verify_response(response, &self.dsperse).await;
+                let verified = matches!(verify_result, Ok(true));
+                response.verification_result = verified;
+
+                if verified {
+                    let elapsed = response.response_time;
+                    let verification_time = response.verification_time.unwrap_or(0.0);
+
+                    self.performance_tracker
+                        .record(uid, true, elapsed, was_at_capacity);
+                    let previous_score = self.score_manager.get_score(uid);
+                    self.score_manager
+                        .update_score(uid, true, elapsed, 120.0, 0.0);
+                    metrics::record_response(true, elapsed);
+
+                    let n = self.config.metagraph.n.max(1) as f64;
+                    self.pow_manager.push(PowItem {
+                        miner_uid: uid,
+                        validator_uid: self.config.user_uid,
+                        verified: true,
+                        response_time: elapsed,
+                        proof_size: response.proof_size as u64,
+                        previous_score,
+                        maximum_score: 1.0 / n,
+                        maximum_response_time: 120.0,
+                        minimum_response_time: 0.0,
+                        block_number: 0,
+                    });
+
+                    info!(uid = uid, elapsed = format!("{elapsed:.3}s"), rtype = %request_type, "proof verified");
+
+                    if request_type == RequestType::DSlice {
+                        self.handle_dslice_success(
+                            &run_uid,
+                            &slice_num,
+                            is_tile,
+                            task_id.as_deref(),
+                            tile_idx,
+                            response,
+                            verification_time,
+                        )
+                        .await;
+                    }
+
+                    if let Some(req_id) = &external_request_hash {
+                        self.relay
+                            .send_response(
+                                req_id,
+                                serde_json::json!({
+                                    "success": true,
+                                    "proof": response.proof_content,
+                                    "public_signals": response.public_json,
+                                }),
+                            )
+                            .await;
+                    }
+                    None
+                } else {
+                    let reason = match verify_result {
+                        Ok(false) => "verification failed".to_string(),
+                        Err(e) => e.to_string(),
+                        _ => unreachable!(),
+                    };
+                    Some(reason)
+                }
+            }
+            TaskOutcome::Failure(ref e) => Some(e.clone()),
+        };
+
+        if let Some(reason) = failed {
+            self.handle_failure(
+                uid,
+                request_type,
+                retry_count,
+                retry_payload,
+                &run_uid,
+                &slice_num,
+                is_tile,
+                task_id.as_deref(),
+                tile_idx,
+                external_request_hash.as_deref(),
+                &reason,
+            )
+            .await;
+        }
+
+        if let Some(hash) = &guard_hash {
+            if !hash.is_empty() {
+                self.pipeline.release_hash(hash);
+            }
+        }
+    }
+
+    async fn handle_dslice_success(
+        &mut self,
+        run_uid: &Option<String>,
+        slice_num: &Option<String>,
+        is_tile: bool,
+        task_id: Option<&str>,
+        tile_idx: Option<u32>,
+        response: &MinerResponse,
+        verification_time: f64,
+    ) {
+        let run_uid = match run_uid {
+            Some(r) => r.clone(),
+            None => return,
+        };
+        let slice_num = match slice_num {
+            Some(s) => s.clone(),
+            None => return,
+        };
+
+        let proof_str = response
+            .proof_content
+            .as_ref()
+            .and_then(|v| v.as_str());
+        let proof_system_str = response
+            .proof_system
+            .as_ref()
+            .map(|ps| ps.to_string());
+
+        let apply_result = if is_tile {
+            let tid = task_id.unwrap_or("");
+            let tidx = tile_idx.unwrap_or(0);
+            self.dsperse
+                .apply_tile_result(
+                    &run_uid,
+                    tid,
+                    &slice_num,
+                    tidx,
+                    true,
+                    response.computed_outputs.as_ref(),
+                    proof_str,
+                    response.witness.as_deref(),
+                    proof_system_str.as_deref(),
+                    response.response_time,
+                    verification_time,
+                )
+                .await
+        } else {
+            self.dsperse
+                .apply_slice_result(
+                    &run_uid,
+                    &slice_num,
+                    true,
+                    response.computed_outputs.as_ref(),
+                    proof_str,
+                    proof_system_str.as_deref(),
+                    response.response_time,
+                    verification_time,
+                )
+                .await
+        };
+
+        match apply_result {
+            Ok(status) => {
+                let is_complete = status
+                    .get("is_complete")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if is_complete {
+                    info!(run_uid = %run_uid, "incremental run complete");
+                    self.relay
+                        .set_request_result(
+                            &run_uid,
+                            serde_json::json!({"run_uid": run_uid, "status": "complete"}),
+                        )
+                        .await;
+                } else {
+                    self.enqueue_dsperse_work_from_status(&run_uid).await;
+                }
+            }
+            Err(e) => {
+                warn!(run_uid = %run_uid, error = %e, "failed to apply slice result");
+            }
+        }
+    }
+
+    async fn enqueue_dsperse_work_from_status(&mut self, run_uid: &str) {
+        match self.dsperse.get_run_status(run_uid).await {
+            Ok(status) => {
+                let circuit_id = status
+                    .get("circuit_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                if let Some(circuit) = self.circuit_store.get_circuit(circuit_id).cloned() {
+                    self.enqueue_dsperse_work(run_uid, &circuit).await;
+                }
+            }
+            Err(e) => {
+                warn!(run_uid = %run_uid, error = %e, "failed to get run status for re-enqueue");
+            }
+        }
+    }
+
+    async fn handle_failure(
+        &mut self,
+        uid: u16,
+        request_type: RequestType,
+        retry_count: u32,
+        retry_payload: RetryPayload,
+        run_uid: &Option<String>,
+        slice_num: &Option<String>,
+        is_tile: bool,
+        task_id: Option<&str>,
+        tile_idx: Option<u32>,
+        external_request_hash: Option<&str>,
+        reason: &str,
+    ) {
+        warn!(uid = uid, rtype = %request_type, retry = retry_count, error = reason, "miner query failed");
+
+        self.performance_tracker.record_reschedule(uid);
+
+        let elapsed = 0.0;
+        self.score_manager
+            .update_score(uid, false, elapsed, 120.0, 0.0);
+        metrics::record_response(false, elapsed);
+
+        let max_retries = match (&request_type, &retry_payload) {
+            (RequestType::DSlice, RetryPayload::DSlice(d)) if d.run_source == RunSource::Api => {
+                MAX_API_RETRIES
+            }
+            (RequestType::DSlice, _) => MAX_SLICE_RETRIES,
+            _ => MAX_API_RETRIES,
+        };
+
+        let next_retry = retry_count + 1;
+
+        if next_retry <= max_retries {
+            match retry_payload {
+                RetryPayload::Rwr(mut rwr) => {
+                    rwr.retry_count = next_retry;
+                    self.rwr_queue.push_back(rwr);
+                    self.dispatch_notify.notify_one();
+                }
+                RetryPayload::DSlice(mut dslice) => {
+                    dslice.retry_count = next_retry;
+                    match dslice.run_source {
+                        RunSource::Api => self.api_dslice_queue.push_back(dslice),
+                        RunSource::Benchmark => self.stacked_dslice_queue.push_back(dslice),
+                    }
+                    self.dispatch_notify.notify_one();
+                }
+                RetryPayload::None => {}
+            }
+            return;
+        }
+
+        if request_type == RequestType::DSlice {
+            if let Some(run_uid) = run_uid {
+                let slice = slice_num.as_deref().unwrap_or("0");
+
+                if is_tile {
+                    let tid = task_id.unwrap_or("");
+                    let tidx = tile_idx.unwrap_or(0);
+                    let _ = self
+                        .dsperse
+                        .apply_tile_result(
+                            run_uid, tid, slice, tidx, false, None, None, None,
+                            None, 0.0, 0.0,
+                        )
+                        .await;
+                } else {
+                    let _ = self
+                        .dsperse
+                        .apply_slice_result(run_uid, slice, false, None, None, None, 0.0, 0.0)
+                        .await;
+                }
+
+                self.relay.remove_pending(run_uid).await;
+            }
+        }
+
+        if let Some(req_id) = external_request_hash {
+            self.relay
+                .send_response(
+                    req_id,
+                    serde_json::json!({
+                        "success": false,
+                        "error": "max retries exceeded",
+                    }),
+                )
+                .await;
+        }
+    }
+
+    async fn attempt_local_prove_fallback(&self, run_uid: &str, slice_num: &str) {
+        match self
+            .dsperse
+            .prove_slice(run_uid, slice_num, &serde_json::Value::Null, None, "JSTPROVE")
+            .await
+        {
+            Ok(_) => {
+                info!(run_uid = %run_uid, slice = slice_num, "local prove fallback succeeded");
+            }
+            Err(e) => {
+                warn!(run_uid = %run_uid, slice = slice_num, error = %e, "local prove fallback failed");
+            }
+        }
+    }
+
+    async fn run_periodic_tasks(&mut self) -> Result<()> {
+        let now = Instant::now();
+
+        if now.duration_since(self.last_metagraph_sync) > Duration::from_secs(3600) {
+            self.sync_metagraph().await?;
+            self.last_metagraph_sync = now;
+        }
+
+        if now.duration_since(self.last_weight_update) > Duration::from_secs(WEIGHT_RATE_LIMIT) {
+            self.update_weights().await?;
+            self.last_weight_update = now;
+        }
+
+        if now.duration_since(self.last_score_save) > Duration::from_secs(300) {
+            if let Err(e) = self.score_manager.save() {
+                warn!(error = %e, "saving scores");
+            }
+            self.last_score_save = now;
+        }
+
+        if now.duration_since(self.last_circuit_refresh)
+            > Duration::from_secs(CircuitStore::REFRESH_INTERVAL)
+        {
+            if let Err(e) = self.circuit_store.refresh_circuits().await {
+                warn!(error = %e, "refreshing circuits");
+            }
+            self.last_circuit_refresh = now;
+        }
+
+        if now.duration_since(self.last_perf_save) > Duration::from_secs(300) {
+            self.performance_tracker.save();
+            self.last_perf_save = now;
+        }
+
+        if self.api_dslice_queue.is_empty() && self.stacked_dslice_queue.is_empty() {
+            self.replenish_dslice_queues().await;
+        }
+
+        if now.duration_since(self.last_health_log) > Duration::from_secs(15) {
+            info!(
+                active_tasks = self.tasks.len(),
+                rwr_queue = self.rwr_queue.len(),
+                api_dslice_queue = self.api_dslice_queue.len(),
+                stacked_dslice_queue = self.stacked_dslice_queue.len(),
+                "health"
+            );
+            self.last_health_log = now;
+        }
+
+        Ok(())
+    }
+
+    async fn sync_metagraph(&mut self) -> Result<()> {
+        self.config
+            .metagraph
+            .sync(&self.config.chain_client)
+            .await
+            .context("metagraph sync")?;
+
+        let uids = self.config.metagraph.uids();
+        self.score_manager.sync_uids(&uids);
+
+        for neuron in self.config.metagraph.active_neurons() {
+            if let Some(prev_hotkey) = self.uid_hotkeys.get(&neuron.uid) {
+                if *prev_hotkey != neuron.hotkey {
+                    info!(uid = neuron.uid, "hotkey changed, resetting performance");
+                    self.performance_tracker.reset_uid(neuron.uid);
+                    self.score_manager.update_score(neuron.uid, false, 0.0, 0.0, 0.0);
+                }
+            }
+            self.uid_hotkeys.insert(neuron.uid, neuron.hotkey.clone());
+        }
+
+        metrics::set_metagraph_n(self.config.metagraph.n);
+        info!(n = self.config.metagraph.n, "metagraph synced");
+
+        let quic_miners: Vec<QuicAxonInfo> = self
+            .config
+            .metagraph
+            .active_neurons()
+            .filter(|n| n.axon_protocol > 0 && !n.axon_ip.is_empty())
+            .map(|n| QuicAxonInfo {
+                hotkey: n.hotkey.clone(),
+                ip: n.axon_ip.clone(),
+                port: n.axon_port,
+                protocol: n.axon_protocol,
+                placeholder1: 0,
+                placeholder2: 0,
+            })
+            .collect();
+
+        if !quic_miners.is_empty() {
+            let mut client = self.miner_client.write().await;
+            if let Err(e) = client
+                .lightning_mut()
+                .update_miner_registry(quic_miners)
+                .await
+            {
+                warn!(error = %e, "updating QUIC miner connections");
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn update_weights(&mut self) -> Result<()> {
+        let blocks_since = self
+            .weights_setter
+            .blocks_since_last_update(&self.config.chain_client, self.config.user_uid)
+            .await?;
+
+        if blocks_since < WEIGHT_RATE_LIMIT {
+            return Ok(());
+        }
+
+        let uids = self.config.metagraph.uids();
+        let snap = self.performance_tracker.throughput_snapshot();
+
+        let tracked: Vec<_> = snap
+            .iter()
+            .filter(|(_, (_, _, count))| *count >= PERFORMANCE_MIN_SAMPLES)
+            .collect();
+        if !tracked.is_empty() {
+            let mut top: Vec<_> = tracked
+                .iter()
+                .map(|(&uid, &(rate, cap, _))| (uid, rate, cap, rate * cap as f64))
+                .collect();
+            top.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+            top.truncate(5);
+            let adaptive_to = self.performance_tracker.adaptive_timeout();
+            info!(
+                tracked = tracked.len(),
+                adaptive_timeout = format!("{adaptive_to:.1}s"),
+                top5 = ?top.iter().map(|(uid, r, c, t)| format!("uid={uid} rate={r:.2} cap={c} tput={t:.2}")).collect::<Vec<_>>(),
+                "throughput scoring"
+            );
+        }
+
+        let owner_uid = Some(14u16);
+        let (weight_uids, weights) =
+            self.score_manager
+                .compute_throughput_weights(&uids, &snap, owner_uid);
+
+        if weights.iter().all(|&w| w == 0) {
+            info!("no weights to set, skipping");
+            return Ok(());
+        }
+
+        self.weights_setter
+            .set_weights(
+                &self.config.chain_client,
+                &self.config.wallet,
+                &weight_uids,
+                &weights,
+                WEIGHTS_VERSION,
+            )
+            .await
+            .context("setting weights on chain")?;
+
+        self.performance_tracker.save();
+        metrics::record_weight_update();
+        info!(uids = weight_uids.len(), "weights updated on chain");
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) {
+        info!("saving state before shutdown");
+        self.tasks.shutdown().await;
+        self.pipeline.clear_guard();
+        if let Err(e) = self.score_manager.save() {
+            error!(error = %e, "saving scores during shutdown");
+        }
+        self.performance_tracker.save();
+    }
+}
+
+fn is_valid_ip(ip_str: &str) -> bool {
+    let addr: Ipv4Addr = match ip_str.parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let octets = addr.octets();
+    if octets[0] == 0 || octets[0] == 127 {
+        return false;
+    }
+    if octets[0] == 10 {
+        return false;
+    }
+    if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+        return false;
+    }
+    if octets[0] == 192 && octets[1] == 168 {
+        return false;
+    }
+    if octets[0] == 169 && octets[1] == 254 {
+        return false;
+    }
+    if addr == Ipv4Addr::BROADCAST {
+        return false;
+    }
+    if octets[0] >= 224 && octets[0] <= 239 {
+        return false;
+    }
+    true
+}

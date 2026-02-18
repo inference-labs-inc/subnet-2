@@ -1,0 +1,30 @@
+[package]
+name = "sn2-miner"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "sn2-miner"
+path = "src/main.rs"
+
+[dependencies]
+sn2-types = { workspace = true }
+sn2-chain = { workspace = true }
+btlightning = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+axum = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+sp-core = { workspace = true }
+hex = { workspace = true }
+subxt = { workspace = true }
+async-trait = "0.1"

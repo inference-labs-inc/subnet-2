@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "crates/sn2-types",
+    "crates/sn2-chain",
+    "crates/sn2-verify",
+    "crates/sn2-validator",
+    "crates/sn2-miner",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/inference-labs-inc/subnet-2"
+
+[workspace.dependencies]
+sn2-types = { path = "crates/sn2-types" }
+sn2-chain = { path = "crates/sn2-chain" }
+sn2-verify = { path = "crates/sn2-verify" }
+
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+axum = "0.7"
+rmp-serde = "1"
+hex = "0.4"
+num-bigint = "0.4"
+num-traits = "0.2"
+num-integer = "0.1"
+tempfile = "3"
+zstd = "0.13"
+which = "7"
+sp-core = "31"
+subxt = "0.37"
+btlightning = "0.1.0"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+aws-sdk-s3 = "1"
+metrics = "0.23"
+metrics-exporter-prometheus = "0.15"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+sha2 = "0.10"
