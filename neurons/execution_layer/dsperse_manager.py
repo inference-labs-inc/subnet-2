@@ -346,6 +346,9 @@ class DSperseManager:
         def _do_transition():
             started = False
             try:
+                with self._incremental_runs_lock:
+                    if run_uid not in self._incremental_runs:
+                        return
                 lock = self._get_run_lock(run_uid)
                 with lock:
                     with self._incremental_runs_lock:
