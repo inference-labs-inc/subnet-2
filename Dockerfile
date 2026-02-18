@@ -20,6 +20,7 @@ RUN apt update && \
     gosu \
     libopenmpi-dev \
     openmpi-bin \
+    time \
     && apt clean && rm -rf /var/lib/apt/lists/*
 
 ENV UV_PYTHON_INSTALL_DIR=/opt/python
