@@ -51,23 +51,20 @@ Alternatively, use Docker — no Rust toolchain needed. See the [Docker instruct
 
 ### Install from pre-built binary
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/inference-labs-inc/subnet-2/releases):
-
-**Linux (x86_64):**
+Automatically detects your platform, downloads the latest release, verifies the SHA256 checksum, and installs to `/usr/local/bin`:
 
 ```console
-curl -L -o sn2-miner https://github.com/inference-labs-inc/subnet-2/releases/latest/download/sn2-miner-linux-x86_64
-curl -L -o sn2-validator https://github.com/inference-labs-inc/subnet-2/releases/latest/download/sn2-validator-linux-x86_64
-chmod +x sn2-miner sn2-validator
+curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/testnet/install.sh | bash
 ```
 
-**macOS (Apple Silicon):**
+To install only the miner or validator:
 
 ```console
-curl -L -o sn2-miner https://github.com/inference-labs-inc/subnet-2/releases/latest/download/sn2-miner-macos-aarch64
-curl -L -o sn2-validator https://github.com/inference-labs-inc/subnet-2/releases/latest/download/sn2-validator-macos-aarch64
-chmod +x sn2-miner sn2-validator
+curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/testnet/install.sh | bash -s -- sn2-miner
+curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/testnet/install.sh | bash -s -- sn2-validator
 ```
+
+Or download manually from [GitHub Releases](https://github.com/inference-labs-inc/subnet-2/releases).
 
 ### Build from source
 
