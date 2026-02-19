@@ -41,9 +41,8 @@ impl Registration {
         };
 
         let hotkey_bytes = wallet.hotkey_public_bytes()?;
-        let coldkey_bytes =
-            sp_core::crypto::AccountId32::from_ss58check(wallet.coldkey_ss58())
-                .map_err(|e| anyhow::anyhow!("invalid coldkey SS58: {:?}", e))?;
+        let coldkey_bytes = sp_core::crypto::AccountId32::from_ss58check(wallet.coldkey_ss58())
+            .map_err(|e| anyhow::anyhow!("invalid coldkey SS58: {:?}", e))?;
 
         let tx = subxt::dynamic::tx(
             "SubtensorModule",

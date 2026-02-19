@@ -40,9 +40,7 @@ impl Wallet {
             coldkey_ss58,
             name: name.to_string(),
             hotkey_name: hotkey_name.to_string(),
-            wallet_path: wallet_path
-                .unwrap_or("~/.bittensor/wallets")
-                .to_string(),
+            wallet_path: wallet_path.unwrap_or("~/.bittensor/wallets").to_string(),
         })
     }
 

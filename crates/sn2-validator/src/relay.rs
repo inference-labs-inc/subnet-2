@@ -195,11 +195,7 @@ impl RelayManager {
         }
     }
 
-    async fn authenticate<S, R>(
-        read: &mut R,
-        write: &mut S,
-        wallet: &Wallet,
-    ) -> Result<()>
+    async fn authenticate<S, R>(read: &mut R, write: &mut S, wallet: &Wallet) -> Result<()>
     where
         S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
         R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>

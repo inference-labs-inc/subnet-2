@@ -179,9 +179,7 @@ impl ValidatorLoop {
         let performance_tracker = PerformanceTracker::new_with_persistence(perf_path);
         let weights_setter = WeightsSetter::new(config.netuid);
 
-        let miner_client = Arc::new(RwLock::new(MinerQueryClient::new(
-            config.wallet.clone(),
-        )?));
+        let miner_client = Arc::new(RwLock::new(MinerQueryClient::new(config.wallet.clone())?));
 
         let (dsperse_tx, dsperse_rx) = tokio::sync::mpsc::channel::<DsperseSubmission>(256);
         let (rwr_tx, rwr_rx) = tokio::sync::mpsc::channel::<RwrSubmission>(256);
