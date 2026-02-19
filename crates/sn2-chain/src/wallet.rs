@@ -90,6 +90,11 @@ impl Wallet {
             .private_key()
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .context("no private key")?;
+        anyhow::ensure!(
+            private.len() >= 32,
+            "private key too short ({} bytes)",
+            private.len()
+        );
         let mut seed = [0u8; 32];
         seed.copy_from_slice(&private[..32]);
         Ok(seed)

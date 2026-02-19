@@ -7,7 +7,7 @@ on:
     types: [labeled]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-linux:
@@ -28,7 +28,7 @@ jobs:
       - name: Build release binaries
         run: |
           source "$HOME/.cargo/env"
-          cargo build --release --bin sn2-validator --bin sn2-miner
+          cargo build --release --locked --bin sn2-validator --bin sn2-miner
         env:
           PYO3_PYTHON: /usr/bin/python3.12
 
@@ -59,7 +59,7 @@ jobs:
         run: brew install protobuf
 
       - name: Build release binaries
-        run: cargo build --release --bin sn2-validator --bin sn2-miner
+        run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
 
       - name: Rename binaries
         run: |
@@ -78,6 +78,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v5
         with:

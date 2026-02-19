@@ -128,6 +128,7 @@ test-validator: check-extra-args
 		$(ARGS)
 
 pm2-miner: cargo-build check-extra-args
+	pm2 delete subnet-2-miner || true
 	pm2 start target/release/sn2-miner --name subnet-2-miner --kill-timeout 3000 -- \
 	--wallet-path $(WALLET_PATH)/wallets \
 	--wallet-name $(WALLET_NAME) \
@@ -136,6 +137,7 @@ pm2-miner: cargo-build check-extra-args
 	$(ARGS)
 
 pm2-validator: cargo-build check-extra-args
+	pm2 delete subnet-2-validator || true
 	pm2 start target/release/sn2-validator --name subnet-2-validator --kill-timeout 3000 -- \
 	--wallet-path $(WALLET_PATH)/wallets \
 	--wallet-name $(WALLET_NAME) \

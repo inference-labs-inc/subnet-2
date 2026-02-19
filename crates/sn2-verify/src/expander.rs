@@ -52,7 +52,7 @@ pub async fn run_expander_verify(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .context("spawning expander-exec")?;
+        .with_context(|| format!("spawning {}", binary.display()))?;
 
     let output = tokio::time::timeout(TIMEOUT, child.wait_with_output())
         .await

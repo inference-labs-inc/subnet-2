@@ -42,6 +42,8 @@ async fn main() -> Result<()> {
         .await
         .context("building validator config")?;
 
-    let mut validator = validator_loop::ValidatorLoop::new(config).await?;
+    let mut validator = validator_loop::ValidatorLoop::new(config)
+        .await
+        .context("building validator loop")?;
     validator.run().await
 }
