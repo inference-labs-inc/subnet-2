@@ -1,56 +1,39 @@
 # Versioning and Auto-Update
 
-> [!NOTE]
-> Semantic Versioning was adopted by Subnet 2 starting from version 1.0.0.
-
-This project uses Semantic Versioning (SemVer) for version numbering and includes an auto-update feature to ensure users are running the latest version.
-
 ## Semantic Versioning
 
-We follow the Semantic Versioning 2.0.0 specification (https://semver.org/). Our version numbers take the form of MAJOR.MINOR.PATCH, where:
+This project uses [Semantic Versioning 2.0.0](https://semver.org/). Version numbers take the form `MAJOR.MINOR.PATCH`:
 
-1. MAJOR version increments indicate incompatible API changes
-2. MINOR version increments indicate new functionality in a backwards-compatible manner
-3. PATCH version increments indicate backwards-compatible bug fixes
+1. **MAJOR** — incompatible API changes
+2. **MINOR** — backwards-compatible new functionality
+3. **PATCH** — backwards-compatible fixes
 
-## Auto-Update Feature
+The workspace version is defined in the root `Cargo.toml` under `[workspace.package].version` and shared across all crates.
 
-The project includes an auto-update utility (`AutoUpdate` class in `neurons/utils.py`) that performs the following tasks:
+## Auto-Update
 
-1. Checks the remote repository for a newer version
-2. Compares the remote version with the local version
-3. Automatically updates the local repository if a newer version is available
-4. Handles potential merge conflicts
-5. Updates package dependencies if necessary
+Both `sn2-miner` and `sn2-validator` include a built-in auto-update mechanism (`sn2_chain::auto_update`). On startup (unless `--no-auto-update` is passed), a background task:
 
-### Version Checking
+1. Polls the [GitHub releases API](https://github.com/inference-labs-inc/subnet-2/releases) every 5 minutes
+2. Compares the latest release tag against the compiled-in version
+3. Downloads the matching platform binary (`linux-x86_64` or `macos-aarch64`) and `SHA256SUMS`
+4. Verifies the SHA256 checksum of the downloaded binary
+5. Atomically replaces the running binary via same-filesystem rename
+6. Exits with code 0 so PM2 restarts with the new version
 
-The auto-update feature compares the `__version__` string in the local and remote `neurons/__init__.py` files. It converts these version strings to integers for comparison (e.g., "1.2.3" becomes 123).
+All errors during update are logged as warnings — the running binary is never interrupted on failure.
 
-### Update Process
+### Disabling auto-update
 
-If a newer version is detected, the auto-update feature:
-
-1. Pulls the latest changes from the remote repository
-2. Attempts to resolve any merge conflicts automatically
-3. Updates package dependencies if the `requirements.txt` file has changed
-4. Restarts the application to apply the updates
-
-## Manual Updates
-
-While the auto-update feature is designed to keep the application up-to-date automatically, users can also perform manual updates by pulling the latest changes from the repository and updating their dependencies.
-
-```bash
-git fetch origin
-git checkout main
-git pull origin main
-pip install -r requirements.txt
-pm2 restart all
+```console
+sn2-miner --no-auto-update ...
+sn2-validator --no-auto-update ...
 ```
+
+## Release Process
+
+Releases are triggered by pushing a semver tag (e.g. `0.2.0`) to the repository. The [release workflow](../.github/workflows/release.yml) builds binaries for `linux-x86_64` and `macos-aarch64`, generates a `SHA256SUMS` file, and creates a GitHub Release with all assets attached.
 
 ## Version History
 
-For a detailed changelog of version updates, please refer to [the releases section of the repository] or [release notes on Subnet 2's GitBook].
-
-[the releases section of the repository](https://github.com/inference-labs-inc/subne-2t/releases)
-[release notes on Subnet 2's GitBook](https://sn2-docs.inferencelabs.com/release-notes)
+See the [releases page](https://github.com/inference-labs-inc/subnet-2/releases) for a full changelog.

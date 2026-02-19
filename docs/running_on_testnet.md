@@ -6,41 +6,40 @@
 
 ## Setup
 
-Please find relevant setup documentation over in the [`shared_setup_steps.md`] file. These steps will prepare the miner and validator for use in the following steps.
+Complete the prerequisite steps in [`shared_setup_steps.md`] before proceeding.
 
 ## Mining
 
-Run the following command to start a miner on testnet
-
 ```console
-cd neurons
-pm2 start miner.py --name miner --interpreter ../.venv/bin/python -- \
---netuid 118 \
---wallet.name {your_miner_key_name} \
---wallet.hotkey {your_miner_hotkey_name} \
---subtensor.network test
+make pm2-miner WALLET_NAME={your_miner_key_name} WALLET_HOTKEY={your_miner_hotkey_name} NETUID=118 ARGS="--network test"
 ```
 
-Or run this command with `make pm2-test-miner WALLET_NAME={your_miner_key_name} HOTKEY_NAME={your_miner_hotkey_name}`
+Or directly:
 
-[View all acceptable CLI arguments →]
+```console
+pm2 start target/release/sn2-miner --name subnet-2-miner --kill-timeout 3000 -- \
+  --wallet-name {your_miner_key_name} \
+  --wallet-hotkey {your_miner_hotkey_name} \
+  --netuid 118 \
+  --network test
+```
 
 ## Validating
 
-Run the following command to start a validator on testnet
-
 ```console
-cd neurons
-pm2 start validator.py --name validator --interpreter ../.venv/bin/python -- \
---netuid 118 \
---wallet.name {your_validator_key_name} \
---wallet.hotkey {your_validator_hotkey_name} \
---subtensor.network test
+make pm2-validator WALLET_NAME={validator_key_name} WALLET_HOTKEY={validator_hotkey_name} NETUID=118 ARGS="--network test"
 ```
 
-Or run this command with `make pm2-test-validator WALLET_NAME={validator_key_name} HOTKEY_NAME={validator_hot_key_name}`
+Or directly:
 
-[View all acceptable CLI arguments →]
+```console
+pm2 start target/release/sn2-validator --name subnet-2-validator --kill-timeout 3000 -- \
+  --wallet-name {validator_key_name} \
+  --wallet-hotkey {validator_hotkey_name} \
+  --netuid 118 \
+  --network test
+```
 
-[View all acceptable CLI arguments →]: ./command_line_arguments.md
+[View all CLI arguments →](./command_line_arguments.md)
+
 [`shared_setup_steps.md`]: ./shared_setup_steps.md

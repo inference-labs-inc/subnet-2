@@ -5,7 +5,7 @@
 > [!WARNING] > **Port Conflicts**
 > By default, both prometheus server and the validator prometheus exporter use port 9090. If installing on the same machine, you must either:
 >
-> - Change the validator exporter port: `--prometheus-port <port>`
+> - Change the validator exporter port: `--metrics-port <port>`
 > - Change the prometheus server port: `--web.listen-address=:<port>`
 
 ## Installation Options
@@ -17,12 +17,9 @@ Choose one of two approaches:
 
 ## Manual Installation
 
-Our application provides the ability for validators to analyze some metrics with Prometheus. Validation metrics such as validation time, request times, proof sizes, ratio of verified results, and response times are served by default on port `9090`. Follow these step-by-step instructions to set up a basic Grafana UI for Prometheus metrics exposed by the validator instance.
+The validator exposes Prometheus metrics on port `9090` by default (configurable via `--metrics-port`). Follow these step-by-step instructions to set up a basic Grafana UI for Prometheus metrics exposed by the validator instance.
 
-For enabling metrics serving add `--prometheus-monitoring` flag to the validator command line.
-For changing the port of the metrics server add `--prometheus-port {port_number}` flag to the validator command line.
-
-Take a note by default Prometheus and validator data source use the same port. So in case you want to install Prometheus to the same machine as the validator, you need to change the port of the validator metrics server (with `--prometheus-port {port_number}` flag) or for Prometheus itself (with `--web.listen-address=:{port_number}` flag).
+By default Prometheus and the validator metrics exporter use the same port. If installing Prometheus on the same machine as the validator, change either the validator metrics port (with `--metrics-port {port_number}`) or the Prometheus server port (with `--web.listen-address=:{port_number}`).
 
 ### Step 1: Install Prometheus
 

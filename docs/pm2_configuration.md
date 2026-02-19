@@ -1,36 +1,41 @@
 # PM2 Configuration
 
-> [!NOTE]
-> Setting up a PM2 configuration file is completely optional. By default, all documentation assumes running subnet 2 without a configuration file.
-
-To simplify the process of running miners and validators, we offer a template PM2 file at `ecosystem.config.tmpl.js`. This file can be modified and copied into a `ecosystem.config.js` for convenient use when starting a miner or validator.
-
-## 1. Copy the template file
-
-Use the below command to copy the template file into a new file called `ecosystem.config.js`.
+The recommended way to run miner and validator processes is via the makefile targets, which handle building and PM2 process management:
 
 ```console
-cp ecosystem.config.tmpl.js ecosystem.config.js
+make pm2-miner WALLET_NAME={name} WALLET_HOTKEY={hotkey}
+make pm2-validator WALLET_NAME={name} WALLET_HOTKEY={hotkey}
 ```
 
-## 2. Modify the ecosystem file with your configuration
+These targets build the release binaries, remove any existing PM2 process with the same name, and start a new one with a 3-second kill timeout.
 
-Comments are provided within the ecosystem file which outline relevant fields which need to be updated with values unique to your configuration. We also provide a full list of valid command line arguments in the [Command Line Arguments](./command_line_arguments.md) section.
+## Custom PM2 configuration
 
-You can edit the file in any text editor of your choice.
-
-## 3. Start your miner or validator
-
-Once your miner or validator is configured, use the following commands to easily start them.
-
-### Miner
+For more control, start the binaries directly with PM2:
 
 ```console
-pm2 start ecosystem.config.js --only miner
+pm2 start target/release/sn2-miner \
+  --name subnet-2-miner \
+  --kill-timeout 3000 \
+  -- \
+  --wallet-name {name} \
+  --wallet-hotkey {hotkey} \
+  --netuid 2
 ```
 
-### Validator
+Additional flags can be appended after the `--` separator. See [Command Line Arguments](./command_line_arguments.md) for the full list.
 
-```console
-pm2 start ecosystem.config.js --only validator
-```
+## Useful PM2 commands
+
+| Command | Description |
+|---------|-------------|
+| `pm2 status` | List running processes |
+| `pm2 logs subnet-2-miner` | Stream miner logs |
+| `pm2 logs subnet-2-validator` | Stream validator logs |
+| `pm2 monit` | Interactive process monitor |
+| `pm2 stop subnet-2-miner` | Stop the miner |
+| `pm2 restart subnet-2-validator` | Restart the validator |
+
+## Auto-update interaction
+
+The binaries include a built-in auto-update mechanism that replaces the binary on disk and exits with code 0. PM2 will automatically restart the process with the new binary. If you prefer to manage updates manually, pass `--no-auto-update` to disable this behavior.
