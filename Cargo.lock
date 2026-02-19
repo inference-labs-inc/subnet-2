@@ -1302,7 +1302,7 @@ dependencies = [
 [[package]]
 name = "btlightning"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/lightning?rev=549d44d9affe1a08c4c0531e8810a153831e8c19#549d44d9affe1a08c4c0531e8810a153831e8c19"
+source = "git+https://github.com/inference-labs-inc/lightning?rev=9b85556ee83cbc822094f6cf1f2cc271e6ca7ce3#9b85556ee83cbc822094f6cf1f2cc271e6ca7ce3"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
