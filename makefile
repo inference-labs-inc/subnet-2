@@ -11,7 +11,7 @@ endif
 MINER_PORT ?= 8091
 VALIDATOR_PORT ?= 8443
 
-.PHONY: setup build cargo-build check clippy test fmt stop clean miner-logs validator-logs miner validator test-miner test-validator check-extra-args pm2-miner pm2-validator pm2-stop
+.PHONY: setup build cargo-build check clippy test fmt fmt-check stop clean miner-logs validator-logs miner validator test-miner test-validator check-extra-args pm2-miner pm2-validator pm2-stop
 
 setup:
 	git config core.hooksPath .githooks
@@ -20,7 +20,7 @@ build:
 	docker build -t subnet-2 -f Dockerfile .
 
 cargo-build:
-	cargo build --release --bin sn2-validator --bin sn2-miner
+	cargo build --release --locked --bin sn2-validator --bin sn2-miner
 
 check:
 	cargo check --workspace
@@ -32,6 +32,9 @@ test:
 	cargo test --workspace
 
 fmt:
+	cargo fmt --all
+
+fmt-check:
 	cargo fmt --all -- --check
 
 stop:

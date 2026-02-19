@@ -78,28 +78,6 @@ impl Wallet {
         Ok(arr)
     }
 
-    pub fn hotkey_seed(&self) -> Result<[u8; 32]> {
-        if let Some(seed) = self.hotkey.seed_hex() {
-            let arr: [u8; 32] = seed
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("seed not 32 bytes"))?;
-            return Ok(arr);
-        }
-        let private = self
-            .hotkey
-            .private_key()
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .context("no private key")?;
-        anyhow::ensure!(
-            private.len() >= 32,
-            "private key too short ({} bytes)",
-            private.len()
-        );
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&private[..32]);
-        Ok(seed)
-    }
-
     pub(crate) fn hotkey_account_id(&self) -> Result<subxt::utils::AccountId32> {
         let bytes = self.hotkey_public_bytes()?;
         Ok(subxt::utils::AccountId32::from(bytes))

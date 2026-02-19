@@ -68,9 +68,13 @@ impl MinerQueryClient {
         data: HashMap<String, serde_json::Value>,
         timeout_secs: f64,
     ) -> Result<(serde_json::Value, f64)> {
+        let rmpv_data: HashMap<String, rmpv::Value> = data
+            .into_iter()
+            .filter_map(|(k, v)| rmpv::ext::to_value(v).ok().map(|rv| (k, rv)))
+            .collect();
         let request = QuicRequest {
             synapse_type: synapse_type.to_string(),
-            data,
+            data: rmpv_data,
         };
 
         let start = Instant::now();
@@ -87,8 +91,12 @@ impl MinerQueryClient {
             anyhow::bail!("QUIC query failed");
         }
 
-        let body = serde_json::to_value(&response.data)?;
-        Ok((body, elapsed))
+        let json_map: serde_json::Map<String, serde_json::Value> = response
+            .data
+            .into_iter()
+            .filter_map(|(k, v)| serde_json::to_value(v).ok().map(|jv| (k, jv)))
+            .collect();
+        Ok((serde_json::Value::Object(json_map), elapsed))
     }
 
     pub async fn query_miner_http(

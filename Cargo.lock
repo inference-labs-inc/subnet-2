@@ -1301,22 +1301,23 @@ dependencies = [
 
 [[package]]
 name = "btlightning"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e6855ded54e61db033e1e1c9c814cfa424f08861809b9059afbcac02454c81f"
+version = "0.1.0"
+source = "git+https://github.com/inference-labs-inc/lightning?rev=aa91070b6e3db517ef3324528b13b1922d586b20#aa91070b6e3db517ef3324528b13b1922d586b20"
 dependencies = [
+ "async-trait",
  "base64 0.21.7",
+ "bittensor_wallet",
  "quinn 0.10.2",
+ "rand 0.8.5",
  "rcgen",
+ "rmp-serde",
+ "rmpv",
  "rustls 0.21.12",
- "rustls-pemfile 1.0.4",
  "serde",
- "serde_json",
- "socket2 0.5.10",
+ "serde_bytes",
  "sp-core 21.0.0",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -5150,6 +5151,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmpv"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a4e1d4b9b938a26d2996af33229f0ca0956c652c1375067f0b45291c1df8417"
+dependencies = [
+ "rmp",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "rpassword"
 version = "7.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6141,6 +6153,7 @@ dependencies = [
  "clap",
  "hex",
  "reqwest",
+ "rmpv",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -6178,6 +6191,7 @@ dependencies = [
  "rand 0.8.5",
  "reqwest",
  "rmp-serde",
+ "rmpv",
  "serde",
  "serde_json",
  "sha2 0.10.9",

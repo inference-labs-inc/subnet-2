@@ -18,8 +18,12 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&cli.log_level)),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::try_new(&cli.log_level).unwrap_or_else(|e| {
+                    eprintln!("invalid --log-level \"{}\": {e}", cli.log_level);
+                    std::process::exit(1);
+                })
+            }),
         )
         .init();
 
@@ -91,10 +95,14 @@ async fn main() -> Result<()> {
     let quic_handle = {
         let handlers = handlers.clone();
         let hotkey = wallet.hotkey_ss58().to_string();
-        let seed = wallet.hotkey_seed()?;
+        let w_name = wallet.name.clone();
+        let w_path = wallet.wallet_path.clone();
+        let w_hotkey = wallet.hotkey_name.clone();
         tokio::spawn(async move {
-            lightning_server::run_lightning_server(&hotkey, seed, "0.0.0.0", quic_port, handlers)
-                .await
+            lightning_server::run_lightning_server(
+                &hotkey, &w_name, &w_path, &w_hotkey, "0.0.0.0", quic_port, handlers,
+            )
+            .await
         })
     };
 
