@@ -8,9 +8,19 @@ For miners and validators.
 
 Download the latest release for your platform from [GitHub Releases](https://github.com/inference-labs-inc/subnet-2/releases). Binaries are available for `linux-x86_64` and `macos-aarch64`.
 
+**Linux (x86_64):**
+
 ```console
 curl -L -o sn2-miner https://github.com/inference-labs-inc/subnet-2/releases/latest/download/sn2-miner-linux-x86_64
 curl -L -o sn2-validator https://github.com/inference-labs-inc/subnet-2/releases/latest/download/sn2-validator-linux-x86_64
+chmod +x sn2-miner sn2-validator
+```
+
+**macOS (Apple Silicon):**
+
+```console
+curl -L -o sn2-miner https://github.com/inference-labs-inc/subnet-2/releases/latest/download/sn2-miner-macos-aarch64
+curl -L -o sn2-validator https://github.com/inference-labs-inc/subnet-2/releases/latest/download/sn2-validator-macos-aarch64
 chmod +x sn2-miner sn2-validator
 ```
 
@@ -56,7 +66,7 @@ btcli w new_hotkey
 ## 3. Register on the subnet
 
 > [!CAUTION]
-> When registering on a subnet, you are required to burn ('recycle') a dynamic amount of tao. This tao will not be refunded in the event that you are deregistered.
+> When registering on a subnet, you are required to burn ('recycle') a dynamic amount of tao. This tao will not be refunded if you are deregistered.
 
 Replace `default` values below with your wallet and hotkey names if they are not `default`.
 

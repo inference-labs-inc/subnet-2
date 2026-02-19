@@ -11,10 +11,10 @@ These targets build the release binaries, remove any existing PM2 process with t
 
 ## Custom PM2 configuration
 
-For more control, start the binaries directly with PM2:
+For more control, start the binaries directly with PM2. Use `target/release/sn2-miner` if you built from source, or `./sn2-miner` if you downloaded a pre-built binary:
 
 ```console
-pm2 start target/release/sn2-miner \
+pm2 start ./sn2-miner \
   --name subnet-2-miner \
   --kill-timeout 3000 \
   -- \

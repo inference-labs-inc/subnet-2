@@ -45,5 +45,5 @@ Tracing can be configured via the `RUST_LOG` environment variable, which takes p
 
 ```console
 RUST_LOG=debug sn2-validator --netuid 2
-RUST_LOG=sn2_validator=trace,sn2_chain=debug sn2-miner --netuid 2
+RUST_LOG=sn2_miner=trace,sn2_chain=debug sn2-miner --netuid 2
 ```
