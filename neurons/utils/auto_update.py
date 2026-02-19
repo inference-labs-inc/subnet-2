@@ -242,7 +242,7 @@ class AutoUpdate:
         for line in content.strip().splitlines():
             parts = line.split()
             if len(parts) == 2:
-                result[parts[1]] = parts[0]
+                result[os.path.basename(parts[1].lstrip("*"))] = parts[0]
         return result
 
     def _get_pm2_process_name(self) -> Optional[str]:
@@ -280,7 +280,7 @@ class AutoUpdate:
 
             if bare_arg in PYTHON_ONLY_VALUE_ARGS:
                 logging.info(f"Dropping Python-only arg: {bare_arg}")
-                if "=" not in arg and (i + 1) < len(argv):
+                if "=" not in arg and (i + 1) < len(argv) and not argv[i + 1].startswith("-"):
                     skip_next = True
                 continue
 
@@ -340,9 +340,11 @@ class AutoUpdate:
         if not self._download_file(sums_url, sums_path):
             return False
 
-        with open(sums_path, "r") as f:
-            checksums = self._parse_sha256sums(f.read())
-        os.unlink(sums_path)
+        try:
+            with open(sums_path, "r") as f:
+                checksums = self._parse_sha256sums(f.read())
+        finally:
+            os.unlink(sums_path)
 
         expected_hash = checksums.get(binary_name)
         if not expected_hash:
