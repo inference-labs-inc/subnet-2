@@ -98,7 +98,12 @@ impl MinerQueryClient {
         headers: &HashMap<String, String>,
         timeout_secs: f64,
     ) -> Result<(serde_json::Value, f64)> {
-        let url = format!("http://{}:{}/{}", ip, port, synapse_type);
+        let host = if ip.contains(':') {
+            format!("[{ip}]")
+        } else {
+            ip.to_string()
+        };
+        let url = format!("http://{}:{}/{}", host, port, synapse_type);
 
         let mut req = self
             .http

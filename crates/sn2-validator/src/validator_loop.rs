@@ -614,35 +614,31 @@ impl ValidatorLoop {
                 let task_proof_system: Option<ProofSystem>;
                 let retry_payload: RetryPayload;
 
-                if let Some(ref pow_circ) = pow_circuit {
-                    if self.pow_manager.should_batch() {
-                        let items = self.pow_manager.drain_batch();
-                        let inputs = PowManager::prepare_inputs(&items);
-                        request_type = RequestType::Rwr;
-                        external_request_hash = None;
-                        retry_count = 0;
-                        slice_num = None;
-                        run_uid = None;
-                        is_tile = false;
-                        task_id = None;
-                        tile_idx = None;
-                        synapse_name = ProofOfWeightsDataModel::NAME;
-                        body = serde_json::json!({
-                            "subnet_uid": self.config.netuid,
-                            "verification_key_hash": pow_circ.id,
-                            "proof_system": pow_circ.proof_system.to_string(),
-                            "inputs": inputs,
-                            "proof": "",
-                            "public_signals": "",
-                        });
-                        guard_hash = Some(String::new());
-                        task_circuit = Some(pow_circ.clone());
-                        task_inputs = None;
-                        task_proof_system = Some(pow_circ.proof_system);
-                        retry_payload = RetryPayload::None;
-                    } else {
-                        break;
-                    }
+                if let Some(pow_circ) = pow_circuit.as_ref().filter(|_| self.pow_manager.should_batch()) {
+                    let items = self.pow_manager.drain_batch();
+                    let inputs = PowManager::prepare_inputs(&items);
+                    request_type = RequestType::Rwr;
+                    external_request_hash = None;
+                    retry_count = 0;
+                    slice_num = None;
+                    run_uid = None;
+                    is_tile = false;
+                    task_id = None;
+                    tile_idx = None;
+                    synapse_name = ProofOfWeightsDataModel::NAME;
+                    body = serde_json::json!({
+                        "subnet_uid": self.config.netuid,
+                        "verification_key_hash": pow_circ.id,
+                        "proof_system": pow_circ.proof_system.to_string(),
+                        "inputs": inputs,
+                        "proof": "",
+                        "public_signals": "",
+                    });
+                    guard_hash = Some(String::new());
+                    task_circuit = Some(pow_circ.clone());
+                    task_inputs = None;
+                    task_proof_system = Some(pow_circ.proof_system);
+                    retry_payload = RetryPayload::None;
                 } else if let Some(rwr) = self.rwr_queue.pop_front() {
                     retry_payload = RetryPayload::Rwr(rwr.clone());
                     let circuit = match self.circuit_store.ensure_circuit(&rwr.circuit_id).await {
@@ -1282,7 +1278,9 @@ impl ValidatorLoop {
             self.last_metagraph_sync = now;
         }
 
-        if now.duration_since(self.last_weight_update) > Duration::from_secs(WEIGHT_RATE_LIMIT) {
+        if now.duration_since(self.last_weight_update)
+            > Duration::from_secs(WEIGHT_UPDATE_POLL_SECS)
+        {
             self.update_weights().await?;
             self.last_weight_update = now;
         }
@@ -1390,7 +1388,7 @@ impl ValidatorLoop {
             .blocks_since_last_update(&self.config.chain_client, self.config.user_uid)
             .await?;
 
-        if blocks_since < WEIGHT_RATE_LIMIT {
+        if blocks_since < WEIGHT_RATE_LIMIT_BLOCKS {
             return Ok(());
         }
 
@@ -1417,7 +1415,7 @@ impl ValidatorLoop {
             );
         }
 
-        let owner_uid = Some(14u16);
+        let owner_uid = Some(14u16); // TODO: replace with get_subnet_owner_hotkey RPC
         let (weight_uids, weights) = self
             .score_manager
             .compute_throughput_weights(&uids, &snap, owner_uid);

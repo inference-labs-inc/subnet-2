@@ -130,10 +130,13 @@ impl DSperseManager {
         });
 
         let response = self.send_ipc(&request).await?;
+        if let Some(err) = response.get("error") {
+            anyhow::bail!("dsperse verify_incremental error: {err}");
+        }
         let success = response
             .get("success")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .context("dsperse verify_incremental: missing 'success' field")?;
         let outputs = response.get("computed_outputs").cloned();
         Ok((success, outputs))
     }
@@ -163,7 +166,9 @@ impl DSperseManager {
             .with_context(|| format!("connecting to dsperse at {socket_path}"))?;
 
         let payload = serde_json::to_vec(request)?;
-        let len = (payload.len() as u32).to_be_bytes();
+        let len = u32::try_from(payload.len())
+            .context("IPC payload exceeds u32::MAX")?
+            .to_be_bytes();
         stream.write_all(&len).await?;
         stream.write_all(&payload).await?;
         stream.flush().await?;

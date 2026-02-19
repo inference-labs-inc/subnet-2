@@ -19,9 +19,14 @@ pub async fn query_miner_http(
     headers: &HashMap<String, String>,
     timeout_secs: f64,
 ) -> Result<MinerHttpResponse> {
+    let host = if ip.contains(':') {
+        format!("[{ip}]")
+    } else {
+        ip.to_string()
+    };
     let url = format!(
         "http://{}:{}/{}",
-        ip,
+        host,
         port,
         url_path.trim_start_matches('/')
     );
@@ -29,6 +34,7 @@ pub async fn query_miner_http(
     let mut req_builder = client
         .post(&url)
         .timeout(std::time::Duration::from_secs_f64(timeout_secs))
+        .header("content-type", "application/json")
         .body(body_json.to_string());
 
     for (k, v) in headers {

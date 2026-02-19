@@ -111,6 +111,7 @@ impl RelayManager {
                         }
                         info!("relay connection closed cleanly");
                         backoff = RELAY_RECONNECT_BASE_DELAY;
+                        continue;
                     }
                     Err(e) => {
                         warn!(error = %e, backoff_s = backoff, "relay connection failed, reconnecting");
@@ -154,15 +155,20 @@ impl RelayManager {
                 msg = read.next() => {
                     match msg {
                         Some(Ok(Message::Text(text))) => {
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                                Self::handle_message(
-                                    &json,
-                                    pending,
-                                    dsperse_tx,
-                                    rwr_tx,
-                                    dsperse_semaphore,
-                                    ws_tx,
-                                ).await;
+                            match serde_json::from_str::<serde_json::Value>(&text) {
+                                Ok(json) => {
+                                    Self::handle_message(
+                                        &json,
+                                        pending,
+                                        dsperse_tx,
+                                        rwr_tx,
+                                        dsperse_semaphore,
+                                        ws_tx,
+                                    ).await;
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, "relay message JSON parse failed");
+                                }
                             }
                         }
                         Some(Ok(Message::Close(frame))) => {
@@ -441,30 +447,29 @@ impl RelayManager {
                     }
                 };
 
-                let completed_result = {
-                    let pending_map = pending.read().await;
-                    if let Some(req) = pending_map.get(&run_uid) {
-                        let lock = req.lock().await;
-                        if let Some(result) = &lock.result {
-                            Some(result.clone())
-                        } else {
-                            Self::send_jsonrpc_result(
-                                ws_tx,
-                                request_id.as_deref(),
-                                serde_json::json!({"run_uid": run_uid, "status": "processing"}),
-                            )
-                            .await;
-                            None
-                        }
+                let mut pending_map = pending.write().await;
+                if let Some(req) = pending_map.get(&run_uid) {
+                    let lock = req.lock().await;
+                    if let Some(result) = &lock.result {
+                        let result = result.clone();
+                        drop(lock);
+                        pending_map.remove(&run_uid);
+                        drop(pending_map);
+                        Self::send_jsonrpc_result(ws_tx, request_id.as_deref(), result).await;
                     } else {
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), 11, "Run not found")
-                            .await;
-                        None
+                        drop(lock);
+                        drop(pending_map);
+                        Self::send_jsonrpc_result(
+                            ws_tx,
+                            request_id.as_deref(),
+                            serde_json::json!({"run_uid": run_uid, "status": "processing"}),
+                        )
+                        .await;
                     }
-                };
-                if let Some(result) = completed_result {
-                    Self::send_jsonrpc_result(ws_tx, request_id.as_deref(), result).await;
-                    pending.write().await.remove(&run_uid);
+                } else {
+                    drop(pending_map);
+                    Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), 11, "Run not found")
+                        .await;
                 }
             }
 

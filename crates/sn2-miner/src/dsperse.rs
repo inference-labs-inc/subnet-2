@@ -62,7 +62,9 @@ impl DSperseClient {
             .with_context(|| format!("connecting to dsperse at {socket_path}"))?;
 
         let payload = serde_json::to_vec(request)?;
-        let len = (payload.len() as u32).to_be_bytes();
+        let len = u32::try_from(payload.len())
+            .context("IPC payload exceeds u32::MAX")?
+            .to_be_bytes();
         stream.write_all(&len).await?;
         stream.write_all(&payload).await?;
         stream.flush().await?;
