@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["*.*.*"]
   pull_request:
     types: [labeled]
 
@@ -12,7 +12,7 @@ permissions:
 jobs:
   build-linux:
     name: Build Linux x86_64
-    if: startsWith(github.ref, 'refs/tags/v') || github.event.label.name == 'run-build'
+    if: startsWith(github.ref, 'refs/tags/') || github.event.label.name == 'run-build'
     runs-on: ubuntu-latest
     container:
       image: quay.io/pypa/manylinux_2_28_x86_64
@@ -46,7 +46,7 @@ jobs:
 
   build-macos:
     name: Build macOS aarch64
-    if: startsWith(github.ref, 'refs/tags/v') || github.event.label.name == 'run-build'
+    if: startsWith(github.ref, 'refs/tags/') || github.event.label.name == 'run-build'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -75,7 +75,7 @@ jobs:
 
   release:
     name: Create Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
