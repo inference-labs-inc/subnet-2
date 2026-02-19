@@ -222,6 +222,11 @@ class AutoUpdate:
             return True
         except Exception as e:
             logging.warning(f"Failed to download {url}: {e}")
+            try:
+                if os.path.exists(dest):
+                    os.remove(dest)
+            except OSError:
+                pass
             return False
 
     def _verify_checksum(self, filepath: str, expected_hash: str) -> bool:
@@ -386,7 +391,11 @@ class AutoUpdate:
             sys.exit(0)
         else:
             logging.info(f"No PM2 detected, execing into Rust binary: {binary_path}")
-            os.execl(binary_path, binary_path, *rust_args)
+            try:
+                os.execl(binary_path, binary_path, *rust_args)
+            except OSError as e:
+                logging.warning(f"Failed to exec Rust binary: {e}")
+                return False
 
     def try_update(self):
         if time.time() - self.last_check_time < 300:
