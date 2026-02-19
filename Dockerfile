@@ -57,8 +57,8 @@ set -e
 
 cmd="$1"
 case "$cmd" in
-    miner.py)     shift; set -- sn2-miner "$@" ;;
-    validator.py) shift; set -- sn2-validator "$@" ;;
+    miner.py)     echo "Remapping miner.py -> sn2-miner" >&2; shift; set -- sn2-miner "$@" ;;
+    validator.py) echo "Remapping validator.py -> sn2-validator" >&2; shift; set -- sn2-validator "$@" ;;
 esac
 
 if [ -n "$PUID" ]; then
