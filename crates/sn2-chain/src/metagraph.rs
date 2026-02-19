@@ -368,4 +368,26 @@ impl Metagraph {
     pub fn active_neurons(&self) -> impl Iterator<Item = &NeuronInfo> {
         self.neurons.iter().filter(|n| n.is_active)
     }
+
+    pub async fn query_subnet_owner(
+        &self,
+        client: &OnlineClient<PolkadotConfig>,
+    ) -> Result<Option<u16>> {
+        let query = subxt::dynamic::storage(
+            "SubtensorModule",
+            "SubnetOwner",
+            vec![Value::from(self.netuid as u64)],
+        );
+
+        let result = client.storage().at_latest().await?.fetch(&query).await?;
+
+        match result {
+            Some(val) => {
+                let account_id: subxt::utils::AccountId32 = val.as_type()?;
+                let ss58 = sp_core::crypto::AccountId32::new(account_id.0).to_ss58check();
+                Ok(self.get_uid_by_hotkey(&ss58))
+            }
+            None => Ok(None),
+        }
+    }
 }

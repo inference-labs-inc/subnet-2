@@ -519,6 +519,18 @@ impl RelayManager {
         }
     }
 
+    pub async fn send_notification(&self, method: &str, params: serde_json::Value) {
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+        if let Some(tx) = &self.ws_tx {
+            let text = serde_json::to_string(&msg).unwrap_or_default();
+            let _ = tx.try_send(Message::Text(text));
+        }
+    }
+
     async fn send_jsonrpc_error(
         ws_tx: &tokio::sync::mpsc::Sender<Message>,
         request_id: Option<&str>,

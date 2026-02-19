@@ -162,6 +162,7 @@ pub struct ValidatorLoop {
     task_meta: HashMap<tokio::task::Id, (u16, Option<String>)>,
     run_manager: IncrementalRunManager,
     proof_uploader: Arc<ProofUploader>,
+    benchmark_in_flight: usize,
 }
 
 impl ValidatorLoop {
@@ -239,6 +240,7 @@ impl ValidatorLoop {
             task_meta: HashMap::new(),
             run_manager,
             proof_uploader,
+            benchmark_in_flight: 0,
         })
     }
 
@@ -338,6 +340,19 @@ impl ValidatorLoop {
                 return;
             }
         };
+
+        if let Err(msg) = circuit.validate_inputs(&submission.inputs) {
+            warn!(circuit = %circuit.id, error = %msg, "invalid inputs for dsperse submission");
+            if let Some(req_id) = &submission.request_id {
+                self.relay
+                    .send_response(
+                        req_id,
+                        serde_json::json!({"error": format!("invalid input shape: {msg}")}),
+                    )
+                    .await;
+            }
+            return;
+        }
 
         let run_result = self
             .dsperse
@@ -672,6 +687,18 @@ impl ValidatorLoop {
                             break;
                         }
                     };
+                    if let Err(msg) = circuit.validate_inputs(&rwr.inputs) {
+                        warn!(circuit = %rwr.circuit_id, error = %msg, "invalid inputs for RWR");
+                        if let Some(req_id) = &rwr.request_id {
+                            self.relay
+                                .send_response(
+                                    req_id,
+                                    serde_json::json!({"success": false, "error": format!("invalid input shape: {msg}")}),
+                                )
+                                .await;
+                        }
+                        break;
+                    }
                     request_type = RequestType::Rwr;
                     external_request_hash = rwr.request_id.clone();
                     retry_count = rwr.retry_count;
@@ -752,7 +779,13 @@ impl ValidatorLoop {
                         self.stacked_dslice_queue.push_back(dslice);
                         break;
                     }
-                } else if !self.config.disable_benchmark && !benchmark_circuits.is_empty() {
+                } else if !self.config.disable_benchmark
+                    && !benchmark_circuits.is_empty()
+                    && self
+                        .config
+                        .max_benchmark_concurrent
+                        .is_none_or(|max| self.benchmark_in_flight < max)
+                {
                     let weights: Vec<f64> = benchmark_circuits
                         .iter()
                         .map(|c| c.metadata.benchmark_choice_weight.unwrap_or(1.0))
@@ -933,6 +966,9 @@ impl ValidatorLoop {
                     .insert(abort_handle.id(), (uid, task_guard_hash));
 
                 *self.miner_active_count.entry(uid).or_insert(0) += 1;
+                if request_type == RequestType::Benchmark {
+                    self.benchmark_in_flight += 1;
+                }
                 dispatched += 1;
                 metrics::record_request_sent(&request_type.to_string());
             } // end inner slot loop
@@ -948,6 +984,12 @@ impl ValidatorLoop {
                 .collect()
         });
 
+        let stake_threshold = if self.config.is_testnet {
+            u64::MAX
+        } else {
+            VALIDATOR_STAKE_THRESHOLD
+        };
+
         self.config
             .metagraph
             .active_neurons()
@@ -955,7 +997,7 @@ impl ValidatorLoop {
                 if let Some(targets) = &target_uids {
                     return targets.contains(&n.uid);
                 }
-                if n.stake >= VALIDATOR_STAKE_THRESHOLD {
+                if n.stake >= stake_threshold {
                     return false;
                 }
                 if n.axon_ip.is_empty() || n.axon_port == 0 {
@@ -1009,6 +1051,9 @@ impl ValidatorLoop {
         if let Some(count) = self.miner_active_count.get_mut(&uid) {
             *count = count.saturating_sub(1);
         }
+        if request_type == RequestType::Benchmark {
+            self.benchmark_in_flight = self.benchmark_in_flight.saturating_sub(1);
+        }
 
         let failed = match result.outcome {
             TaskOutcome::Success(ref mut response) => {
@@ -1037,6 +1082,7 @@ impl ValidatorLoop {
                             elapsed,
                             VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
                             0.0,
+                            self.config.metagraph.n,
                         );
                         metrics::record_response(true, elapsed);
 
@@ -1051,7 +1097,7 @@ impl ValidatorLoop {
                             maximum_score: 1.0 / n,
                             maximum_response_time: VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
                             minimum_response_time: 0.0,
-                            block_number: 0,
+                            block_number: self.config.metagraph.block,
                         });
 
                         info!(uid = uid, elapsed = format!("{elapsed:.3}s"), rtype = %request_type, "proof verified");
@@ -1267,10 +1313,26 @@ impl ValidatorLoop {
                         });
                     }
 
+                    let notify_circuit_id = active_run
+                        .as_ref()
+                        .map(|r| r.circuit_id.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+
                     self.relay
                         .set_request_result(
                             &run_uid,
                             serde_json::json!({"run_uid": run_uid, "status": "complete"}),
+                        )
+                        .await;
+                    self.relay
+                        .send_notification(
+                            "subnet-2.batch_completed",
+                            serde_json::json!({
+                                "run_uid": run_uid,
+                                "circuit_id": notify_circuit_id,
+                                "status": "completed",
+                            }),
                         )
                         .await;
                 } else {
@@ -1326,6 +1388,7 @@ impl ValidatorLoop {
             elapsed,
             VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
             0.0,
+            self.config.metagraph.n,
         );
         metrics::record_response(false, elapsed);
 
@@ -1479,8 +1542,14 @@ impl ValidatorLoop {
                 if *prev_hotkey != neuron.hotkey {
                     info!(uid = neuron.uid, "hotkey changed, resetting performance");
                     self.performance_tracker.reset_uid(neuron.uid);
-                    self.score_manager
-                        .update_score(neuron.uid, false, 0.0, 0.0, 0.0);
+                    self.score_manager.update_score(
+                        neuron.uid,
+                        false,
+                        0.0,
+                        0.0,
+                        0.0,
+                        self.config.metagraph.n,
+                    );
                 }
             }
             self.uid_hotkeys.insert(neuron.uid, neuron.hotkey.clone());
@@ -1551,7 +1620,12 @@ impl ValidatorLoop {
             );
         }
 
-        let owner_uid = Some(14u16); // TODO: replace with get_subnet_owner_hotkey RPC
+        let owner_uid = self
+            .config
+            .metagraph
+            .query_subnet_owner(&self.config.chain_client)
+            .await
+            .unwrap_or(None);
         let (weight_uids, weights) = self
             .score_manager
             .compute_throughput_weights(&uids, &snap, owner_uid);

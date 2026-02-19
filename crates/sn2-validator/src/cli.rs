@@ -50,4 +50,7 @@ pub struct Cli {
 
     #[arg(long)]
     pub proof_api_url: Option<String>,
+
+    #[arg(long)]
+    pub max_benchmark_concurrent: Option<usize>,
 }

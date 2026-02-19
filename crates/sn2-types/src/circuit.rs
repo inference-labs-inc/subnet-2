@@ -70,3 +70,25 @@ pub struct Circuit {
     pub settings: HashMap<String, serde_json::Value>,
     pub timeout: f64,
 }
+
+impl Circuit {
+    pub fn validate_inputs(&self, inputs: &serde_json::Value) -> Result<(), String> {
+        let schema = match &self.metadata.input_schema {
+            Some(s) if !s.is_empty() => s,
+            _ => return Ok(()),
+        };
+
+        let input_obj = match inputs.as_object() {
+            Some(obj) => obj,
+            None => return Err("inputs must be a JSON object".to_string()),
+        };
+
+        for key in schema.keys() {
+            if !input_obj.contains_key(key) {
+                return Err(format!("missing required input: {key}"));
+            }
+        }
+
+        Ok(())
+    }
+}

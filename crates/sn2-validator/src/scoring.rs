@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 
-use sn2_types::{DEFAULT_MAX_SCORE, PERFORMANCE_CURVE_POWER, PERFORMANCE_MIN_SAMPLES};
+use sn2_types::{PERFORMANCE_CURVE_POWER, PERFORMANCE_MIN_SAMPLES};
 
 const RATE_OF_DECAY: f64 = 0.4;
 const RATE_OF_RECOVERY: f64 = 0.1;
@@ -39,9 +39,10 @@ impl ScoreManager {
         response_time: f64,
         max_response_time: f64,
         min_response_time: f64,
+        metagraph_n: u16,
     ) {
         let previous_score = self.get_score(uid);
-        let maximum_score = DEFAULT_MAX_SCORE;
+        let maximum_score = 1.0 / (metagraph_n.max(1) as f64);
 
         let rate_of_change = if verified {
             RATE_OF_RECOVERY
