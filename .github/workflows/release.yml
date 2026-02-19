@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux x86_64
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          dnf install -y clang llvm-devel pkg-config openssl-devel libudev-devel protobuf-compiler python3-devel
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build release binaries
+        run: |
+          source "$HOME/.cargo/env"
+          cargo build --release --bin sn2-validator --bin sn2-miner
+        env:
+          PYO3_PYTHON: /usr/bin/python3
+
+      - name: Rename binaries
+        run: |
+          cp target/release/sn2-validator sn2-validator-linux-x86_64
+          cp target/release/sn2-miner sn2-miner-linux-x86_64
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binaries-linux-x86_64
+          path: |
+            sn2-validator-linux-x86_64
+            sn2-miner-linux-x86_64
+
+  build-macos:
+    name: Build macOS aarch64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: brew install protobuf
+
+      - name: Build release binaries
+        run: cargo build --release --bin sn2-validator --bin sn2-miner
+
+      - name: Rename binaries
+        run: |
+          cp target/release/sn2-validator sn2-validator-macos-aarch64
+          cp target/release/sn2-miner sn2-miner-macos-aarch64
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binaries-macos-aarch64
+          path: |
+            sn2-validator-macos-aarch64
+            sn2-miner-macos-aarch64
+
+  release:
+    name: Create Release
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          find . -type f -name 'sn2-*' -exec cp {} ../ \;
+          cd ..
+          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            sn2-validator-linux-x86_64
+            sn2-miner-linux-x86_64
+            sn2-validator-macos-aarch64
+            sn2-miner-macos-aarch64
+            SHA256SUMS
