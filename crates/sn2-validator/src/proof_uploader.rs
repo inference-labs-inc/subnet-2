@@ -71,7 +71,13 @@ impl ProofUploader {
                 .unwrap_or_default();
 
             let proof_bytes = match &artifact.proof_hex {
-                Some(hex_str) => hex::decode(hex_str).unwrap_or_default(),
+                Some(hex_str) => match hex::decode(hex_str) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        warn!(slice = %artifact.slice_num, error = %e, "hex decode failed, skipping artifact");
+                        continue;
+                    }
+                },
                 None => continue,
             };
 
@@ -200,7 +206,7 @@ impl ProofUploader {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            warn!(run_uid = %run_uid, status = %status, "confirm response: {text}");
+            anyhow::bail!("confirm_uploads returned {status}: {text}");
         }
         Ok(())
     }
@@ -234,7 +240,7 @@ impl ProofUploader {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            warn!(run_uid = %run_uid, status = %status, "output upload response: {text}");
+            anyhow::bail!("upload_final_output returned {status}: {text}");
         }
         Ok(())
     }

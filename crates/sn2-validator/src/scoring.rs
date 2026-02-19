@@ -85,6 +85,13 @@ impl ScoreManager {
     }
 
     pub fn apply_pow_scores(&mut self, miner_uids: &[u16], scores: &[f64]) {
+        if miner_uids.len() != scores.len() {
+            warn!(
+                miner_uids_len = miner_uids.len(),
+                scores_len = scores.len(),
+                "apply_pow_scores length mismatch, using minimum"
+            );
+        }
         for (&uid, &score) in miner_uids.iter().zip(scores.iter()) {
             if self.scores.contains_key(&uid) {
                 self.scores.insert(uid, score.max(0.0));

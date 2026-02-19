@@ -163,6 +163,7 @@ pub struct ValidatorLoop {
     run_manager: IncrementalRunManager,
     proof_uploader: Arc<ProofUploader>,
     benchmark_in_flight: usize,
+    upload_tasks: JoinSet<()>,
 }
 
 impl ValidatorLoop {
@@ -241,6 +242,7 @@ impl ValidatorLoop {
             run_manager,
             proof_uploader,
             benchmark_in_flight: 0,
+            upload_tasks: JoinSet::new(),
         })
     }
 
@@ -1185,11 +1187,26 @@ impl ValidatorLoop {
             return;
         }
 
-        let scores = &rescaled_outputs[..batch_size];
-        let miner_uid_floats = &rescaled_outputs[batch_size * 2..batch_size * 3];
-        let miner_uids: Vec<u16> = miner_uid_floats.iter().map(|v| v.round() as u16).collect();
+        let score_start = 0;
+        let score_end = batch_size;
+        let uid_start = batch_size * 2;
+        let uid_end = batch_size * 3;
 
-        self.score_manager.apply_pow_scores(&miner_uids, scores);
+        let score_slice = &rescaled_outputs[score_start..score_end];
+        let uid_slice = &rescaled_outputs[uid_start..uid_end];
+
+        let mut valid_uids = Vec::with_capacity(batch_size);
+        let mut valid_scores = Vec::with_capacity(batch_size);
+        for (uid_f, &score) in uid_slice.iter().zip(score_slice.iter()) {
+            if !uid_f.is_finite() || uid_f.round() < 0.0 || uid_f.round() > u16::MAX as f64 {
+                continue;
+            }
+            valid_uids.push(uid_f.round() as u16);
+            valid_scores.push(score);
+        }
+
+        self.score_manager
+            .apply_pow_scores(&valid_uids, &valid_scores);
 
         info!(
             batch = batch_size,
@@ -1297,7 +1314,7 @@ impl ValidatorLoop {
                             .unwrap_or_default();
                         let final_output = status.get("final_output").cloned();
 
-                        tokio::spawn(async move {
+                        self.upload_tasks.spawn(async move {
                             if let Err(e) = uploader
                                 .upload_run_artifacts(
                                     &uid_clone,
@@ -1508,6 +1525,12 @@ impl ValidatorLoop {
 
         self.run_manager.gc_stale(Duration::from_secs(600));
 
+        while let Some(result) = self.upload_tasks.try_join_next() {
+            if let Err(e) = result {
+                warn!(error = %e, "upload task panicked");
+            }
+        }
+
         if now.duration_since(self.last_health_log) > Duration::from_secs(15) {
             info!(
                 active_tasks = self.tasks.len(),
@@ -1533,9 +1556,13 @@ impl ValidatorLoop {
         let uids = self.config.metagraph.uids();
         self.score_manager.sync_uids(&uids);
 
-        let queryable = self.get_queryable_neurons();
-        let queryable_uids: HashSet<u16> = queryable.iter().map(|n| n.uid).collect();
-        self.score_manager.zero_non_queryable(&queryable_uids);
+        if std::env::var("TARGET_UIDS").is_ok() {
+            info!("TARGET_UIDS set, skipping non-queryable score zeroing");
+        } else {
+            let queryable = self.get_queryable_neurons();
+            let queryable_uids: HashSet<u16> = queryable.iter().map(|n| n.uid).collect();
+            self.score_manager.zero_non_queryable(&queryable_uids);
+        }
 
         for neuron in self.config.metagraph.active_neurons() {
             if let Some(prev_hotkey) = self.uid_hotkeys.get(&neuron.uid) {
@@ -1655,6 +1682,8 @@ impl ValidatorLoop {
     async fn shutdown(&mut self) {
         info!("saving state before shutdown");
         self.tasks.shutdown().await;
+        info!("awaiting in-flight proof uploads");
+        self.upload_tasks.shutdown().await;
         self.pipeline.clear_guard();
         if let Err(e) = self.score_manager.save() {
             error!(error = %e, "saving scores during shutdown");

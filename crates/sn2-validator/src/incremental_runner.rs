@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use sn2_types::{ProofSystem, RunSource};
+use tracing::warn;
 
 #[allow(dead_code)]
 pub struct SliceArtifact {
@@ -45,6 +46,14 @@ impl IncrementalRunManager {
         run_source: RunSource,
         relay_request_id: Option<String>,
     ) {
+        if self.runs.contains_key(&run_uid) {
+            warn!(
+                run_uid = %run_uid,
+                relay_request_id = ?relay_request_id,
+                "duplicate start_run for existing ActiveRun, skipping"
+            );
+            return;
+        }
         self.runs.insert(
             run_uid.clone(),
             ActiveRun {
