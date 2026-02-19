@@ -71,6 +71,7 @@ miner: check-extra-args
 		-p $(MINER_PORT):8091 \
 		-v $(WALLET_PATH):/home/subnet2/.bittensor \
 		-e PUID=$(PUID) \
+		-e HOME=/home/subnet2 \
 		subnet-2 sn2-miner \
 		--wallet-name $(WALLET_NAME) \
 		--wallet-hotkey $(WALLET_HOTKEY) \
@@ -88,6 +89,7 @@ validator: check-extra-args
 		-p $(VALIDATOR_PORT):8443 \
 		-v $(WALLET_PATH):/home/subnet2/.bittensor \
 		-e PUID=$(PUID) \
+		-e HOME=/home/subnet2 \
 		subnet-2 sn2-validator \
 		--wallet-name $(WALLET_NAME) \
 		--wallet-hotkey $(WALLET_HOTKEY) \
@@ -105,6 +107,7 @@ test-miner: check-extra-args
 		-p $(MINER_PORT):8091 \
 		-v $(WALLET_PATH):/home/subnet2/.bittensor \
 		-e PUID=$(PUID) \
+		-e HOME=/home/subnet2 \
 		subnet-2 sn2-miner \
 		--wallet-name $(WALLET_NAME) \
 		--wallet-hotkey $(WALLET_HOTKEY) \
@@ -123,6 +126,7 @@ test-validator: check-extra-args
 		-p $(VALIDATOR_PORT):8443 \
 		-v $(WALLET_PATH):/home/subnet2/.bittensor \
 		-e PUID=$(PUID) \
+		-e HOME=/home/subnet2 \
 		subnet-2 sn2-validator \
 		--wallet-name $(WALLET_NAME) \
 		--wallet-hotkey $(WALLET_HOTKEY) \

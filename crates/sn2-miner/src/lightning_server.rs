@@ -40,10 +40,10 @@ impl SynapseHandler for QueryZkProofHandler {
     ) -> btlightning::Result<HashMap<String, rmpv::Value>> {
         let query: QueryZkProof = serde_json::from_value(rmpv_to_json(data))
             .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
-        let result = self
-            .rt
-            .block_on(self.handlers.handle_query_zk_proof(query))
-            .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+        let result = tokio::task::block_in_place(|| {
+            self.rt.block_on(self.handlers.handle_query_zk_proof(query))
+        })
+        .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         Ok(json_to_rmpv(result))
     }
 }
@@ -61,10 +61,9 @@ impl SynapseHandler for DSliceHandler {
     ) -> btlightning::Result<HashMap<String, rmpv::Value>> {
         let query: DSliceProofGenerationDataModel = serde_json::from_value(rmpv_to_json(data))
             .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
-        let result = self
-            .rt
-            .block_on(self.handlers.handle_dslice(query))
-            .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+        let result =
+            tokio::task::block_in_place(|| self.rt.block_on(self.handlers.handle_dslice(query)))
+                .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         Ok(json_to_rmpv(result))
     }
 }
@@ -82,10 +81,10 @@ impl SynapseHandler for CompetitionHandler {
     ) -> btlightning::Result<HashMap<String, rmpv::Value>> {
         let query: Competition = serde_json::from_value(rmpv_to_json(data))
             .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
-        let result = self
-            .rt
-            .block_on(self.handlers.handle_competition(query))
-            .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+        let result = tokio::task::block_in_place(|| {
+            self.rt.block_on(self.handlers.handle_competition(query))
+        })
+        .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         Ok(json_to_rmpv(result))
     }
 }

@@ -50,3 +50,4 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 sha2 = "0.10"
 semver = "1"
+async-trait = "0.1"

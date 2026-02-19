@@ -40,7 +40,7 @@ impl MinerQueryClient {
             .as_nanos()
             .to_string();
 
-        let body_str = serde_json::to_string(body).unwrap_or_default();
+        let body_str = serde_json::to_string(body)?;
         let body_hash = hex::encode(Sha256::digest(body_str.as_bytes()));
         let message = format!("{}:{}:{}", nonce, self.wallet.hotkey_ss58(), body_hash);
         let sig_bytes = self.wallet.sign_hotkey(message.as_bytes())?;
@@ -70,8 +70,9 @@ impl MinerQueryClient {
     ) -> Result<(serde_json::Value, f64)> {
         let rmpv_data: HashMap<String, rmpv::Value> = data
             .into_iter()
-            .filter_map(|(k, v)| rmpv::ext::to_value(v).ok().map(|rv| (k, rv)))
-            .collect();
+            .map(|(k, v)| rmpv::ext::to_value(v).map(|rv| (k, rv)))
+            .collect::<std::result::Result<_, _>>()
+            .context("converting request data to rmpv")?;
         let request = QuicRequest {
             synapse_type: synapse_type.to_string(),
             data: rmpv_data,
@@ -94,8 +95,9 @@ impl MinerQueryClient {
         let json_map: serde_json::Map<String, serde_json::Value> = response
             .data
             .into_iter()
-            .filter_map(|(k, v)| serde_json::to_value(v).ok().map(|jv| (k, jv)))
-            .collect();
+            .map(|(k, v)| serde_json::to_value(v).map(|jv| (k, jv)))
+            .collect::<serde_json::Result<_>>()
+            .context("converting response data from rmpv")?;
         Ok((serde_json::Value::Object(json_map), elapsed))
     }
 

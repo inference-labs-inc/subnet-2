@@ -29,4 +29,4 @@ sp-core = { workspace = true }
 hex = { workspace = true }
 subxt = { workspace = true }
 rmpv = { workspace = true }
-async-trait = "0.1"
+async-trait = { workspace = true }
