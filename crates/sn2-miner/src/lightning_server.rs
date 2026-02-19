@@ -9,21 +9,23 @@ use sn2_types::*;
 
 use crate::handlers::MinerHandlers;
 
-fn rmpv_to_json(data: HashMap<String, rmpv::Value>) -> serde_json::Value {
+fn rmpv_to_json(data: HashMap<String, rmpv::Value>) -> btlightning::Result<serde_json::Value> {
     let map: serde_json::Map<String, serde_json::Value> = data
         .into_iter()
-        .filter_map(|(k, v)| serde_json::to_value(v).ok().map(|jv| (k, jv)))
-        .collect();
-    serde_json::Value::Object(map)
+        .map(|(k, v)| serde_json::to_value(v).map(|jv| (k, jv)))
+        .collect::<serde_json::Result<_>>()
+        .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+    Ok(serde_json::Value::Object(map))
 }
 
-fn json_to_rmpv(val: serde_json::Value) -> HashMap<String, rmpv::Value> {
+fn json_to_rmpv(val: serde_json::Value) -> btlightning::Result<HashMap<String, rmpv::Value>> {
     match val {
         serde_json::Value::Object(map) => map
             .into_iter()
-            .filter_map(|(k, v)| rmpv::ext::to_value(v).ok().map(|rv| (k, rv)))
-            .collect(),
-        _ => HashMap::new(),
+            .map(|(k, v)| rmpv::ext::to_value(v).map(|rv| (k, rv)))
+            .collect::<std::result::Result<_, _>>()
+            .map_err(|e| btlightning::LightningError::Handler(e.to_string())),
+        _ => Ok(HashMap::new()),
     }
 }
 
@@ -38,13 +40,13 @@ impl SynapseHandler for QueryZkProofHandler {
         _synapse_type: &str,
         data: HashMap<String, rmpv::Value>,
     ) -> btlightning::Result<HashMap<String, rmpv::Value>> {
-        let query: QueryZkProof = serde_json::from_value(rmpv_to_json(data))
+        let query: QueryZkProof = serde_json::from_value(rmpv_to_json(data)?)
             .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         let result = tokio::task::block_in_place(|| {
             self.rt.block_on(self.handlers.handle_query_zk_proof(query))
         })
         .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
-        Ok(json_to_rmpv(result))
+        json_to_rmpv(result)
     }
 }
 
@@ -59,12 +61,12 @@ impl SynapseHandler for DSliceHandler {
         _synapse_type: &str,
         data: HashMap<String, rmpv::Value>,
     ) -> btlightning::Result<HashMap<String, rmpv::Value>> {
-        let query: DSliceProofGenerationDataModel = serde_json::from_value(rmpv_to_json(data))
+        let query: DSliceProofGenerationDataModel = serde_json::from_value(rmpv_to_json(data)?)
             .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         let result =
             tokio::task::block_in_place(|| self.rt.block_on(self.handlers.handle_dslice(query)))
                 .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
-        Ok(json_to_rmpv(result))
+        json_to_rmpv(result)
     }
 }
 
@@ -79,13 +81,13 @@ impl SynapseHandler for CompetitionHandler {
         _synapse_type: &str,
         data: HashMap<String, rmpv::Value>,
     ) -> btlightning::Result<HashMap<String, rmpv::Value>> {
-        let query: Competition = serde_json::from_value(rmpv_to_json(data))
+        let query: Competition = serde_json::from_value(rmpv_to_json(data)?)
             .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         let result = tokio::task::block_in_place(|| {
             self.rt.block_on(self.handlers.handle_competition(query))
         })
         .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
-        Ok(json_to_rmpv(result))
+        json_to_rmpv(result)
     }
 }
 
