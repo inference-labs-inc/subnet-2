@@ -54,14 +54,14 @@ Alternatively, use Docker — no Rust toolchain needed. See the Docker instructi
 Automatically detects your platform, downloads the latest release, verifies the SHA256 checksum, and installs to `/usr/local/bin`:
 
 ```console
-curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/testnet/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/main/install.sh | bash
 ```
 
 To install only the miner or validator:
 
 ```console
-curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/testnet/install.sh | bash -s -- sn2-miner
-curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/testnet/install.sh | bash -s -- sn2-validator
+curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/main/install.sh | bash -s -- sn2-miner
+curl -fsSL https://raw.githubusercontent.com/inference-labs-inc/subnet-2/main/install.sh | bash -s -- sn2-validator
 ```
 
 Or download manually from [GitHub Releases](https://github.com/inference-labs-inc/subnet-2/releases).

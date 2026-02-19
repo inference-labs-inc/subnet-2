@@ -30,7 +30,7 @@ detect_platform() {
 }
 
 get_latest_tag() {
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/'
+  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' || true
 }
 
 download_sums() {
@@ -49,7 +49,7 @@ download_and_verify() {
 
   echo "Verifying checksum..."
   local expected actual
-  expected="$(grep "${asset}" "${TMP_DIR}/SHA256SUMS" | awk '{print $1}')"
+  expected="$(awk -v a="${asset}" '$2 == a {print $1}' "${TMP_DIR}/SHA256SUMS")"
   if [ -z "$expected" ]; then
     echo "Asset ${asset} not found in SHA256SUMS" >&2
     exit 1
@@ -68,12 +68,10 @@ download_and_verify() {
     exit 1
   fi
 
-  chmod +x "${TMP_DIR}/${asset}"
-
   if [ -w "$INSTALL_DIR" ]; then
-    mv "${TMP_DIR}/${asset}" "${INSTALL_DIR}/${binary}"
+    install -m 755 "${TMP_DIR}/${asset}" "${INSTALL_DIR}/${binary}"
   else
-    sudo mv "${TMP_DIR}/${asset}" "${INSTALL_DIR}/${binary}"
+    sudo install -m 755 "${TMP_DIR}/${asset}" "${INSTALL_DIR}/${binary}"
   fi
 
   echo "Installed ${binary} to ${INSTALL_DIR}/${binary}"
@@ -88,6 +86,11 @@ main() {
   if [ -z "$tag" ]; then
     echo "Could not determine latest release" >&2
     exit 1
+  fi
+
+  if ! [ -w "$INSTALL_DIR" ]; then
+    echo "Requesting sudo for install to ${INSTALL_DIR}..."
+    sudo -v
   fi
 
   TMP_DIR="$(mktemp -d)"
