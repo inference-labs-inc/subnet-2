@@ -11,7 +11,10 @@ endif
 MINER_PORT ?= 8091
 VALIDATOR_PORT ?= 8443
 
-.PHONY: build check clippy test fmt stop clean miner-logs validator-logs miner validator test-miner test-validator
+.PHONY: setup build check clippy test fmt stop clean miner-logs validator-logs miner validator test-miner test-validator
+
+setup:
+	git config core.hooksPath .githooks
 
 build:
 	docker build -t subnet-2 -f Dockerfile .
