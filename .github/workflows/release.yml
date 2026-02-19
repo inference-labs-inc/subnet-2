@@ -21,7 +21,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          dnf install -y clang llvm-devel pkg-config openssl-devel libudev-devel protobuf-compiler python3-devel
+          dnf install -y clang llvm-devel pkg-config openssl-devel libudev-devel protobuf-compiler python3.12-devel
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
@@ -30,7 +30,7 @@ jobs:
           source "$HOME/.cargo/env"
           cargo build --release --bin sn2-validator --bin sn2-miner
         env:
-          PYO3_PYTHON: /usr/bin/python3
+          PYO3_PYTHON: /usr/bin/python3.12
 
       - name: Rename binaries
         run: |
