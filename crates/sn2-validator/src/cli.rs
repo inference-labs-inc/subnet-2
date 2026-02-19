@@ -6,22 +6,22 @@ pub struct Cli {
     #[arg(long, default_value_t = sn2_types::DEFAULT_NETUID)]
     pub netuid: u16,
 
-    #[arg(long, default_value = "finney")]
+    #[arg(long, alias = "subtensor.network", default_value = "finney")]
     pub network: String,
 
-    #[arg(long)]
+    #[arg(long, alias = "subtensor.chain_endpoint")]
     pub subtensor_chain_endpoint: Option<String>,
 
-    #[arg(long, default_value = "default")]
+    #[arg(long, alias = "wallet.name", default_value = "default")]
     pub wallet_name: String,
 
-    #[arg(long, default_value = "default")]
+    #[arg(long, alias = "wallet.hotkey", default_value = "default")]
     pub wallet_hotkey: String,
 
-    #[arg(long)]
+    #[arg(long, alias = "wallet.path")]
     pub wallet_path: Option<String>,
 
-    #[arg(long, default_value = "info")]
+    #[arg(long, alias = "logging.level", default_value = "info")]
     pub log_level: String,
 
     #[arg(long, default_value_t = sn2_types::MAX_CONCURRENT_REQUESTS)]
