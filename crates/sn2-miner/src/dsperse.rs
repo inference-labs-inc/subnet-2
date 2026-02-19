@@ -46,6 +46,15 @@ impl DSperseClient {
     }
 
     async fn send_ipc(&self, request: &serde_json::Value) -> Result<serde_json::Value> {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.send_ipc_inner(request),
+        )
+        .await
+        .context("dsperse IPC timed out after 30s")?
+    }
+
+    async fn send_ipc_inner(&self, request: &serde_json::Value) -> Result<serde_json::Value> {
         let socket_path = self.socket_path.as_deref().unwrap_or("/tmp/dsperse.sock");
 
         let mut stream = UnixStream::connect(socket_path)
@@ -61,6 +70,10 @@ impl DSperseClient {
         let mut len_buf = [0u8; 4];
         stream.read_exact(&mut len_buf).await?;
         let resp_len = u32::from_be_bytes(len_buf) as usize;
+        anyhow::ensure!(
+            resp_len <= 64 * 1024 * 1024,
+            "IPC response length {resp_len} exceeds 64MB cap"
+        );
 
         let mut resp_buf = vec![0u8; resp_len];
         stream.read_exact(&mut resp_buf).await?;

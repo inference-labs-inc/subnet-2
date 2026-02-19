@@ -42,10 +42,9 @@ pub async fn query_miner_http(
     if !response.status().is_success() {
         let elapsed = start.elapsed().as_secs_f64();
         let body = response.text().await.unwrap_or_default();
-        let body_preview = if body.len() > 500 {
-            &body[..500]
-        } else {
-            &body
+        let body_preview = match body.char_indices().nth(500) {
+            Some((idx, _)) => &body[..idx],
+            None => &body,
         };
         anyhow::bail!("HTTP {status} from miner after {elapsed:.3}s: {body_preview}");
     }

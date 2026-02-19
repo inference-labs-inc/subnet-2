@@ -97,19 +97,22 @@ async fn verify_signature_middleware(
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    if !validator_hotkey.is_empty() && !sig.is_empty() && !nonce.is_empty() {
-        let payload_hash = hex::encode(Sha256::digest(&body_bytes));
+    if validator_hotkey.is_empty() || sig.is_empty() || nonce.is_empty() {
+        warn!("missing auth headers (validator-hotkey, signature, or nonce)");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
 
-        match signature::verify_request_signature(nonce, validator_hotkey, &payload_hash, sig) {
-            Ok(true) => {}
-            Ok(false) => {
-                warn!(validator = validator_hotkey, "invalid signature");
-                return Err(StatusCode::UNAUTHORIZED);
-            }
-            Err(e) => {
-                warn!(validator = validator_hotkey, error = %e, "signature verification error");
-                return Err(StatusCode::UNAUTHORIZED);
-            }
+    let payload_hash = hex::encode(Sha256::digest(&body_bytes));
+
+    match signature::verify_request_signature(nonce, validator_hotkey, &payload_hash, sig) {
+        Ok(true) => {}
+        Ok(false) => {
+            warn!(validator = validator_hotkey, "invalid signature");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        Err(e) => {
+            warn!(validator = validator_hotkey, error = %e, "signature verification error");
+            return Err(StatusCode::UNAUTHORIZED);
         }
     }
 

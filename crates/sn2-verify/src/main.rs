@@ -323,7 +323,7 @@ async fn handle_query_verify_store(
                 verification_result: true,
                 proof_size: fields.proof_size,
                 stored,
-                is_incremental: true,
+                is_incremental: fields.is_incremental,
                 error: None,
             }
         }
@@ -341,7 +341,7 @@ async fn handle_query_verify_store(
                 verification_result: false,
                 proof_size: fields.proof_size,
                 stored: false,
-                is_incremental: true,
+                is_incremental: fields.is_incremental,
                 error: Some(format!("{e:#}")),
             }
         }

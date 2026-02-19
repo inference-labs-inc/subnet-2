@@ -156,6 +156,7 @@ pub struct ValidatorLoop {
     dispatch_notify: Arc<Notify>,
     last_perf_save: Instant,
     last_health_log: Instant,
+    last_replenish: Instant,
     task_meta: HashMap<tokio::task::Id, (u16, Option<String>)>,
 }
 
@@ -220,7 +221,7 @@ impl ValidatorLoop {
             rwr_queue: VecDeque::new(),
             dsperse_rx,
             rwr_rx,
-            last_metagraph_sync: now,
+            last_metagraph_sync: now - Duration::from_secs(3601),
             last_weight_update: now,
             last_score_save: now,
             last_circuit_refresh: now,
@@ -229,6 +230,7 @@ impl ValidatorLoop {
             dispatch_notify: Arc::new(Notify::new()),
             last_perf_save: now,
             last_health_log: now,
+            last_replenish: now,
             task_meta: HashMap::new(),
         })
     }
@@ -1306,8 +1308,12 @@ impl ValidatorLoop {
             self.last_perf_save = now;
         }
 
-        if self.api_dslice_queue.is_empty() && self.stacked_dslice_queue.is_empty() {
+        if self.api_dslice_queue.is_empty()
+            && self.stacked_dslice_queue.is_empty()
+            && now.duration_since(self.last_replenish) > Duration::from_secs(5)
+        {
             self.replenish_dslice_queues().await;
+            self.last_replenish = now;
         }
 
         if now.duration_since(self.last_health_log) > Duration::from_secs(15) {

@@ -25,7 +25,8 @@ jobs:
         run: cargo install cargo-audit
 
       - name: Run cargo audit
-        run: cargo audit --json > cargo-audit-results.json || true
+        run: cargo audit --json > cargo-audit-results.json
+        continue-on-error: true
 
       - name: Upload Audit Results
         uses: actions/upload-artifact@v5
@@ -143,7 +144,7 @@ jobs:
     if: always()
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
 
       - name: Create Security Summary
         run: |

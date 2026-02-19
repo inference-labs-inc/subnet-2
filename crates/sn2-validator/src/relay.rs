@@ -90,6 +90,7 @@ impl RelayManager {
         tokio::spawn(async move {
             let mut backoff = RELAY_RECONNECT_BASE_DELAY;
             loop {
+                while rx.try_recv().is_ok() {}
                 match Self::connect_and_run(
                     &url,
                     &hotkey_pair,
@@ -329,6 +330,7 @@ impl RelayManager {
                     }
                 };
 
+                let req_id_for_err = request_id.clone();
                 let submission = DsperseSubmission {
                     circuit_id,
                     inputs,
@@ -337,6 +339,13 @@ impl RelayManager {
 
                 if let Err(e) = dsperse_tx.try_send(submission) {
                     warn!(error = %e, "dsperse submission channel full or closed");
+                    Self::send_jsonrpc_error(
+                        ws_tx,
+                        req_id_for_err.as_deref(),
+                        20,
+                        "Server busy, try again later",
+                    )
+                    .await;
                 }
                 drop(permit);
             }

@@ -49,6 +49,7 @@ pub async fn run_expander_verify(
         ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .context("spawning expander-exec")?;
 
