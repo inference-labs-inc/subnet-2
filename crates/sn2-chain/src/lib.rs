@@ -1,3 +1,4 @@
+pub mod auto_update;
 mod metagraph;
 mod registration;
 mod wallet;

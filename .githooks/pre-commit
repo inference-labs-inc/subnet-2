@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-set -e
 
 if command -v cargo >/dev/null 2>&1; then
-    cargo fmt --check 2>&1
-    if [ $? -ne 0 ]; then
+    if ! cargo fmt --check 2>&1; then
         echo "cargo fmt check failed. Run 'cargo fmt' and re-commit."
         exit 1
     fi

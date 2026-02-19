@@ -33,7 +33,7 @@ impl MinerQueryClient {
         &self,
         body: &serde_json::Value,
         miner_hotkey: &str,
-    ) -> HashMap<String, String> {
+    ) -> Result<HashMap<String, String>> {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -43,10 +43,7 @@ impl MinerQueryClient {
         let body_str = serde_json::to_string(body).unwrap_or_default();
         let body_hash = hex::encode(Sha256::digest(body_str.as_bytes()));
         let message = format!("{}:{}:{}", nonce, self.wallet.hotkey_ss58(), body_hash);
-        let sig_bytes = self
-            .wallet
-            .sign_hotkey(message.as_bytes())
-            .expect("signing failed");
+        let sig_bytes = self.wallet.sign_hotkey(message.as_bytes())?;
         let sig_hex = format!("0x{}", hex::encode(&sig_bytes));
 
         let mut headers = HashMap::new();
@@ -57,7 +54,7 @@ impl MinerQueryClient {
             self.wallet.hotkey_ss58().to_string(),
         );
         headers.insert("miner-hotkey".to_string(), miner_hotkey.to_string());
-        headers
+        Ok(headers)
     }
 
     pub fn lightning_mut(&mut self) -> &mut LightningClient {

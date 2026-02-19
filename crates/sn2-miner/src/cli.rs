@@ -44,4 +44,7 @@ pub struct Cli {
 
     #[arg(long)]
     pub storage_bucket: Option<String>,
+
+    #[arg(long, default_value_t = false)]
+    pub no_auto_update: bool,
 }

@@ -34,13 +34,21 @@ impl Wallet {
             .ss58_address()
             .context("no ss58 address for coldkeypub")?;
 
+        let resolved_path = match wallet_path {
+            Some(p) => p.to_string(),
+            None => {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                format!("{home}/.bittensor/wallets")
+            }
+        };
+
         Ok(Wallet {
             hotkey,
             hotkey_ss58,
             coldkey_ss58,
             name: name.to_string(),
             hotkey_name: hotkey_name.to_string(),
-            wallet_path: wallet_path.unwrap_or("~/.bittensor/wallets").to_string(),
+            wallet_path: resolved_path,
         })
     }
 

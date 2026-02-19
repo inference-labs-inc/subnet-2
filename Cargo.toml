@@ -48,3 +48,4 @@ metrics-exporter-prometheus = "0.15"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 sha2 = "0.10"
+semver = "1"
