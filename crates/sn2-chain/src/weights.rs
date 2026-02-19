@@ -25,6 +25,13 @@ impl WeightsSetter {
         weights: &[u16],
         version_key: u32,
     ) -> Result<()> {
+        anyhow::ensure!(
+            uids.len() == weights.len(),
+            "set_weights: uids.len({}) != weights.len({})",
+            uids.len(),
+            weights.len()
+        );
+
         let dests: Vec<Value> = uids.iter().map(|&u| Value::from(u as u64)).collect();
         let weight_vals: Vec<Value> = weights.iter().map(|&w| Value::from(w as u64)).collect();
 
@@ -98,6 +105,14 @@ impl WeightsSetter {
         salt: &[u16],
         version_key: u32,
     ) -> Result<()> {
+        anyhow::ensure!(
+            uids.len() == values.len() && values.len() == salt.len(),
+            "reveal_weights: length mismatch uids={} values={} salt={}",
+            uids.len(),
+            values.len(),
+            salt.len()
+        );
+
         let uid_vals: Vec<Value> = uids.iter().map(|&u| Value::from(u as u64)).collect();
         let weight_vals: Vec<Value> = values.iter().map(|&w| Value::from(w as u64)).collect();
         let salt_vals: Vec<Value> = salt.iter().map(|&s| Value::from(s as u64)).collect();

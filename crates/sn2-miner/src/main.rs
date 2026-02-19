@@ -56,12 +56,6 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
 
-    let mut metagraph = sn2_chain::Metagraph::new(cli.netuid);
-    metagraph
-        .sync(&chain_client)
-        .await
-        .context("initial metagraph sync")?;
-
     let registration = sn2_chain::Registration::new(cli.netuid);
 
     let external_ip: std::net::IpAddr = cli
@@ -116,23 +110,6 @@ async fn main() -> Result<()> {
         "miner running"
     );
 
-    let metagraph_handle = {
-        let client = chain_client.clone();
-        let netuid = cli.netuid;
-        tokio::spawn(async move {
-            let mut mg = sn2_chain::Metagraph::new(netuid);
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-            interval.tick().await;
-            loop {
-                interval.tick().await;
-                match mg.sync(&client).await {
-                    Ok(()) => info!(neurons = mg.neurons.len(), "metagraph refreshed"),
-                    Err(e) => warn!(error = %e, "metagraph refresh failed"),
-                }
-            }
-        })
-    };
-
     tokio::select! {
         r = http_handle => {
             r?.context("HTTP server")?;
@@ -142,9 +119,6 @@ async fn main() -> Result<()> {
         }
         _ = circuit_monitor => {
             warn!("circuit monitor exited unexpectedly");
-        }
-        _ = metagraph_handle => {
-            warn!("metagraph refresh exited unexpectedly");
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");

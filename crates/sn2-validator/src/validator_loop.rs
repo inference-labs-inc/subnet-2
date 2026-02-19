@@ -818,10 +818,21 @@ impl ValidatorLoop {
                             .query_miner_quic(&axon, synapse_name, data, timeout)
                             .await
                     } else {
-                        let headers = guard.build_signing_headers(&body, &hotkey);
-                        guard
-                            .query_miner_http(&ip, port, synapse_name, &body, &headers, timeout)
-                            .await
+                        match guard.build_signing_headers(&body, &hotkey) {
+                            Ok(headers) => {
+                                guard
+                                    .query_miner_http(
+                                        &ip,
+                                        port,
+                                        synapse_name,
+                                        &body,
+                                        &headers,
+                                        timeout,
+                                    )
+                                    .await
+                            }
+                            Err(e) => Err(e),
+                        }
                     };
                     drop(guard);
 

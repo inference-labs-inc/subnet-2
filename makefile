@@ -11,7 +11,7 @@ endif
 MINER_PORT ?= 8091
 VALIDATOR_PORT ?= 8443
 
-.PHONY: setup build check clippy test fmt stop clean miner-logs validator-logs miner validator test-miner test-validator
+.PHONY: setup build cargo-build check clippy test fmt stop clean miner-logs validator-logs miner validator test-miner test-validator check-extra-args pm2-miner pm2-validator pm2-stop
 
 setup:
 	git config core.hooksPath .githooks
