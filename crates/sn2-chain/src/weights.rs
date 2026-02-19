@@ -1,6 +1,6 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
-use sp_core::sr25519;
-use sp_core::Pair;
 use subxt::dynamic::Value;
 use subxt::tx::Signer;
 use subxt::{OnlineClient, PolkadotConfig};
@@ -20,7 +20,7 @@ impl WeightsSetter {
     pub async fn set_weights(
         &self,
         client: &OnlineClient<PolkadotConfig>,
-        wallet: &Wallet,
+        wallet: &Arc<Wallet>,
         uids: &[u16],
         weights: &[u16],
         version_key: u32,
@@ -39,7 +39,7 @@ impl WeightsSetter {
             ],
         );
 
-        let signer = SubxtSr25519Signer::new(wallet.hotkey.clone());
+        let signer = SubxtSr25519Signer::new(wallet)?;
 
         let result = client
             .tx()
@@ -62,7 +62,7 @@ impl WeightsSetter {
     pub async fn commit_weights(
         &self,
         client: &OnlineClient<PolkadotConfig>,
-        wallet: &Wallet,
+        wallet: &Arc<Wallet>,
         commit_hash: &[u8],
     ) -> Result<()> {
         let tx = subxt::dynamic::tx(
@@ -74,7 +74,7 @@ impl WeightsSetter {
             ],
         );
 
-        let signer = SubxtSr25519Signer::new(wallet.hotkey.clone());
+        let signer = SubxtSr25519Signer::new(wallet)?;
 
         let result = client
             .tx()
@@ -92,7 +92,7 @@ impl WeightsSetter {
     pub async fn reveal_weights(
         &self,
         client: &OnlineClient<PolkadotConfig>,
-        wallet: &Wallet,
+        wallet: &Arc<Wallet>,
         uids: &[u16],
         values: &[u16],
         salt: &[u16],
@@ -114,7 +114,7 @@ impl WeightsSetter {
             ],
         );
 
-        let signer = SubxtSr25519Signer::new(wallet.hotkey.clone());
+        let signer = SubxtSr25519Signer::new(wallet)?;
 
         let result = client
             .tx()
@@ -153,15 +153,17 @@ impl WeightsSetter {
 }
 
 pub(crate) struct SubxtSr25519Signer {
-    pair: sr25519::Pair,
+    wallet: Arc<Wallet>,
     account_id: subxt::utils::AccountId32,
 }
 
 impl SubxtSr25519Signer {
-    pub(crate) fn new(pair: sr25519::Pair) -> Self {
-        let public = pair.public();
-        let account_id = subxt::utils::AccountId32::from(public.0);
-        Self { pair, account_id }
+    pub(crate) fn new(wallet: &Arc<Wallet>) -> Result<Self> {
+        let account_id = wallet.hotkey_account_id()?;
+        Ok(Self {
+            wallet: Arc::clone(wallet),
+            account_id,
+        })
     }
 }
 
@@ -175,7 +177,8 @@ impl Signer<PolkadotConfig> for SubxtSr25519Signer {
     }
 
     fn sign(&self, payload: &[u8]) -> <PolkadotConfig as subxt::Config>::Signature {
-        let sig = self.pair.sign(payload);
-        subxt::utils::MultiSignature::Sr25519(sig.0)
+        let sig = self.wallet.sign_hotkey(payload).expect("signing failed");
+        let sig_arr: [u8; 64] = sig.try_into().expect("signature not 64 bytes");
+        subxt::utils::MultiSignature::Sr25519(sig_arr)
     }
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use subxt::{OnlineClient, PolkadotConfig};
 
@@ -7,7 +9,7 @@ use crate::cli::Cli;
 
 pub struct ValidatorConfig {
     pub netuid: u16,
-    pub wallet: Wallet,
+    pub wallet: Arc<Wallet>,
     pub chain_client: OnlineClient<PolkadotConfig>,
     pub metagraph: Metagraph,
     pub user_uid: u16,
@@ -36,12 +38,14 @@ impl ValidatorConfig {
             .await
             .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
 
-        let wallet = Wallet::from_paths(
-            &cli.wallet_name,
-            &cli.wallet_hotkey,
-            cli.wallet_path.as_deref(),
-        )
-        .context("loading wallet")?;
+        let wallet = Arc::new(
+            Wallet::from_paths(
+                &cli.wallet_name,
+                &cli.wallet_hotkey,
+                cli.wallet_path.as_deref(),
+            )
+            .context("loading wallet")?,
+        );
 
         let mut metagraph = Metagraph::new(cli.netuid);
         metagraph
@@ -50,7 +54,7 @@ impl ValidatorConfig {
             .context("initial metagraph sync")?;
 
         let user_uid = metagraph
-            .get_uid_by_hotkey(&wallet.hotkey_ss58)
+            .get_uid_by_hotkey(wallet.hotkey_ss58())
             .context("validator hotkey not registered in metagraph")?;
 
         let relay_url = cli

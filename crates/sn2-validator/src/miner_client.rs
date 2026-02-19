@@ -1,21 +1,21 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use btlightning::{LightningClient, QuicAxonInfo, QuicRequest};
 use sha2::{Digest, Sha256};
-use sp_core::{sr25519, Pair};
+use sn2_chain::Wallet;
 
 pub struct MinerQueryClient {
     lightning: LightningClient,
     http: reqwest::Client,
-    hotkey_pair: sr25519::Pair,
-    hotkey_ss58: String,
+    wallet: Arc<Wallet>,
 }
 
 impl MinerQueryClient {
-    pub fn new(hotkey_pair: sr25519::Pair, hotkey_ss58: &str) -> Result<Self> {
-        let lightning = LightningClient::new(hotkey_ss58.to_string());
+    pub fn new(wallet: Arc<Wallet>) -> Result<Self> {
+        let lightning = LightningClient::new(wallet.hotkey_ss58().to_string());
         let http = reqwest::Client::builder()
             .pool_max_idle_per_host(64)
             .tcp_nodelay(true)
@@ -25,8 +25,7 @@ impl MinerQueryClient {
         Ok(Self {
             lightning,
             http,
-            hotkey_pair,
-            hotkey_ss58: hotkey_ss58.to_string(),
+            wallet,
         })
     }
 
@@ -43,14 +42,20 @@ impl MinerQueryClient {
 
         let body_str = serde_json::to_string(body).unwrap_or_default();
         let body_hash = hex::encode(Sha256::digest(body_str.as_bytes()));
-        let message = format!("{}:{}:{}", nonce, self.hotkey_ss58, body_hash);
-        let signature = self.hotkey_pair.sign(message.as_bytes());
-        let sig_hex = format!("0x{}", hex::encode(signature.0));
+        let message = format!("{}:{}:{}", nonce, self.wallet.hotkey_ss58(), body_hash);
+        let sig_bytes = self
+            .wallet
+            .sign_hotkey(message.as_bytes())
+            .expect("signing failed");
+        let sig_hex = format!("0x{}", hex::encode(&sig_bytes));
 
         let mut headers = HashMap::new();
         headers.insert("nonce".to_string(), nonce);
         headers.insert("signature".to_string(), sig_hex);
-        headers.insert("validator-hotkey".to_string(), self.hotkey_ss58.clone());
+        headers.insert(
+            "validator-hotkey".to_string(),
+            self.wallet.hotkey_ss58().to_string(),
+        );
         headers.insert("miner-hotkey".to_string(), miner_hotkey.to_string());
         headers
     }

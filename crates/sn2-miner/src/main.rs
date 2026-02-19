@@ -29,12 +29,14 @@ async fn main() -> Result<()> {
         "starting sn2-miner"
     );
 
-    let wallet = sn2_chain::Wallet::from_paths(
-        &cli.wallet_name,
-        &cli.wallet_hotkey,
-        cli.wallet_path.as_deref(),
-    )
-    .context("loading wallet")?;
+    let wallet = std::sync::Arc::new(
+        sn2_chain::Wallet::from_paths(
+            &cli.wallet_name,
+            &cli.wallet_hotkey,
+            cli.wallet_path.as_deref(),
+        )
+        .context("loading wallet")?,
+    );
 
     let endpoint =
         cli.subtensor_chain_endpoint
@@ -81,7 +83,7 @@ async fn main() -> Result<()> {
 
     let http_handle = {
         let handlers = handlers.clone();
-        let hotkey_ss58 = wallet.hotkey_ss58.clone();
+        let hotkey_ss58 = wallet.hotkey_ss58().to_string();
         let axon_host = cli.axon_host.clone();
         tokio::spawn(async move {
             http_server::run_http_server(&axon_host, http_port, handlers, &hotkey_ss58).await
@@ -90,8 +92,8 @@ async fn main() -> Result<()> {
 
     let quic_handle = {
         let handlers = handlers.clone();
-        let hotkey = wallet.hotkey_ss58.clone();
-        let seed = wallet.hotkey_seed();
+        let hotkey = wallet.hotkey_ss58().to_string();
+        let seed = wallet.hotkey_seed()?;
         tokio::spawn(async move {
             lightning_server::run_lightning_server(&hotkey, seed, "0.0.0.0", quic_port, handlers)
                 .await
@@ -104,7 +106,7 @@ async fn main() -> Result<()> {
         .context("registering axon on chain")?;
 
     info!(
-        hotkey = %wallet.hotkey_ss58,
+        hotkey = %wallet.hotkey_ss58(),
         http_port = http_port,
         quic_port = quic_port,
         "miner running"

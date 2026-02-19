@@ -180,8 +180,7 @@ impl ValidatorLoop {
         let weights_setter = WeightsSetter::new(config.netuid);
 
         let miner_client = Arc::new(RwLock::new(MinerQueryClient::new(
-            config.wallet.hotkey.clone(),
-            &config.wallet.hotkey_ss58,
+            config.wallet.clone(),
         )?));
 
         let (dsperse_tx, dsperse_rx) = tokio::sync::mpsc::channel::<DsperseSubmission>(256);
@@ -189,8 +188,7 @@ impl ValidatorLoop {
 
         let relay = RelayManager::new(
             config.relay_url.clone(),
-            config.wallet.hotkey.clone(),
-            config.wallet.hotkey_ss58.clone(),
+            config.wallet.clone(),
             config.relay_enabled,
             dsperse_tx,
             rwr_tx,

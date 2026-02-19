@@ -13,4 +13,4 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 hex = { workspace = true }
-dirs-next = "2"
+bittensor_wallet = { workspace = true }

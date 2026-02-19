@@ -1,104 +1,96 @@
 use anyhow::{Context, Result};
-use sp_core::crypto::Ss58Codec;
-use sp_core::sr25519;
-use sp_core::Pair;
-use std::path::PathBuf;
 
 pub struct Wallet {
-    pub hotkey: sr25519::Pair,
-    pub coldkey: sr25519::Pair,
-    pub hotkey_ss58: String,
-    pub coldkey_ss58: String,
+    hotkey: bittensor_wallet::Keypair,
+    hotkey_ss58: String,
+    coldkey_ss58: String,
     pub name: String,
     pub hotkey_name: String,
+    pub wallet_path: String,
 }
 
 impl Wallet {
     pub fn from_paths(name: &str, hotkey_name: &str, wallet_path: Option<&str>) -> Result<Self> {
-        let base = match wallet_path {
-            Some(p) => PathBuf::from(p),
-            None => dirs_next::home_dir()
-                .context("no home directory")?
-                .join(".bittensor")
-                .join("wallets"),
-        };
-        let wallet_dir = base.join(name);
+        let bt_wallet = bittensor_wallet::Wallet::new(
+            Some(name.to_string()),
+            Some(hotkey_name.to_string()),
+            wallet_path.map(|p| p.to_string()),
+            None,
+        );
 
-        let hotkey_path = wallet_dir.join("hotkeys").join(hotkey_name);
-        let coldkey_path = wallet_dir.join("coldkeypub.txt");
+        let hotkey = bt_wallet
+            .get_hotkey(None)
+            .map_err(|e| anyhow::anyhow!("loading hotkey: {:?}", e))?;
 
-        let hotkey_data = std::fs::read_to_string(&hotkey_path)
-            .with_context(|| format!("reading hotkey from {}", hotkey_path.display()))?;
-        let hotkey_json: serde_json::Value =
-            serde_json::from_str(&hotkey_data).context("parsing hotkey JSON")?;
+        let coldkeypub = bt_wallet
+            .get_coldkeypub(None)
+            .map_err(|e| anyhow::anyhow!("loading coldkeypub: {:?}", e))?;
 
-        let hotkey_secret = hotkey_json
-            .get("secretSeed")
-            .or_else(|| hotkey_json.get("secretPhrase"))
-            .and_then(|v| v.as_str())
-            .context("no secretSeed or secretPhrase in hotkey file")?;
+        let hotkey_ss58 = hotkey
+            .ss58_address()
+            .context("no ss58 address for hotkey")?;
 
-        let hotkey = if hotkey_secret.starts_with("0x") {
-            let seed_bytes = hex::decode(hotkey_secret.trim_start_matches("0x"))
-                .context("decoding hotkey seed hex")?;
-            let seed: [u8; 32] = seed_bytes
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("hotkey seed must be 32 bytes"))?;
-            sr25519::Pair::from_seed(&seed)
-        } else {
-            sr25519::Pair::from_string(hotkey_secret, None)
-                .map_err(|e| anyhow::anyhow!("parsing hotkey phrase: {:?}", e))?
-        };
-
-        let coldkey_data = std::fs::read_to_string(&coldkey_path)
-            .with_context(|| format!("reading coldkey from {}", coldkey_path.display()))?;
-        let coldkey_json: serde_json::Value =
-            serde_json::from_str(&coldkey_data).context("parsing coldkey JSON")?;
-
-        let coldkey_ss58 = coldkey_json
-            .get("ss58Address")
-            .and_then(|v| v.as_str())
-            .context("no ss58Address in coldkey file")?
-            .to_string();
-
-        let coldkey_secret = coldkey_json
-            .get("secretSeed")
-            .or_else(|| coldkey_json.get("secretPhrase"))
-            .and_then(|v| v.as_str());
-
-        let coldkey = match coldkey_secret {
-            Some(secret) => {
-                if secret.starts_with("0x") {
-                    let seed_bytes = hex::decode(secret.trim_start_matches("0x"))
-                        .context("decoding coldkey seed hex")?;
-                    let seed: [u8; 32] = seed_bytes
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("coldkey seed must be 32 bytes"))?;
-                    sr25519::Pair::from_seed(&seed)
-                } else {
-                    sr25519::Pair::from_string(secret, None)
-                        .map_err(|e| anyhow::anyhow!("parsing coldkey phrase: {:?}", e))?
-                }
-            }
-            None => sr25519::Pair::from_seed(&[0u8; 32]),
-        };
-
-        let hotkey_ss58 = hotkey.public().to_ss58check();
+        let coldkey_ss58 = coldkeypub
+            .ss58_address()
+            .context("no ss58 address for coldkeypub")?;
 
         Ok(Wallet {
             hotkey,
-            coldkey,
             hotkey_ss58,
             coldkey_ss58,
             name: name.to_string(),
             hotkey_name: hotkey_name.to_string(),
+            wallet_path: wallet_path
+                .unwrap_or("~/.bittensor/wallets")
+                .to_string(),
         })
     }
 
-    pub fn hotkey_seed(&self) -> [u8; 32] {
+    pub fn hotkey_ss58(&self) -> &str {
+        &self.hotkey_ss58
+    }
+
+    pub fn coldkey_ss58(&self) -> &str {
+        &self.coldkey_ss58
+    }
+
+    pub fn sign_hotkey(&self, data: &[u8]) -> Result<Vec<u8>> {
+        self.hotkey
+            .sign(data.to_vec())
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub fn hotkey_public_bytes(&self) -> Result<[u8; 32]> {
+        let bytes = self
+            .hotkey
+            .public_key()
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .context("no public key")?;
+        let arr: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("public key not 32 bytes"))?;
+        Ok(arr)
+    }
+
+    pub fn hotkey_seed(&self) -> Result<[u8; 32]> {
+        if let Some(seed) = self.hotkey.seed_hex() {
+            let arr: [u8; 32] = seed
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("seed not 32 bytes"))?;
+            return Ok(arr);
+        }
+        let private = self
+            .hotkey
+            .private_key()
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .context("no private key")?;
         let mut seed = [0u8; 32];
-        let pair_bytes = self.hotkey.to_raw_vec();
-        seed.copy_from_slice(&pair_bytes[..32]);
-        seed
+        seed.copy_from_slice(&private[..32]);
+        Ok(seed)
+    }
+
+    pub(crate) fn hotkey_account_id(&self) -> Result<subxt::utils::AccountId32> {
+        let bytes = self.hotkey_public_bytes()?;
+        Ok(subxt::utils::AccountId32::from(bytes))
     }
 }

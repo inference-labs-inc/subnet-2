@@ -3,8 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use sp_core::sr25519;
-use sp_core::Pair;
+use sn2_chain::Wallet;
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
@@ -40,8 +39,7 @@ const DSPERSE_SEMAPHORE_CAPACITY: usize = 64;
 
 pub struct RelayManager {
     relay_url: String,
-    hotkey_pair: sr25519::Pair,
-    hotkey_ss58: String,
+    wallet: Arc<Wallet>,
     pending: Arc<RwLock<HashMap<String, Arc<Mutex<PendingRequest>>>>>,
     ws_tx: Option<tokio::sync::mpsc::Sender<Message>>,
     dsperse_tx: tokio::sync::mpsc::Sender<DsperseSubmission>,
@@ -53,16 +51,14 @@ pub struct RelayManager {
 impl RelayManager {
     pub fn new(
         relay_url: String,
-        hotkey_pair: sr25519::Pair,
-        hotkey_ss58: String,
+        wallet: Arc<Wallet>,
         enabled: bool,
         dsperse_tx: tokio::sync::mpsc::Sender<DsperseSubmission>,
         rwr_tx: tokio::sync::mpsc::Sender<RwrSubmission>,
     ) -> Self {
         Self {
             relay_url,
-            hotkey_pair,
-            hotkey_ss58,
+            wallet,
             pending: Arc::new(RwLock::new(HashMap::new())),
             ws_tx: None,
             dsperse_tx,
@@ -79,8 +75,7 @@ impl RelayManager {
         }
 
         let url = self.relay_url.clone();
-        let hotkey_pair = self.hotkey_pair.clone();
-        let hotkey_ss58 = self.hotkey_ss58.clone();
+        let wallet = Arc::clone(&self.wallet);
         let pending = Arc::clone(&self.pending);
         let dsperse_tx = self.dsperse_tx.clone();
         let rwr_tx = self.rwr_tx.clone();
@@ -94,8 +89,7 @@ impl RelayManager {
                 while rx.try_recv().is_ok() {}
                 match Self::connect_and_run(
                     &url,
-                    &hotkey_pair,
-                    &hotkey_ss58,
+                    &wallet,
                     &pending,
                     &dsperse_tx,
                     &rwr_tx,
@@ -129,8 +123,7 @@ impl RelayManager {
     #[allow(clippy::too_many_arguments)]
     async fn connect_and_run(
         url: &str,
-        hotkey_pair: &sr25519::Pair,
-        hotkey_ss58: &str,
+        wallet: &Wallet,
         pending: &PendingMap,
         dsperse_tx: &tokio::sync::mpsc::Sender<DsperseSubmission>,
         rwr_tx: &tokio::sync::mpsc::Sender<RwrSubmission>,
@@ -145,7 +138,7 @@ impl RelayManager {
         use futures_util::{SinkExt, StreamExt};
         let (mut write, mut read) = ws_stream.split();
 
-        Self::authenticate(&mut read, &mut write, hotkey_pair, hotkey_ss58).await?;
+        Self::authenticate(&mut read, &mut write, wallet).await?;
         info!("relay authenticated");
 
         let ping_interval = tokio::time::interval(Duration::from_secs(RELAY_PING_INTERVAL));
@@ -205,8 +198,7 @@ impl RelayManager {
     async fn authenticate<S, R>(
         read: &mut R,
         write: &mut S,
-        hotkey_pair: &sr25519::Pair,
-        hotkey_ss58: &str,
+        wallet: &Wallet,
     ) -> Result<()>
     where
         S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
@@ -240,12 +232,12 @@ impl RelayManager {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, challenge_b64)
                 .context("decoding challenge base64")?;
 
-        let signature = hotkey_pair.sign(&challenge_bytes);
+        let sig_bytes = wallet.sign_hotkey(&challenge_bytes)?;
 
         let response = serde_json::json!({
             "type": "auth_response",
-            "ss58": hotkey_ss58,
-            "signature": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signature.0),
+            "ss58": wallet.hotkey_ss58(),
+            "signature": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &sig_bytes),
         });
 
         write

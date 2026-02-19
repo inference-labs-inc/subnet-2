@@ -37,6 +37,7 @@ tempfile = "3"
 zstd = "0.13"
 which = "7"
 sp-core = "31"
+bittensor_wallet = { git = "https://github.com/opentensor/btwallet", rev = "bff16fd6a823474e49ef53fa689249f9d9ddb745", default-features = false }
 subxt = "0.37"
 btlightning = "0.1.0"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

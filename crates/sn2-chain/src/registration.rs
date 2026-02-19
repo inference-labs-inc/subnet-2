@@ -1,8 +1,8 @@
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use sp_core::crypto::Ss58Codec;
-use sp_core::Pair;
 use subxt::dynamic::Value;
 use subxt::{OnlineClient, PolkadotConfig};
 use tracing::info;
@@ -21,7 +21,7 @@ impl Registration {
     pub async fn serve_axon(
         &self,
         client: &OnlineClient<PolkadotConfig>,
-        wallet: &Wallet,
+        wallet: &Arc<Wallet>,
         ip: IpAddr,
         port: u16,
         protocol: u8,
@@ -40,9 +40,10 @@ impl Registration {
             }
         };
 
-        let hotkey_bytes = wallet.hotkey.public().0;
-        let coldkey_bytes = sp_core::crypto::AccountId32::from_ss58check(&wallet.coldkey_ss58)
-            .map_err(|e| anyhow::anyhow!("invalid coldkey SS58: {:?}", e))?;
+        let hotkey_bytes = wallet.hotkey_public_bytes()?;
+        let coldkey_bytes =
+            sp_core::crypto::AccountId32::from_ss58check(wallet.coldkey_ss58())
+                .map_err(|e| anyhow::anyhow!("invalid coldkey SS58: {:?}", e))?;
 
         let tx = subxt::dynamic::tx(
             "SubtensorModule",
@@ -61,7 +62,7 @@ impl Registration {
             ],
         );
 
-        let signer = crate::weights::SubxtSr25519Signer::new(wallet.hotkey.clone());
+        let signer = crate::weights::SubxtSr25519Signer::new(wallet)?;
 
         let result = client
             .tx()
