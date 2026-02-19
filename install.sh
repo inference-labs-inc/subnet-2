@@ -30,13 +30,13 @@ detect_platform() {
 }
 
 get_latest_tag() {
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' || true
+  curl -fsSL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' || true
 }
 
 download_sums() {
   local tag="$1"
   local sums_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS"
-  curl -fSL -o "${TMP_DIR}/SHA256SUMS" "$sums_url"
+  curl -fSL --connect-timeout 10 --max-time 30 -o "${TMP_DIR}/SHA256SUMS" "$sums_url"
 }
 
 download_and_verify() {
@@ -45,7 +45,7 @@ download_and_verify() {
   local url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
 
   echo "Downloading ${asset} (${tag})..."
-  curl -fSL -o "${TMP_DIR}/${asset}" "$url"
+  curl -fSL --connect-timeout 10 --max-time 120 -o "${TMP_DIR}/${asset}" "$url"
 
   echo "Verifying checksum..."
   local expected actual
