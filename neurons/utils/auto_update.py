@@ -304,7 +304,10 @@ class AutoUpdate:
             return False
 
         if not self._verify_checksum(tmp_path, expected_hash):
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
             return False
 
         os.chmod(tmp_path, 0o750)
