@@ -1,10 +1,12 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
 const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+const API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 const RELEASES_URL: &str =
     "https://api.github.com/repos/inference-labs-inc/subnet-2/releases/latest";
 
@@ -12,10 +14,7 @@ fn platform_suffix() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "linux-x86_64",
         ("macos", "aarch64") => "macos-aarch64",
-        (os, arch) => {
-            warn!(os, arch, "unsupported platform for auto-update");
-            ""
-        }
+        _ => "",
     }
 }
 
@@ -41,14 +40,14 @@ fn parse_tag(tag: &str) -> Result<semver::Version> {
     semver::Version::parse(stripped).with_context(|| format!("parsing release tag '{tag}'"))
 }
 
-async fn check_and_update(client: &reqwest::Client, binary_name: &str) -> Result<bool> {
-    let suffix = platform_suffix();
-    if suffix.is_empty() {
-        return Ok(false);
-    }
-
+async fn check_and_update(
+    client: &reqwest::Client,
+    binary_name: &str,
+    suffix: &str,
+) -> Result<bool> {
     let release: Release = client
         .get(RELEASES_URL)
+        .timeout(API_TIMEOUT)
         .header("User-Agent", "sn2-auto-update")
         .send()
         .await
@@ -87,6 +86,7 @@ async fn check_and_update(client: &reqwest::Client, binary_name: &str) -> Result
 
     let checksums_text = client
         .get(&checksums_asset.browser_download_url)
+        .timeout(API_TIMEOUT)
         .header("User-Agent", "sn2-auto-update")
         .send()
         .await
@@ -112,6 +112,7 @@ async fn check_and_update(client: &reqwest::Client, binary_name: &str) -> Result
 
     let binary_bytes = client
         .get(&asset.browser_download_url)
+        .timeout(DOWNLOAD_TIMEOUT)
         .header("User-Agent", "sn2-auto-update")
         .send()
         .await
@@ -133,33 +134,47 @@ async fn check_and_update(client: &reqwest::Client, binary_name: &str) -> Result
     let tmp_path = parent.join(format!(".{binary_name}.update.tmp"));
 
     std::fs::write(&tmp_path, &binary_bytes).context("writing temporary binary")?;
-    set_executable(&tmp_path)?;
-    std::fs::rename(&tmp_path, &current_exe).context("replacing current binary")?;
+
+    if let Err(e) = set_executable(&tmp_path)
+        .and_then(|()| std::fs::rename(&tmp_path, &current_exe).context("replacing current binary"))
+    {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
 
     info!(version = %remote, "update applied, exiting for restart");
     Ok(true)
 }
 
 #[cfg(unix)]
-fn set_executable(path: &PathBuf) -> Result<()> {
+fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let perms = std::fs::Permissions::from_mode(0o755);
     std::fs::set_permissions(path, perms).context("setting executable permissions")
 }
 
 #[cfg(not(unix))]
-fn set_executable(_path: &PathBuf) -> Result<()> {
+fn set_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
 pub fn spawn_update_loop(binary_name: &'static str) -> tokio::task::JoinHandle<()> {
+    let suffix = platform_suffix();
+    if suffix.is_empty() {
+        warn!("unsupported platform for auto-update, skipping");
+        return tokio::spawn(std::future::ready(()));
+    }
+
     tokio::spawn(async move {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("building HTTP client");
         let mut interval = tokio::time::interval(CHECK_INTERVAL);
         interval.tick().await;
         loop {
             interval.tick().await;
-            match check_and_update(&client, binary_name).await {
+            match check_and_update(&client, binary_name, suffix).await {
                 Ok(true) => std::process::exit(0),
                 Ok(false) => {}
                 Err(e) => warn!(error = %e, "auto-update check failed"),

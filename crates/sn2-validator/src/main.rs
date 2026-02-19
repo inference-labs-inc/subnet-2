@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
         .init();
 
     if !cli.no_auto_update {
-        sn2_chain::auto_update::spawn_update_loop("sn2-validator");
+        let _update_handle = sn2_chain::auto_update::spawn_update_loop("sn2-validator");
     }
 
     info!(
