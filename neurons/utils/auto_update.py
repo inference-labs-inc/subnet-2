@@ -1,15 +1,63 @@
+import hashlib
+import json
+import os
+import platform
+import stat
 import subprocess
-import git
+import sys
 import time
-import requests
+import urllib.request
 from typing import Optional
+
+import git
+import requests
+
+import cli_parser
 from constants import REPO_URL, ONE_MINUTE
 from bittensor import logging
 
 from .system import restart_app
-import cli_parser
 
 TARGET_BRANCH = "main"
+
+GITHUB_API_RELEASES_URL = (
+    REPO_URL.replace("github.com", "api.github.com/repos") + "/releases/latest"
+)
+
+PLATFORM_MAP = {
+    ("Linux", "x86_64"): "linux-x86_64",
+    ("Darwin", "arm64"): "macos-aarch64",
+}
+
+PYTHON_ONLY_FLAGS = frozenset({
+    "--disable-blacklist",
+    "--dev",
+    "--localnet",
+    "--disable-metric-logging",
+    "--disable-statistic-logging",
+    "--ignore-external-requests",
+    "--enable-pow",
+    "--prometheus-monitoring",
+    "--download-all-circuits",
+    "--verbose",
+})
+
+PYTHON_ONLY_VALUE_ARGS = frozenset({
+    "--pow-target-interval",
+    "--blocks_per_epoch",
+    "--prometheus-port",
+    "--max-benchmark-concurrent",
+    "--additional-circuits",
+    "--external-model-dir",
+    "--dsperse-run-dir",
+    "--timeout",
+    "--storage.provider",
+    "--storage.bucket",
+    "--storage.account_id",
+    "--storage.access_key",
+    "--storage.secret_key",
+    "--storage.region",
+})
 
 
 def get_version() -> Optional[str]:
@@ -61,20 +109,21 @@ class AutoUpdate:
             logging.exception("Failed to get the current tag", e)
             return None
 
-    def get_latest_release_tag(self):
-        """
-        Get the latest release tag from the GitHub repository
-        """
+    def get_latest_release(self) -> Optional[dict]:
         try:
             headers = {"Accept": "application/vnd.github.v3+json"}
-            api_url = f"{REPO_URL.replace('github.com', 'api.github.com/repos')}/releases/latest"
-            response = requests.get(api_url, headers=headers, timeout=10)
+            response = requests.get(GITHUB_API_RELEASES_URL, headers=headers, timeout=10)
             response.raise_for_status()
-            latest_release = response.json()
-            return latest_release["tag_name"]
+            return response.json()
         except requests.RequestException as e:
             logging.exception("Failed to fetch the latest release from GitHub.", e)
             return None
+
+    def get_latest_release_tag(self) -> Optional[str]:
+        release = self.get_latest_release()
+        if release:
+            return release["tag_name"]
+        return None
 
     def attempt_packages_update(self):
         """
@@ -145,15 +194,198 @@ class AutoUpdate:
 
         return False
 
-    def try_update(self):
-        """
-        Automatic update entrypoint method
-        """
+    def _detect_role(self) -> str:
+        script = os.path.basename(sys.argv[0])
+        if "miner" in script:
+            return "miner"
+        return "validator"
 
+    def _detect_platform_suffix(self) -> Optional[str]:
+        key = (platform.system(), platform.machine())
+        suffix = PLATFORM_MAP.get(key)
+        if not suffix:
+            logging.warning(f"No Rust binary available for platform {key}")
+        return suffix
+
+    def _find_asset_url(self, assets: list, name: str) -> Optional[str]:
+        for asset in assets:
+            if asset["name"] == name:
+                return asset["browser_download_url"]
+        return None
+
+    def _download_file(self, url: str, dest: str) -> bool:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "subnet-2-auto-updater"})
+            with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            return True
+        except Exception as e:
+            logging.warning(f"Failed to download {url}: {e}")
+            return False
+
+    def _verify_checksum(self, filepath: str, expected_hash: str) -> bool:
+        h = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+        actual = h.hexdigest()
+        if actual != expected_hash:
+            logging.warning(f"Checksum mismatch: expected {expected_hash}, got {actual}")
+            return False
+        return True
+
+    def _parse_sha256sums(self, content: str) -> dict:
+        result = {}
+        for line in content.strip().splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                result[parts[1]] = parts[0]
+        return result
+
+    def _get_pm2_process_name(self) -> Optional[str]:
+        if "PM2_HOME" not in os.environ:
+            return None
+        try:
+            output = subprocess.check_output(
+                ["pm2", "jlist"], timeout=10, stderr=subprocess.DEVNULL
+            )
+            processes = json.loads(output)
+            pid = os.getpid()
+            for proc in processes:
+                if proc.get("pid") == pid:
+                    return proc.get("name")
+        except Exception:
+            pass
+        role = self._detect_role()
+        return f"subnet-2-{role}"
+
+    def _collect_rust_args(self) -> list:
+        argv = sys.argv[1:]
+        args = []
+        skip_next = False
+        for i, arg in enumerate(argv):
+            if skip_next:
+                skip_next = False
+                continue
+
+            bare_arg = arg.split("=")[0] if "=" in arg else arg
+
+            if bare_arg in PYTHON_ONLY_FLAGS:
+                logging.info(f"Dropping Python-only flag: {bare_arg}")
+                continue
+
+            if bare_arg in PYTHON_ONLY_VALUE_ARGS:
+                logging.info(f"Dropping Python-only arg: {bare_arg}")
+                if "=" not in arg and (i + 1) < len(argv):
+                    skip_next = True
+                continue
+
+            args.append(arg)
+        return args
+
+    def try_rust_migration(self) -> bool:
+        release = self.get_latest_release()
+        if not release:
+            return False
+
+        assets = release.get("assets", [])
+        if not assets:
+            return False
+
+        platform_suffix = self._detect_platform_suffix()
+        if not platform_suffix:
+            return False
+
+        role = self._detect_role()
+        binary_name = f"sn2-{role}-{platform_suffix}"
+
+        binary_url = self._find_asset_url(assets, binary_name)
+        if not binary_url:
+            return False
+
+        sums_url = self._find_asset_url(assets, "SHA256SUMS")
+        if not sums_url:
+            logging.warning("Rust release found but SHA256SUMS asset missing, skipping migration")
+            return False
+
+        logging.info(f"Rust binary release detected: {binary_name} in {release['tag_name']}")
+
+        repo_root = self.repo.working_dir
+        binary_path = os.path.join(repo_root, f"sn2-{role}")
+        sums_path = os.path.join(repo_root, ".sha256sums.tmp")
+
+        if not self._download_file(sums_url, sums_path):
+            return False
+
+        with open(sums_path, "r") as f:
+            checksums = self._parse_sha256sums(f.read())
+        os.unlink(sums_path)
+
+        expected_hash = checksums.get(binary_name)
+        if not expected_hash:
+            logging.warning(f"No checksum found for {binary_name} in SHA256SUMS")
+            return False
+
+        if os.path.exists(binary_path):
+            if self._verify_checksum(binary_path, expected_hash):
+                logging.info(f"Rust binary already installed and up to date at {binary_path}")
+                return False
+
+        logging.info(f"Downloading Rust binary: {binary_name}")
+        tmp_path = binary_path + ".tmp"
+        if not self._download_file(binary_url, tmp_path):
+            return False
+
+        if not self._verify_checksum(tmp_path, expected_hash):
+            os.unlink(tmp_path)
+            return False
+
+        os.chmod(tmp_path, os.stat(tmp_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        os.replace(tmp_path, binary_path)
+
+        logging.info(f"Rust binary installed at {binary_path}")
+
+        rust_args = self._collect_rust_args()
+
+        pm2_name = self._get_pm2_process_name()
+        if pm2_name:
+            logging.info(f"Reconfiguring PM2 process '{pm2_name}' to use Rust binary")
+            try:
+                subprocess.run(
+                    ["pm2", "delete", pm2_name],
+                    timeout=10, check=False, capture_output=True,
+                )
+                subprocess.run(
+                    ["pm2", "start", binary_path, "--name", pm2_name, "--"] + rust_args,
+                    timeout=10, check=True, capture_output=True,
+                )
+                logging.info(f"PM2 process '{pm2_name}' reconfigured to Rust binary")
+                subprocess.run(["pm2", "save"], timeout=10, check=False, capture_output=True)
+            except Exception as e:
+                logging.warning(f"PM2 reconfiguration failed: {e}")
+                return False
+            sys.exit(0)
+        else:
+            logging.info(f"No PM2 detected, execing into Rust binary: {binary_path}")
+            os.execl(binary_path, binary_path, *rust_args)
+
+        return True
+
+    def try_update(self):
         if time.time() - self.last_check_time < 300:
             return
 
         self.last_check_time = time.time()
+
+        if self.try_rust_migration():
+            return
 
         if not self.update_to_latest_release():
             return
