@@ -52,6 +52,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
+        id: setup-python
         with:
           python-version: "3.12"
 
@@ -60,6 +61,8 @@ jobs:
 
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
 
       - name: Rename binaries
         run: |
