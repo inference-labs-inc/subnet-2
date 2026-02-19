@@ -47,21 +47,23 @@ jobs:
         run: |
           semgrep --config=auto \
             --json --output=semgrep-results.json \
-            --error
+            --error || true
           semgrep --config=auto \
             --sarif --output=semgrep-results.sarif \
-            --error
-        continue-on-error: true
+            || true
 
       - name: Upload Semgrep Results
+        if: always()
         uses: actions/upload-artifact@v5
         with:
           name: semgrep-results
           path: |
             semgrep-results.json
             semgrep-results.sarif
+          if-no-files-found: ignore
 
       - name: Upload SARIF results to GitHub
+        if: hashFiles('semgrep-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep-results.sarif
