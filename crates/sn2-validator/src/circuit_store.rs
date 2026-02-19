@@ -91,7 +91,8 @@ impl CircuitStore {
 
         let data: serde_json::Value = resp.json().await.context("parsing circuit response")?;
         let circuit = self.cache_and_load_circuit(circuit_id, &data).await?;
-        self.circuits.insert(circuit_id.to_string(), circuit.clone());
+        self.circuits
+            .insert(circuit_id.to_string(), circuit.clone());
         Ok(circuit)
     }
 
@@ -282,18 +283,13 @@ impl CircuitStore {
         }
 
         let bytes = resp.bytes().await.context("reading download body")?;
-        std::fs::write(dest, &bytes)
-            .with_context(|| format!("writing {}", dest.display()))?;
+        std::fs::write(dest, &bytes).with_context(|| format!("writing {}", dest.display()))?;
 
         Ok(())
     }
 }
 
-fn load_circuit_from_cache(
-    circuit_id: &str,
-    dir: &Path,
-    cache_dir: &Path,
-) -> Result<Circuit> {
+fn load_circuit_from_cache(circuit_id: &str, dir: &Path, cache_dir: &Path) -> Result<Circuit> {
     let metadata_path = dir.join(CIRCUIT_METADATA_FILENAME);
     let metadata_str = std::fs::read_to_string(&metadata_path).context("reading metadata")?;
     let metadata: CircuitMetadata =
@@ -303,10 +299,7 @@ fn load_circuit_from_cache(
 
     Ok(Circuit {
         id: circuit_id.to_string(),
-        paths: CircuitPaths::new(
-            &format!("model_{circuit_id}"),
-            &cache_dir.to_string_lossy(),
-        ),
+        paths: CircuitPaths::new(&format!("model_{circuit_id}"), &cache_dir.to_string_lossy()),
         metadata,
         proof_system,
         settings,

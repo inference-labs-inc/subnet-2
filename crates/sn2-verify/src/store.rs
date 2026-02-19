@@ -17,6 +17,12 @@ pub struct TileStore {
     data: Mutex<HashMap<String, StoredTile>>,
 }
 
+impl Default for TileStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TileStore {
     pub fn new() -> Self {
         Self {
@@ -37,6 +43,9 @@ impl TileStore {
         tiles_x: usize,
     ) -> Result<Vec<f64>> {
         let expected = tiles_y * tiles_x;
+        if expected == 0 {
+            return Ok(vec![]);
+        }
         if tile_keys.len() != expected {
             bail!(
                 "tile_keys length {} != tiles_y({}) * tiles_x({})",

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use num_bigint::{BigInt, BigUint};
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -34,8 +34,7 @@ pub struct ExtractedIO {
 
 pub fn decompress_if_needed(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() >= 4 && data[..4] == ZSTD_MAGIC {
-        zstd::bulk::decompress(data, 512 * 1024 * 1024)
-            .context("zstd decompression failed")
+        zstd::bulk::decompress(data, 512 * 1024 * 1024).context("zstd decompression failed")
     } else {
         Ok(data.to_vec())
     }
@@ -72,7 +71,9 @@ pub fn load_witness_from_bytes(raw: &[u8]) -> Result<WitnessData> {
         .checked_mul(32)
         .context("witness header overflow: total_elements * 32")?;
     let mut bulk = vec![0u8; total_bytes];
-    cursor.read_exact(&mut bulk).context("witness data truncated")?;
+    cursor
+        .read_exact(&mut bulk)
+        .context("witness data truncated")?;
 
     let mut witnesses = Vec::with_capacity(num_witnesses as usize);
 
@@ -88,7 +89,10 @@ pub fn load_witness_from_bytes(raw: &[u8]) -> Result<WitnessData> {
             let offset = (base + num_inputs as usize + i) * 32;
             public_inputs.push(BigUint::from_bytes_le(&bulk[offset..offset + 32]));
         }
-        witnesses.push(Witness { inputs, public_inputs });
+        witnesses.push(Witness {
+            inputs,
+            public_inputs,
+        });
     }
 
     Ok(WitnessData {
@@ -102,7 +106,8 @@ pub fn load_witness_from_bytes(raw: &[u8]) -> Result<WitnessData> {
 
 #[allow(dead_code)]
 pub fn load_witness_from_file(path: &Path) -> Result<WitnessData> {
-    let raw = std::fs::read(path).with_context(|| format!("reading witness file: {}", path.display()))?;
+    let raw =
+        std::fs::read(path).with_context(|| format!("reading witness file: {}", path.display()))?;
     load_witness_from_bytes(&raw)
 }
 
@@ -149,7 +154,8 @@ pub fn extract_io(witness_data: &WitnessData, num_inputs: usize) -> Result<Extra
         .map(|v| crate::field::from_field_repr(v, modulus))
         .collect();
 
-    let rescaled_outputs = crate::field::descale_outputs(&signed_outputs, scale_base, scale_exponent);
+    let rescaled_outputs =
+        crate::field::descale_outputs(&signed_outputs, scale_base, scale_exponent);
 
     Ok(ExtractedIO {
         inputs,

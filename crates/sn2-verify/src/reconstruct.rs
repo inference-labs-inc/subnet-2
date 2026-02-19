@@ -67,8 +67,7 @@ mod tests {
             for ci in 0..c {
                 for yi in 0..h {
                     for xi in 0..w {
-                        tile[ci * h * w + yi * w + xi] =
-                            (t * 100 + ci * 10 + yi * w + xi) as f64;
+                        tile[ci * h * w + yi * w + xi] = (t * 100 + ci * 10 + yi * w + xi) as f64;
                     }
                 }
             }
@@ -88,8 +87,7 @@ mod tests {
                     let tile_idx = ty * 2 + tx;
                     for yi in 0..h {
                         for xi in 0..w {
-                            let expected_val =
-                                (tile_idx * 100 + ci * 10 + yi * w + xi) as f64;
+                            let expected_val = (tile_idx * 100 + ci * 10 + yi * w + xi) as f64;
                             let dst_y = ty * h + yi;
                             let dst_x = tx * w + xi;
                             let dst_idx = ci * out_h * out_w + dst_y * out_w + dst_x;

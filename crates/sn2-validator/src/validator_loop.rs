@@ -103,7 +103,7 @@ impl PowManager {
 
 enum RetryPayload {
     Rwr(RwrSubmission),
-    DSlice(DSliceRequest),
+    DSlice(Box<DSliceRequest>),
     None,
 }
 
@@ -125,7 +125,7 @@ struct TaskResult {
 }
 
 enum TaskOutcome {
-    Success(MinerResponse),
+    Success(Box<MinerResponse>),
     Failure(String),
 }
 
@@ -178,9 +178,10 @@ impl ValidatorLoop {
         let performance_tracker = PerformanceTracker::new_with_persistence(perf_path);
         let weights_setter = WeightsSetter::new(config.netuid);
 
-        let miner_client = Arc::new(RwLock::new(
-            MinerQueryClient::new(config.wallet.hotkey.clone(), &config.wallet.hotkey_ss58)?,
-        ));
+        let miner_client = Arc::new(RwLock::new(MinerQueryClient::new(
+            config.wallet.hotkey.clone(),
+            &config.wallet.hotkey_ss58,
+        )?));
 
         let (dsperse_tx, dsperse_rx) = tokio::sync::mpsc::channel::<DsperseSubmission>(256);
         let (rwr_tx, rwr_rx) = tokio::sync::mpsc::channel::<RwrSubmission>(256);
@@ -246,9 +247,8 @@ impl ValidatorLoop {
             "validator loop starting"
         );
 
-        let mut tick = tokio::time::interval(Duration::from_millis(
-            (LOOP_DELAY_SECONDS * 1000.0) as u64,
-        ));
+        let mut tick =
+            tokio::time::interval(Duration::from_millis((LOOP_DELAY_SECONDS * 1000.0) as u64));
 
         loop {
             tokio::select! {
@@ -310,7 +310,11 @@ impl ValidatorLoop {
     }
 
     async fn handle_dsperse_submission(&mut self, submission: DsperseSubmission) {
-        let circuit = match self.circuit_store.ensure_circuit(&submission.circuit_id).await {
+        let circuit = match self
+            .circuit_store
+            .ensure_circuit(&submission.circuit_id)
+            .await
+        {
             Ok(c) => c,
             Err(e) => {
                 warn!(circuit = %submission.circuit_id, error = %e, "unknown circuit in dsperse submission");
@@ -328,12 +332,7 @@ impl ValidatorLoop {
 
         let run_result = self
             .dsperse
-            .start_incremental_run(
-                &circuit.id,
-                &submission.inputs,
-                "api",
-                Some(1),
-            )
+            .start_incremental_run(&circuit.id, &submission.inputs, "api", Some(1))
             .await;
 
         match run_result {
@@ -358,10 +357,7 @@ impl ValidatorLoop {
                 warn!(error = %e, "failed to start incremental run");
                 if let Some(req_id) = &submission.request_id {
                     self.relay
-                        .send_response(
-                            req_id,
-                            serde_json::json!({"error": e.to_string()}),
-                        )
+                        .send_response(req_id, serde_json::json!({"error": e.to_string()}))
                         .await;
                 }
             }
@@ -393,8 +389,14 @@ impl ValidatorLoop {
                 .get("task_id")
                 .and_then(|v| v.as_str())
                 .map(String::from);
-            let is_tile = item.get("is_tile").and_then(|v| v.as_bool()).unwrap_or(false);
-            let tile_idx = item.get("tile_idx").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let is_tile = item
+                .get("is_tile")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let tile_idx = item
+                .get("tile_idx")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
             let proof_system_str = item
                 .get("proof_system")
                 .and_then(|v| v.as_str())
@@ -406,7 +408,10 @@ impl ValidatorLoop {
                 "EZKL" => ProofSystem::EZKL,
                 _ => ProofSystem::JSTPROVE,
             };
-            let inputs = item.get("inputs").cloned().unwrap_or(serde_json::Value::Null);
+            let inputs = item
+                .get("inputs")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let outputs = item.get("outputs").cloned();
             let run_source_str = item
                 .get("run_source")
@@ -476,9 +481,18 @@ impl ValidatorLoop {
                 .and_then(|v| v.as_str())
                 .unwrap_or("0")
                 .to_string();
-            let task_id = item.get("task_id").and_then(|v| v.as_str()).map(String::from);
-            let is_tile = item.get("is_tile").and_then(|v| v.as_bool()).unwrap_or(false);
-            let tile_idx = item.get("tile_idx").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let task_id = item
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let is_tile = item
+                .get("is_tile")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let tile_idx = item
+                .get("tile_idx")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
             let proof_system_str = item
                 .get("proof_system")
                 .and_then(|v| v.as_str())
@@ -490,7 +504,10 @@ impl ValidatorLoop {
                 "EZKL" => ProofSystem::EZKL,
                 _ => ProofSystem::JSTPROVE,
             };
-            let inputs = item.get("inputs").cloned().unwrap_or(serde_json::Value::Null);
+            let inputs = item
+                .get("inputs")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let outputs = item.get("outputs").cloned();
             let run_source_str = item
                 .get("run_source")
@@ -540,10 +557,7 @@ impl ValidatorLoop {
         let adaptive_timeout = self.performance_tracker.adaptive_timeout();
 
         let queryable = self.get_queryable_neurons();
-        let mut neurons: Vec<sn2_chain::NeuronInfo> = queryable
-            .into_iter()
-            .cloned()
-            .collect();
+        let mut neurons: Vec<sn2_chain::NeuronInfo> = queryable.into_iter().cloned().collect();
         rand::seq::SliceRandom::shuffle(neurons.as_mut_slice(), &mut rand::thread_rng());
 
         let neuron_refs: Vec<&sn2_chain::NeuronInfo> = neurons.iter().collect();
@@ -576,33 +590,164 @@ impl ValidatorLoop {
             let slots_for_miner = (cap - active_now).min(available_slots - dispatched);
 
             for _slot in 0..slots_for_miner {
-            if dispatched >= available_slots {
-                break;
-            }
-            let active = self.miner_active_count.get(&uid).copied().unwrap_or(0);
-            let was_at_capacity = active + 1 >= cap;
+                if dispatched >= available_slots {
+                    break;
+                }
+                let active = self.miner_active_count.get(&uid).copied().unwrap_or(0);
+                let was_at_capacity = active + 1 >= cap;
 
-            let request_type;
-            let guard_hash;
-            let external_request_hash;
-            let body: serde_json::Value;
-            let synapse_name: &str;
-            let retry_count: u32;
-            let slice_num: Option<String>;
-            let run_uid: Option<String>;
-            let is_tile: bool;
-            let task_id: Option<String>;
-            let tile_idx: Option<u32>;
-            let task_circuit: Option<Circuit>;
-            let task_inputs: Option<serde_json::Value>;
-            let task_proof_system: Option<ProofSystem>;
-            let retry_payload: RetryPayload;
+                let request_type;
+                let guard_hash;
+                let external_request_hash;
+                let body: serde_json::Value;
+                let synapse_name: &str;
+                let retry_count: u32;
+                let slice_num: Option<String>;
+                let run_uid: Option<String>;
+                let is_tile: bool;
+                let task_id: Option<String>;
+                let tile_idx: Option<u32>;
+                let task_circuit: Option<Circuit>;
+                let task_inputs: Option<serde_json::Value>;
+                let task_proof_system: Option<ProofSystem>;
+                let retry_payload: RetryPayload;
 
-            if let Some(ref pow_circ) = pow_circuit {
-                if self.pow_manager.should_batch() {
-                    let items = self.pow_manager.drain_batch();
-                    let inputs = PowManager::prepare_inputs(&items);
+                if let Some(ref pow_circ) = pow_circuit {
+                    if self.pow_manager.should_batch() {
+                        let items = self.pow_manager.drain_batch();
+                        let inputs = PowManager::prepare_inputs(&items);
+                        request_type = RequestType::Rwr;
+                        external_request_hash = None;
+                        retry_count = 0;
+                        slice_num = None;
+                        run_uid = None;
+                        is_tile = false;
+                        task_id = None;
+                        tile_idx = None;
+                        synapse_name = ProofOfWeightsDataModel::NAME;
+                        body = serde_json::json!({
+                            "subnet_uid": self.config.netuid,
+                            "verification_key_hash": pow_circ.id,
+                            "proof_system": pow_circ.proof_system.to_string(),
+                            "inputs": inputs,
+                            "proof": "",
+                            "public_signals": "",
+                        });
+                        guard_hash = Some(String::new());
+                        task_circuit = Some(pow_circ.clone());
+                        task_inputs = None;
+                        task_proof_system = Some(pow_circ.proof_system);
+                        retry_payload = RetryPayload::None;
+                    } else {
+                        break;
+                    }
+                } else if let Some(rwr) = self.rwr_queue.pop_front() {
+                    retry_payload = RetryPayload::Rwr(rwr.clone());
+                    let circuit = match self.circuit_store.ensure_circuit(&rwr.circuit_id).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            warn!(circuit = %rwr.circuit_id, error = %e, "unknown circuit for RWR");
+                            if let Some(req_id) = &rwr.request_id {
+                                self.relay.send_response(
+                                req_id,
+                                serde_json::json!({"success": false, "error": format!("unknown circuit: {e}")}),
+                            ).await;
+                            }
+                            break;
+                        }
+                    };
                     request_type = RequestType::Rwr;
+                    external_request_hash = rwr.request_id.clone();
+                    retry_count = rwr.retry_count;
+                    slice_num = None;
+                    run_uid = None;
+                    is_tile = false;
+                    task_id = None;
+                    tile_idx = None;
+                    synapse_name = QueryZkProof::NAME;
+                    task_circuit = Some(circuit.clone());
+                    task_inputs = Some(rwr.inputs.clone());
+                    task_proof_system = Some(circuit.proof_system);
+                    body = serde_json::json!({
+                        "model_id": circuit.id,
+                        "query_input": rwr.inputs,
+                    });
+                    guard_hash = self.pipeline.check_hash(&body);
+                    if guard_hash.is_none() {
+                        self.rwr_queue.push_back(rwr);
+                        break;
+                    }
+                } else if api_eligible.contains(&uid) && !self.api_dslice_queue.is_empty() {
+                    let dslice = self.api_dslice_queue.pop_front().unwrap();
+                    retry_payload = RetryPayload::DSlice(Box::new(dslice.clone()));
+                    request_type = RequestType::DSlice;
+                    external_request_hash = None;
+                    retry_count = dslice.retry_count;
+                    slice_num = Some(dslice.slice_num.clone());
+                    run_uid = Some(dslice.run_uid.clone());
+                    is_tile = dslice.is_tile;
+                    task_id = dslice.task_id.clone();
+                    tile_idx = dslice.tile_idx;
+                    task_circuit = Some(dslice.circuit.clone());
+                    task_inputs = Some(dslice.inputs.clone());
+                    task_proof_system = Some(dslice.proof_system);
+                    synapse_name = DSliceProofGenerationDataModel::NAME;
+                    let dslice_model = self.pipeline.prepare_dslice_request(
+                        uid,
+                        &dslice.circuit,
+                        dslice.inputs.clone(),
+                        dslice.outputs.clone(),
+                        &dslice.slice_num,
+                        &dslice.run_uid,
+                        dslice.proof_system,
+                    );
+                    body = serde_json::to_value(&dslice_model).unwrap_or_default();
+                    guard_hash = self.pipeline.check_hash(&body);
+                    if guard_hash.is_none() {
+                        self.api_dslice_queue.push_back(dslice);
+                        break;
+                    }
+                } else if let Some(dslice) = self.stacked_dslice_queue.pop_front() {
+                    retry_payload = RetryPayload::DSlice(Box::new(dslice.clone()));
+                    request_type = RequestType::DSlice;
+                    external_request_hash = None;
+                    retry_count = dslice.retry_count;
+                    slice_num = Some(dslice.slice_num.clone());
+                    run_uid = Some(dslice.run_uid.clone());
+                    is_tile = dslice.is_tile;
+                    task_id = dslice.task_id.clone();
+                    tile_idx = dslice.tile_idx;
+                    task_circuit = Some(dslice.circuit.clone());
+                    task_inputs = Some(dslice.inputs.clone());
+                    task_proof_system = Some(dslice.proof_system);
+                    synapse_name = DSliceProofGenerationDataModel::NAME;
+                    let dslice_model = self.pipeline.prepare_dslice_request(
+                        uid,
+                        &dslice.circuit,
+                        dslice.inputs.clone(),
+                        dslice.outputs.clone(),
+                        &dslice.slice_num,
+                        &dslice.run_uid,
+                        dslice.proof_system,
+                    );
+                    body = serde_json::to_value(&dslice_model).unwrap_or_default();
+                    guard_hash = self.pipeline.check_hash(&body);
+                    if guard_hash.is_none() {
+                        self.stacked_dslice_queue.push_back(dslice);
+                        break;
+                    }
+                } else if !self.config.disable_benchmark && !benchmark_circuits.is_empty() {
+                    let weights: Vec<f64> = benchmark_circuits
+                        .iter()
+                        .map(|c| c.metadata.benchmark_choice_weight.unwrap_or(1.0))
+                        .collect();
+                    let dist = match rand::distributions::WeightedIndex::new(&weights) {
+                        Ok(d) => d,
+                        Err(_) => break,
+                    };
+                    let circuit_idx = rand::Rng::sample(&mut rand::thread_rng(), &dist);
+                    let circuit = &benchmark_circuits[circuit_idx];
+                    request_type = RequestType::Benchmark;
                     external_request_hash = None;
                     retry_count = 0;
                     slice_num = None;
@@ -610,284 +755,159 @@ impl ValidatorLoop {
                     is_tile = false;
                     task_id = None;
                     tile_idx = None;
-                    synapse_name = ProofOfWeightsDataModel::NAME;
-                    body = serde_json::json!({
-                        "subnet_uid": self.config.netuid,
-                        "verification_key_hash": pow_circ.id,
-                        "proof_system": pow_circ.proof_system.to_string(),
-                        "inputs": inputs,
-                        "proof": "",
-                        "public_signals": "",
-                    });
-                    guard_hash = Some(String::new());
-                    task_circuit = Some(pow_circ.clone());
-                    task_inputs = None;
-                    task_proof_system = Some(pow_circ.proof_system);
+                    task_circuit = Some(circuit.clone());
+                    task_proof_system = Some(circuit.proof_system);
                     retry_payload = RetryPayload::None;
-                } else {
-                    break;
-                }
-            } else if let Some(rwr) = self.rwr_queue.pop_front() {
-                retry_payload = RetryPayload::Rwr(rwr.clone());
-                let circuit = match self.circuit_store.ensure_circuit(&rwr.circuit_id).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        warn!(circuit = %rwr.circuit_id, error = %e, "unknown circuit for RWR");
-                        if let Some(req_id) = &rwr.request_id {
-                            self.relay.send_response(
-                                req_id,
-                                serde_json::json!({"success": false, "error": format!("unknown circuit: {e}")}),
-                            ).await;
+                    synapse_name = QueryZkProof::NAME;
+                    let inputs = circuit
+                        .settings
+                        .get("default_input")
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
+                    match self
+                        .pipeline
+                        .prepare_benchmark_request(uid, circuit, inputs)
+                    {
+                        Some(req) => {
+                            task_inputs = Some(req.inputs.clone());
+                            body = serde_json::json!({
+                                "model_id": req.circuit.id,
+                                "query_input": req.inputs,
+                            });
+                            guard_hash = Some(String::new());
                         }
-                        break;
+                        None => break,
                     }
-                };
-                request_type = RequestType::Rwr;
-                external_request_hash = rwr.request_id.clone();
-                retry_count = rwr.retry_count;
-                slice_num = None;
-                run_uid = None;
-                is_tile = false;
-                task_id = None;
-                tile_idx = None;
-                synapse_name = QueryZkProof::NAME;
-                task_circuit = Some(circuit.clone());
-                task_inputs = Some(rwr.inputs.clone());
-                task_proof_system = Some(circuit.proof_system);
-                body = serde_json::json!({
-                    "model_id": circuit.id,
-                    "query_input": rwr.inputs,
-                });
-                guard_hash = self.pipeline.check_hash(&body);
-                if guard_hash.is_none() {
-                    self.rwr_queue.push_back(rwr);
-                    break;
-                }
-            } else if api_eligible.contains(&uid) && !self.api_dslice_queue.is_empty() {
-                let dslice = self.api_dslice_queue.pop_front().unwrap();
-                retry_payload = RetryPayload::DSlice(dslice.clone());
-                request_type = RequestType::DSlice;
-                external_request_hash = None;
-                retry_count = dslice.retry_count;
-                slice_num = Some(dslice.slice_num.clone());
-                run_uid = Some(dslice.run_uid.clone());
-                is_tile = dslice.is_tile;
-                task_id = dslice.task_id.clone();
-                tile_idx = dslice.tile_idx;
-                task_circuit = Some(dslice.circuit.clone());
-                task_inputs = Some(dslice.inputs.clone());
-                task_proof_system = Some(dslice.proof_system);
-                synapse_name = DSliceProofGenerationDataModel::NAME;
-                let dslice_model = self.pipeline.prepare_dslice_request(
-                    uid,
-                    &dslice.circuit,
-                    dslice.inputs.clone(),
-                    dslice.outputs.clone(),
-                    &dslice.slice_num,
-                    &dslice.run_uid,
-                    dslice.proof_system,
-                );
-                body = serde_json::to_value(&dslice_model).unwrap_or_default();
-                guard_hash = self.pipeline.check_hash(&body);
-                if guard_hash.is_none() {
-                    self.api_dslice_queue.push_back(dslice);
-                    break;
-                }
-            } else if let Some(dslice) = self.stacked_dslice_queue.pop_front() {
-                retry_payload = RetryPayload::DSlice(dslice.clone());
-                request_type = RequestType::DSlice;
-                external_request_hash = None;
-                retry_count = dslice.retry_count;
-                slice_num = Some(dslice.slice_num.clone());
-                run_uid = Some(dslice.run_uid.clone());
-                is_tile = dslice.is_tile;
-                task_id = dslice.task_id.clone();
-                tile_idx = dslice.tile_idx;
-                task_circuit = Some(dslice.circuit.clone());
-                task_inputs = Some(dslice.inputs.clone());
-                task_proof_system = Some(dslice.proof_system);
-                synapse_name = DSliceProofGenerationDataModel::NAME;
-                let dslice_model = self.pipeline.prepare_dslice_request(
-                    uid,
-                    &dslice.circuit,
-                    dslice.inputs.clone(),
-                    dslice.outputs.clone(),
-                    &dslice.slice_num,
-                    &dslice.run_uid,
-                    dslice.proof_system,
-                );
-                body = serde_json::to_value(&dslice_model).unwrap_or_default();
-                guard_hash = self.pipeline.check_hash(&body);
-                if guard_hash.is_none() {
-                    self.stacked_dslice_queue.push_back(dslice);
-                    break;
-                }
-            } else if !self.config.disable_benchmark && !benchmark_circuits.is_empty() {
-                let weights: Vec<f64> = benchmark_circuits
-                    .iter()
-                    .map(|c| c.metadata.benchmark_choice_weight.unwrap_or(1.0))
-                    .collect();
-                let dist = match rand::distributions::WeightedIndex::new(&weights) {
-                    Ok(d) => d,
-                    Err(_) => break,
-                };
-                let circuit_idx = rand::Rng::sample(&mut rand::thread_rng(), &dist);
-                let circuit = &benchmark_circuits[circuit_idx];
-                request_type = RequestType::Benchmark;
-                external_request_hash = None;
-                retry_count = 0;
-                slice_num = None;
-                run_uid = None;
-                is_tile = false;
-                task_id = None;
-                tile_idx = None;
-                task_circuit = Some(circuit.clone());
-                task_proof_system = Some(circuit.proof_system);
-                retry_payload = RetryPayload::None;
-                synapse_name = QueryZkProof::NAME;
-                let inputs = circuit
-                    .settings
-                    .get("default_input")
-                    .cloned()
-                    .unwrap_or(serde_json::json!({}));
-                match self.pipeline.prepare_benchmark_request(uid, circuit, inputs) {
-                    Some(req) => {
-                        task_inputs = Some(req.inputs.clone());
-                        body = serde_json::json!({
-                            "model_id": req.circuit.id,
-                            "query_input": req.inputs,
-                        });
-                        guard_hash = Some(String::new());
-                    }
-                    None => break,
-                }
-            } else {
-                break;
-            }
-
-            let ip = neuron.axon_ip.clone();
-            let port = neuron.axon_port;
-            let protocol = neuron.axon_protocol;
-            let hotkey = neuron.hotkey.clone();
-            let timeout = if api_eligible.contains(&uid) {
-                API_TIMEOUT_SECONDS
-            } else {
-                adaptive_timeout
-            };
-
-            let client = Arc::clone(&self.miner_client);
-
-            let task_slice_num = slice_num.clone();
-            let task_run_uid = run_uid.clone();
-            let task_task_id = task_id.clone();
-            let task_circuit_clone = task_circuit;
-            let task_inputs_clone = task_inputs;
-            let task_proof_system_clone = task_proof_system;
-            let task_retry_payload = retry_payload;
-            let task_guard_hash = guard_hash.clone();
-
-            let abort_handle = self.tasks.spawn(async move {
-                let tokio_task_id = tokio::task::id();
-                let guard = client.read().await;
-                let query_result = if protocol > 0 {
-                    let axon = QuicAxonInfo {
-                        hotkey,
-                        ip: ip.clone(),
-                        port,
-                        protocol,
-                        placeholder1: 0,
-                        placeholder2: 0,
-                    };
-                    let data: HashMap<String, serde_json::Value> =
-                        serde_json::from_value(body.clone()).unwrap_or_default();
-                    guard.query_miner_quic(&axon, synapse_name, data, timeout).await
                 } else {
-                    let headers = guard.build_signing_headers(&body, &hotkey);
-                    guard
-                        .query_miner_http(&ip, port, synapse_name, &body, &headers, timeout)
-                        .await
-                };
-                drop(guard);
+                    break;
+                }
 
-                let outcome = match query_result {
-                    Ok((resp_body, elapsed)) => {
-                        let mut response = MinerResponse {
-                            uid,
-                            verification_result: false,
-                            external_request_hash: external_request_hash
-                                .clone()
-                                .unwrap_or_default(),
-                            response_time: elapsed,
-                            proof_size: 0,
-                            circuit: task_circuit_clone,
-                            proof_system: task_proof_system_clone,
-                            verification_time: None,
-                            proof_content: resp_body
-                                .get("query_output")
-                                .cloned()
-                                .or_else(|| resp_body.get("proof").cloned()),
-                            public_json: None,
-                            inputs: task_inputs_clone,
-                            request_type: Some(request_type),
-                            dsperse_slice_num: task_slice_num
-                                .as_deref()
-                                .and_then(|s| s.parse().ok()),
-                            dsperse_run_uid: task_run_uid.clone(),
-                            raw: Some(resp_body),
-                            error: None,
-                            save: false,
-                            computed_outputs: None,
-                            is_incremental: request_type == RequestType::DSlice,
-                            witness: None,
+                let ip = neuron.axon_ip.clone();
+                let port = neuron.axon_port;
+                let protocol = neuron.axon_protocol;
+                let hotkey = neuron.hotkey.clone();
+                let timeout = if api_eligible.contains(&uid) {
+                    API_TIMEOUT_SECONDS
+                } else {
+                    adaptive_timeout
+                };
+
+                let client = Arc::clone(&self.miner_client);
+
+                let task_slice_num = slice_num.clone();
+                let task_run_uid = run_uid.clone();
+                let task_task_id = task_id.clone();
+                let task_circuit_clone = task_circuit;
+                let task_inputs_clone = task_inputs;
+                let task_proof_system_clone = task_proof_system;
+                let task_retry_payload = retry_payload;
+                let task_guard_hash = guard_hash.clone();
+
+                let abort_handle = self.tasks.spawn(async move {
+                    let tokio_task_id = tokio::task::id();
+                    let guard = client.read().await;
+                    let query_result = if protocol > 0 {
+                        let axon = QuicAxonInfo {
+                            hotkey,
+                            ip: ip.clone(),
+                            port,
+                            protocol,
+                            placeholder1: 0,
+                            placeholder2: 0,
                         };
-                        response.proof_size = response
-                            .proof_content
-                            .as_ref()
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.len())
-                            .unwrap_or(0);
+                        let data: HashMap<String, serde_json::Value> =
+                            serde_json::from_value(body.clone()).unwrap_or_default();
+                        guard
+                            .query_miner_quic(&axon, synapse_name, data, timeout)
+                            .await
+                    } else {
+                        let headers = guard.build_signing_headers(&body, &hotkey);
+                        guard
+                            .query_miner_http(&ip, port, synapse_name, &body, &headers, timeout)
+                            .await
+                    };
+                    drop(guard);
 
-                        if let Some(raw) = &response.raw {
-                            response.witness = raw
-                                .get("witness")
+                    let outcome = match query_result {
+                        Ok((resp_body, elapsed)) => {
+                            let mut response = MinerResponse {
+                                uid,
+                                verification_result: false,
+                                external_request_hash: external_request_hash
+                                    .clone()
+                                    .unwrap_or_default(),
+                                response_time: elapsed,
+                                proof_size: 0,
+                                circuit: task_circuit_clone,
+                                proof_system: task_proof_system_clone,
+                                verification_time: None,
+                                proof_content: resp_body
+                                    .get("query_output")
+                                    .cloned()
+                                    .or_else(|| resp_body.get("proof").cloned()),
+                                public_json: None,
+                                inputs: task_inputs_clone,
+                                request_type: Some(request_type),
+                                dsperse_slice_num: task_slice_num
+                                    .as_deref()
+                                    .and_then(|s| s.parse().ok()),
+                                dsperse_run_uid: task_run_uid.clone(),
+                                raw: Some(resp_body),
+                                error: None,
+                                save: false,
+                                computed_outputs: None,
+                                is_incremental: request_type == RequestType::DSlice,
+                                witness: None,
+                            };
+                            response.proof_size = response
+                                .proof_content
+                                .as_ref()
                                 .and_then(|v| v.as_str())
-                                .map(String::from);
-                            response.computed_outputs = raw.get("computed_outputs").cloned();
-                            if let Some(ps) = raw.get("public_signals") {
-                                response.public_json = ps.as_array().map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                });
+                                .map(|s| s.len())
+                                .unwrap_or(0);
+
+                            if let Some(raw) = &response.raw {
+                                response.witness = raw
+                                    .get("witness")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from);
+                                response.computed_outputs = raw.get("computed_outputs").cloned();
+                                if let Some(ps) = raw.get("public_signals") {
+                                    response.public_json = ps.as_array().map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|v| v.as_str().map(String::from))
+                                            .collect()
+                                    });
+                                }
                             }
+                            TaskOutcome::Success(Box::new(response))
                         }
-                        TaskOutcome::Success(response)
+                        Err(e) => TaskOutcome::Failure(e.to_string()),
+                    };
+
+                    TaskResult {
+                        tokio_task_id,
+                        uid,
+                        request_type,
+                        guard_hash: guard_hash.clone(),
+                        external_request_hash: external_request_hash.clone(),
+                        retry_count,
+                        was_at_capacity,
+                        slice_num,
+                        run_uid,
+                        is_tile,
+                        task_id: task_task_id,
+                        tile_idx,
+                        outcome,
+                        retry_payload: task_retry_payload,
                     }
-                    Err(e) => TaskOutcome::Failure(e.to_string()),
-                };
+                });
+                self.task_meta
+                    .insert(abort_handle.id(), (uid, task_guard_hash));
 
-                TaskResult {
-                    tokio_task_id,
-                    uid,
-                    request_type,
-                    guard_hash: guard_hash.clone(),
-                    external_request_hash: external_request_hash.clone(),
-                    retry_count,
-                    was_at_capacity,
-                    slice_num,
-                    run_uid,
-                    is_tile,
-                    task_id: task_task_id,
-                    tile_idx,
-                    outcome,
-                    retry_payload: task_retry_payload,
-                }
-            });
-            self.task_meta.insert(abort_handle.id(), (uid, task_guard_hash));
-
-            *self.miner_active_count.entry(uid).or_insert(0) += 1;
-            dispatched += 1;
-            metrics::record_request_sent(&request_type.to_string());
+                *self.miner_active_count.entry(uid).or_insert(0) += 1;
+                dispatched += 1;
+                metrics::record_request_sent(&request_type.to_string());
             } // end inner slot loop
         }
 
@@ -895,13 +915,11 @@ impl ValidatorLoop {
     }
 
     fn get_queryable_neurons(&self) -> Vec<&sn2_chain::NeuronInfo> {
-        let target_uids: Option<HashSet<u16>> = std::env::var("TARGET_UIDS")
-            .ok()
-            .map(|s| {
-                s.split(',')
-                    .filter_map(|v| v.trim().parse::<u16>().ok())
-                    .collect()
-            });
+        let target_uids: Option<HashSet<u16>> = std::env::var("TARGET_UIDS").ok().map(|s| {
+            s.split(',')
+                .filter_map(|v| v.trim().parse::<u16>().ok())
+                .collect()
+        });
 
         self.config
             .metagraph
@@ -967,7 +985,10 @@ impl ValidatorLoop {
 
         let failed = match result.outcome {
             TaskOutcome::Success(ref mut response) => {
-                let verify_result = self.response_processor.verify_response(response, &self.dsperse).await;
+                let verify_result = self
+                    .response_processor
+                    .verify_response(response, &self.dsperse)
+                    .await;
                 let verified = matches!(verify_result, Ok(true));
                 response.verification_result = verified;
 
@@ -1060,6 +1081,7 @@ impl ValidatorLoop {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_dslice_success(
         &mut self,
         run_uid: &Option<String>,
@@ -1079,14 +1101,8 @@ impl ValidatorLoop {
             None => return,
         };
 
-        let proof_str = response
-            .proof_content
-            .as_ref()
-            .and_then(|v| v.as_str());
-        let proof_system_str = response
-            .proof_system
-            .as_ref()
-            .map(|ps| ps.to_string());
+        let proof_str = response.proof_content.as_ref().and_then(|v| v.as_str());
+        let proof_system_str = response.proof_system.as_ref().map(|ps| ps.to_string());
 
         let apply_result = if is_tile {
             let tid = task_id.unwrap_or("");
@@ -1163,6 +1179,7 @@ impl ValidatorLoop {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_failure(
         &mut self,
         uid: u16,
@@ -1187,7 +1204,9 @@ impl ValidatorLoop {
         metrics::record_response(false, elapsed);
 
         let max_retries = match (&request_type, &retry_payload) {
-            (RequestType::DSlice, RetryPayload::DSlice(d)) if d.run_source == RunSource::Api => {
+            (RequestType::DSlice, RetryPayload::DSlice(ref d))
+                if d.run_source == RunSource::Api =>
+            {
                 MAX_API_RETRIES
             }
             (RequestType::DSlice, _) => MAX_SLICE_RETRIES,
@@ -1206,8 +1225,8 @@ impl ValidatorLoop {
                 RetryPayload::DSlice(mut dslice) => {
                     dslice.retry_count = next_retry;
                     match dslice.run_source {
-                        RunSource::Api => self.api_dslice_queue.push_back(dslice),
-                        RunSource::Benchmark => self.stacked_dslice_queue.push_back(dslice),
+                        RunSource::Api => self.api_dslice_queue.push_back(*dslice),
+                        RunSource::Benchmark => self.stacked_dslice_queue.push_back(*dslice),
                     }
                     self.dispatch_notify.notify_one();
                 }
@@ -1226,8 +1245,7 @@ impl ValidatorLoop {
                     let _ = self
                         .dsperse
                         .apply_tile_result(
-                            run_uid, tid, slice, tidx, false, None, None, None,
-                            None, 0.0, 0.0,
+                            run_uid, tid, slice, tidx, false, None, None, None, None, 0.0, 0.0,
                         )
                         .await;
                 } else {
@@ -1321,7 +1339,8 @@ impl ValidatorLoop {
                 if *prev_hotkey != neuron.hotkey {
                     info!(uid = neuron.uid, "hotkey changed, resetting performance");
                     self.performance_tracker.reset_uid(neuron.uid);
-                    self.score_manager.update_score(neuron.uid, false, 0.0, 0.0, 0.0);
+                    self.score_manager
+                        .update_score(neuron.uid, false, 0.0, 0.0, 0.0);
                 }
             }
             self.uid_hotkeys.insert(neuron.uid, neuron.hotkey.clone());
@@ -1393,9 +1412,9 @@ impl ValidatorLoop {
         }
 
         let owner_uid = Some(14u16);
-        let (weight_uids, weights) =
-            self.score_manager
-                .compute_throughput_weights(&uids, &snap, owner_uid);
+        let (weight_uids, weights) = self
+            .score_manager
+            .compute_throughput_weights(&uids, &snap, owner_uid);
 
         if weights.iter().all(|&w| w == 0) {
             info!("no weights to set, skipping");

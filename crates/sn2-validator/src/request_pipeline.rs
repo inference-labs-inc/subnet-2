@@ -1,9 +1,7 @@
 use std::collections::HashSet;
 
 use sha2::{Digest, Sha256};
-use sn2_types::{
-    Circuit, DSliceProofGenerationDataModel, ProofSystem, Request, RequestType,
-};
+use sn2_types::{Circuit, DSliceProofGenerationDataModel, ProofSystem, Request, RequestType};
 
 pub struct RequestPipeline {
     hash_guard: HashSet<String>,
@@ -45,6 +43,7 @@ impl RequestPipeline {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_dslice_request(
         &mut self,
         _uid: u16,

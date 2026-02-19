@@ -32,9 +32,9 @@ impl WeightsSetter {
             "SubtensorModule",
             "set_weights",
             vec![
+                Value::from(self.netuid as u64),
                 Value::unnamed_composite(dests),
                 Value::unnamed_composite(weight_vals),
-                Value::from(self.netuid as u64),
                 Value::from(version_key as u64),
             ],
         );
@@ -137,18 +137,10 @@ impl WeightsSetter {
         let query = subxt::dynamic::storage(
             "SubtensorModule",
             "LastUpdate",
-            vec![
-                Value::from(self.netuid as u64),
-                Value::from(uid as u64),
-            ],
+            vec![Value::from(self.netuid as u64), Value::from(uid as u64)],
         );
 
-        let result = client
-            .storage()
-            .at_latest()
-            .await?
-            .fetch(&query)
-            .await?;
+        let result = client.storage().at_latest().await?.fetch(&query).await?;
 
         let last_update = match result {
             Some(val) => val.to_value()?.as_u128().unwrap_or(0) as u64,

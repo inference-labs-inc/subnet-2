@@ -40,6 +40,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
       - name: Build and push Docker image for testnet branch
+        if: github.event_name != 'release'
         id: push-testnet
         uses: docker/build-push-action@v5
         with:
@@ -52,6 +53,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Generate artifact attestation for testnet
+        if: github.event_name != 'release'
         id: attest-testnet
         uses: actions/attest-build-provenance@v1
         with:

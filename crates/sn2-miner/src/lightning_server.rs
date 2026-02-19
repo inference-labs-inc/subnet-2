@@ -21,14 +21,14 @@ impl SynapseHandler for QueryZkProofHandler {
         _synapse_type: &str,
         data: HashMap<String, serde_json::Value>,
     ) -> btlightning::Result<HashMap<String, serde_json::Value>> {
-        let query: QueryZkProof =
-            serde_json::from_value(json!(data)).map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+        let query: QueryZkProof = serde_json::from_value(json!(data))
+            .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         let result = self
             .rt
             .block_on(self.handlers.handle_query_zk_proof(query))
             .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
-        let map: HashMap<String, serde_json::Value> =
-            serde_json::from_value(result).map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+        let map: HashMap<String, serde_json::Value> = serde_json::from_value(result)
+            .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         Ok(map)
     }
 }
@@ -44,14 +44,14 @@ impl SynapseHandler for DSliceHandler {
         _synapse_type: &str,
         data: HashMap<String, serde_json::Value>,
     ) -> btlightning::Result<HashMap<String, serde_json::Value>> {
-        let query: DSliceProofGenerationDataModel =
-            serde_json::from_value(json!(data)).map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+        let query: DSliceProofGenerationDataModel = serde_json::from_value(json!(data))
+            .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         let result = self
             .rt
             .block_on(self.handlers.handle_dslice(query))
             .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
-        let map: HashMap<String, serde_json::Value> =
-            serde_json::from_value(result).map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+        let map: HashMap<String, serde_json::Value> = serde_json::from_value(result)
+            .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         Ok(map)
     }
 }
@@ -67,14 +67,14 @@ impl SynapseHandler for CompetitionHandler {
         _synapse_type: &str,
         data: HashMap<String, serde_json::Value>,
     ) -> btlightning::Result<HashMap<String, serde_json::Value>> {
-        let query: Competition =
-            serde_json::from_value(json!(data)).map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+        let query: Competition = serde_json::from_value(json!(data))
+            .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         let result = self
             .rt
             .block_on(self.handlers.handle_competition(query))
             .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
-        let map: HashMap<String, serde_json::Value> =
-            serde_json::from_value(result).map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
+        let map: HashMap<String, serde_json::Value> = serde_json::from_value(result)
+            .map_err(|e| btlightning::LightningError::Handler(e.to_string()))?;
         Ok(map)
     }
 }
@@ -88,11 +88,7 @@ pub async fn run_lightning_server(
 ) -> Result<()> {
     let rt = tokio::runtime::Handle::current();
 
-    let mut server = LightningServer::new(
-        miner_hotkey.to_string(),
-        host.to_string(),
-        port,
-    );
+    let mut server = LightningServer::new(miner_hotkey.to_string(), host.to_string(), port);
 
     server.set_miner_keypair(miner_seed);
 
@@ -121,10 +117,7 @@ pub async fn run_lightning_server(
     server
         .register_synapse_handler(
             Competition::NAME.to_string(),
-            Arc::new(CompetitionHandler {
-                handlers,
-                rt,
-            }),
+            Arc::new(CompetitionHandler { handlers, rt }),
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -133,6 +126,9 @@ pub async fn run_lightning_server(
 
     info!(host = host, port = port, "QUIC Lightning server listening");
 
-    server.serve_forever().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    server
+        .serve_forever()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }

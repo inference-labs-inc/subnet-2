@@ -62,8 +62,10 @@ impl CircuitManager {
             .calculate_vk_hash()?
             .context("no compiled model to upload")?;
 
-        let config = aws_sdk_s3::config::Builder::new().build();
-        let client = aws_sdk_s3::Client::from_conf(config);
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .load()
+            .await;
+        let client = aws_sdk_s3::Client::new(&config);
 
         let files = ["model.compiled", "settings.json"];
         for file_name in &files {

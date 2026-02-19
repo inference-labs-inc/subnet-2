@@ -10,9 +10,10 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 
 use sn2_types::{
-    RELAY_AUTH_TIMEOUT, RELAY_PING_INTERVAL, RELAY_RECONNECT_BASE_DELAY,
-    RELAY_RECONNECT_MAX_DELAY,
+    RELAY_AUTH_TIMEOUT, RELAY_PING_INTERVAL, RELAY_RECONNECT_BASE_DELAY, RELAY_RECONNECT_MAX_DELAY,
 };
+
+type PendingMap = Arc<RwLock<HashMap<String, Arc<Mutex<PendingRequest>>>>>;
 
 pub(crate) struct PendingRequest {
     result: Option<serde_json::Value>,
@@ -122,11 +123,12 @@ impl RelayManager {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn connect_and_run(
         url: &str,
         hotkey_pair: &sr25519::Pair,
         hotkey_ss58: &str,
-        pending: &Arc<RwLock<HashMap<String, Arc<Mutex<PendingRequest>>>>>,
+        pending: &PendingMap,
         dsperse_tx: &tokio::sync::mpsc::Sender<DsperseSubmission>,
         rwr_tx: &tokio::sync::mpsc::Sender<RwrSubmission>,
         dsperse_semaphore: &Arc<Semaphore>,
@@ -257,7 +259,7 @@ impl RelayManager {
 
     async fn handle_message(
         json: &serde_json::Value,
-        pending: &Arc<RwLock<HashMap<String, Arc<Mutex<PendingRequest>>>>>,
+        pending: &PendingMap,
         dsperse_tx: &tokio::sync::mpsc::Sender<DsperseSubmission>,
         rwr_tx: &tokio::sync::mpsc::Sender<RwrSubmission>,
         dsperse_semaphore: &Arc<Semaphore>,
@@ -271,7 +273,13 @@ impl RelayManager {
                 let permit = match dsperse_semaphore.try_acquire() {
                     Ok(p) => p,
                     Err(_) => {
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), 20, "Server busy, try again later").await;
+                        Self::send_jsonrpc_error(
+                            ws_tx,
+                            request_id.as_deref(),
+                            20,
+                            "Server busy, try again later",
+                        )
+                        .await;
                         return;
                     }
                 };
@@ -280,7 +288,13 @@ impl RelayManager {
                     Some(p) => p,
                     None => {
                         drop(permit);
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), -32602, "Missing params").await;
+                        Self::send_jsonrpc_error(
+                            ws_tx,
+                            request_id.as_deref(),
+                            -32602,
+                            "Missing params",
+                        )
+                        .await;
                         return;
                     }
                 };
@@ -289,7 +303,13 @@ impl RelayManager {
                     Some(id) => id.to_string(),
                     None => {
                         drop(permit);
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), -32602, "Missing circuit_id").await;
+                        Self::send_jsonrpc_error(
+                            ws_tx,
+                            request_id.as_deref(),
+                            -32602,
+                            "Missing circuit_id",
+                        )
+                        .await;
                         return;
                     }
                 };
@@ -298,7 +318,13 @@ impl RelayManager {
                     Some(i) => i.clone(),
                     None => {
                         drop(permit);
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), -32602, "Missing inputs").await;
+                        Self::send_jsonrpc_error(
+                            ws_tx,
+                            request_id.as_deref(),
+                            -32602,
+                            "Missing inputs",
+                        )
+                        .await;
                         return;
                     }
                 };
@@ -319,7 +345,13 @@ impl RelayManager {
                 let params = match json.get("params") {
                     Some(p) => p,
                     None => {
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), -32602, "Missing params").await;
+                        Self::send_jsonrpc_error(
+                            ws_tx,
+                            request_id.as_deref(),
+                            -32602,
+                            "Missing params",
+                        )
+                        .await;
                         return;
                     }
                 };
@@ -327,7 +359,13 @@ impl RelayManager {
                 let circuit_id = match params.get("circuit").and_then(|v| v.as_str()) {
                     Some(id) => id.to_string(),
                     None => {
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), -32602, "Missing circuit").await;
+                        Self::send_jsonrpc_error(
+                            ws_tx,
+                            request_id.as_deref(),
+                            -32602,
+                            "Missing circuit",
+                        )
+                        .await;
                         return;
                     }
                 };
@@ -335,7 +373,13 @@ impl RelayManager {
                 let inputs = match params.get("input") {
                     Some(i) => i.clone(),
                     None => {
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), -32602, "Missing input").await;
+                        Self::send_jsonrpc_error(
+                            ws_tx,
+                            request_id.as_deref(),
+                            -32602,
+                            "Missing input",
+                        )
+                        .await;
                         return;
                     }
                 };
@@ -349,7 +393,13 @@ impl RelayManager {
 
                 if let Err(e) = rwr_tx.try_send(submission) {
                     warn!(error = %e, "RWR submission channel full or closed");
-                    Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), 20, "Server busy, try again later").await;
+                    Self::send_jsonrpc_error(
+                        ws_tx,
+                        request_id.as_deref(),
+                        20,
+                        "Server busy, try again later",
+                    )
+                    .await;
                 }
             }
 
@@ -357,7 +407,13 @@ impl RelayManager {
                 let params = match json.get("params") {
                     Some(p) => p,
                     None => {
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), -32602, "Missing params").await;
+                        Self::send_jsonrpc_error(
+                            ws_tx,
+                            request_id.as_deref(),
+                            -32602,
+                            "Missing params",
+                        )
+                        .await;
                         return;
                     }
                 };
@@ -365,7 +421,13 @@ impl RelayManager {
                 let run_uid = match params.get("run_uid").and_then(|v| v.as_str()) {
                     Some(id) => id.to_string(),
                     None => {
-                        Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), -32602, "Missing run_uid").await;
+                        Self::send_jsonrpc_error(
+                            ws_tx,
+                            request_id.as_deref(),
+                            -32602,
+                            "Missing run_uid",
+                        )
+                        .await;
                         return;
                     }
                 };

@@ -47,6 +47,7 @@ impl DSperseManager {
         self.send_ipc(&request).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn apply_slice_result(
         &self,
         run_uid: &str,
@@ -73,6 +74,7 @@ impl DSperseManager {
         self.send_ipc(&request).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn apply_tile_result(
         &self,
         run_uid: &str,
@@ -105,6 +107,7 @@ impl DSperseManager {
         self.send_ipc(&request).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn verify_incremental_slice_with_witness(
         &self,
         circuit_id: &str,
@@ -153,10 +156,7 @@ impl DSperseManager {
     }
 
     async fn send_ipc_inner(&self, request: &serde_json::Value) -> Result<serde_json::Value> {
-        let socket_path = self
-            .socket_path
-            .as_deref()
-            .unwrap_or("/tmp/dsperse.sock");
+        let socket_path = self.socket_path.as_deref().unwrap_or("/tmp/dsperse.sock");
 
         let mut stream = UnixStream::connect(socket_path)
             .await

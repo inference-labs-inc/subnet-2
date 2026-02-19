@@ -1,12 +1,12 @@
-mod wallet;
 mod metagraph;
-mod weights;
 mod registration;
+mod wallet;
+mod weights;
 
-pub use wallet::Wallet;
 pub use metagraph::{Metagraph, NeuronInfo};
-pub use weights::WeightsSetter;
 pub use registration::Registration;
+pub use wallet::Wallet;
+pub use weights::WeightsSetter;
 
 pub const FINNEY_ENDPOINT: &str = "wss://entrypoint-finney.opentensor.ai:443";
 pub const TEST_ENDPOINT: &str = "wss://test.finney.opentensor.ai:443";

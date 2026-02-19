@@ -1,5 +1,5 @@
-mod cli;
 mod circuit_manager;
+mod cli;
 mod dsperse;
 mod handlers;
 mod http_server;
@@ -36,14 +36,15 @@ async fn main() -> Result<()> {
     )
     .context("loading wallet")?;
 
-    let endpoint = cli.subtensor_chain_endpoint.clone().unwrap_or_else(|| {
-        match cli.network.as_str() {
-            "finney" | "mainnet" => sn2_chain::FINNEY_ENDPOINT.to_string(),
-            "test" | "testnet" => sn2_chain::TEST_ENDPOINT.to_string(),
-            "local" | "localnet" => sn2_chain::LOCAL_ENDPOINT.to_string(),
-            other => other.to_string(),
-        }
-    });
+    let endpoint =
+        cli.subtensor_chain_endpoint
+            .clone()
+            .unwrap_or_else(|| match cli.network.as_str() {
+                "finney" | "mainnet" => sn2_chain::FINNEY_ENDPOINT.to_string(),
+                "test" | "testnet" => sn2_chain::TEST_ENDPOINT.to_string(),
+                "local" | "localnet" => sn2_chain::LOCAL_ENDPOINT.to_string(),
+                other => other.to_string(),
+            });
 
     let chain_client = subxt::OnlineClient::<subxt::PolkadotConfig>::from_url(&endpoint)
         .await
@@ -109,6 +110,23 @@ async fn main() -> Result<()> {
         "miner running"
     );
 
+    let metagraph_handle = {
+        let client = chain_client.clone();
+        let netuid = cli.netuid;
+        tokio::spawn(async move {
+            let mut mg = sn2_chain::Metagraph::new(netuid);
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                match mg.sync(&client).await {
+                    Ok(()) => info!(neurons = mg.neurons.len(), "metagraph refreshed"),
+                    Err(e) => warn!(error = %e, "metagraph refresh failed"),
+                }
+            }
+        })
+    };
+
     tokio::select! {
         r = http_handle => {
             r?.context("HTTP server")?;
@@ -118,6 +136,9 @@ async fn main() -> Result<()> {
         }
         _ = circuit_monitor => {
             warn!("circuit monitor exited unexpectedly");
+        }
+        _ = metagraph_handle => {
+            warn!("metagraph refresh exited unexpectedly");
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");

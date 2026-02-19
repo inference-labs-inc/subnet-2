@@ -40,6 +40,7 @@ sp-core = "31"
 subxt = "0.37"
 btlightning = "0.1.0"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+aws-config = "1"
 aws-sdk-s3 = "1"
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"

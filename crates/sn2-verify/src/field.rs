@@ -58,10 +58,7 @@ pub fn scale_to_field(
 
 pub fn descale_outputs(outputs: &[BigInt], scale_base: u64, scale_exp: u64) -> Vec<f64> {
     if scale_base == 0 || scale_exp == 0 {
-        return outputs
-            .iter()
-            .map(|v| v.to_f64().unwrap_or(0.0))
-            .collect();
+        return outputs.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
     }
     let scale = (scale_base as f64).powi(scale_exp as i32);
     outputs

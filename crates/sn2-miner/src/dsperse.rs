@@ -46,10 +46,7 @@ impl DSperseClient {
     }
 
     async fn send_ipc(&self, request: &serde_json::Value) -> Result<serde_json::Value> {
-        let socket_path = self
-            .socket_path
-            .as_deref()
-            .unwrap_or("/tmp/dsperse.sock");
+        let socket_path = self.socket_path.as_deref().unwrap_or("/tmp/dsperse.sock");
 
         let mut stream = UnixStream::connect(socket_path)
             .await

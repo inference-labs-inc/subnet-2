@@ -51,7 +51,10 @@ impl ResponseProcessor {
         let circuit = match &response.circuit {
             Some(c) => c,
             None => {
-                warn!(uid = response.uid, "no circuit data for standard verification, accepting proof");
+                warn!(
+                    uid = response.uid,
+                    "no circuit data for standard verification, accepting proof"
+                );
                 return Ok(!proof_hex.is_empty());
             }
         };
@@ -138,7 +141,10 @@ impl ResponseProcessor {
         let circuit = match &response.circuit {
             Some(c) => c,
             None => {
-                warn!(uid = response.uid, "no circuit data for incremental verification");
+                warn!(
+                    uid = response.uid,
+                    "no circuit data for incremental verification"
+                );
                 return Ok(false);
             }
         };
@@ -149,10 +155,7 @@ impl ResponseProcessor {
             .as_ref()
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        let proof_system_str = response
-            .proof_system
-            .as_ref()
-            .map(|ps| ps.to_string());
+        let proof_system_str = response.proof_system.as_ref().map(|ps| ps.to_string());
 
         match dsperse
             .verify_incremental_slice_with_witness(

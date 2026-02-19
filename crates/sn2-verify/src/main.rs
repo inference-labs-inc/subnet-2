@@ -23,8 +23,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let sock_path = std::env::var("SN2_VERIFY_SOCK")
-        .unwrap_or_else(|_| SOCKET_PATH.to_string());
+    let sock_path = std::env::var("SN2_VERIFY_SOCK").unwrap_or_else(|_| SOCKET_PATH.to_string());
 
     if Path::new(&sock_path).exists() {
         std::fs::remove_file(&sock_path).context("removing stale socket")?;
@@ -137,7 +136,12 @@ async fn handle_connection(
                 rmp_serde::to_vec_named(&resp)
             }
             ServiceRequest::Reconstruct(rr) => {
-                info!(tile_count = rr.tile_keys.len(), tiles_y = rr.tiles_y, tiles_x = rr.tiles_x, "processing reconstruct request");
+                info!(
+                    tile_count = rr.tile_keys.len(),
+                    tiles_y = rr.tiles_y,
+                    tiles_x = rr.tiles_x,
+                    "processing reconstruct request"
+                );
                 let resp = match store.reconstruct(&rr.tile_keys, rr.tiles_y, rr.tiles_x) {
                     Ok(output) => ReconstructResponse {
                         success: true,
@@ -167,8 +171,7 @@ async fn handle_connection(
                 let request_id = qvs.request_id.clone();
                 let miner = format!("{}:{}", qvs.miner_ip, qvs.miner_port);
                 info!(request_id = %request_id, miner = %miner, "processing query_verify_store");
-                let resp =
-                    handle_query_verify_store(qvs, &http_client, &store).await;
+                let resp = handle_query_verify_store(qvs, &http_client, &store).await;
                 info!(
                     request_id = %request_id,
                     success = resp.success,
@@ -215,10 +218,7 @@ async fn handle_query_verify_store(
     let miner_resp = match http_result {
         Ok(r) => r,
         Err(e) => {
-            return QueryVerifyStoreResponse::http_error(
-                req.request_id,
-                format!("{e:#}"),
-            );
+            return QueryVerifyStoreResponse::http_error(req.request_id, format!("{e:#}"));
         }
     };
 
@@ -226,29 +226,26 @@ async fn handle_query_verify_store(
     let http_status = miner_resp.status;
     let http_elapsed = miner_resp.elapsed_secs;
 
-    let body: serde_json::Value = match tokio::task::spawn_blocking(move || {
-        serde_json::from_slice(&body_bytes)
-    })
-    .await
-    {
-        Ok(Ok(v)) => v,
-        Ok(Err(e)) => {
-            return QueryVerifyStoreResponse::miner_error(
-                req.request_id,
-                http_status,
-                http_elapsed,
-                format!("JSON parse error: {e:#}"),
-            );
-        }
-        Err(e) => {
-            return QueryVerifyStoreResponse::miner_error(
-                req.request_id,
-                http_status,
-                http_elapsed,
-                format!("JSON parse task panicked: {e}"),
-            );
-        }
-    };
+    let body: serde_json::Value =
+        match tokio::task::spawn_blocking(move || serde_json::from_slice(&body_bytes)).await {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                return QueryVerifyStoreResponse::miner_error(
+                    req.request_id,
+                    http_status,
+                    http_elapsed,
+                    format!("JSON parse error: {e:#}"),
+                );
+            }
+            Err(e) => {
+                return QueryVerifyStoreResponse::miner_error(
+                    req.request_id,
+                    http_status,
+                    http_elapsed,
+                    format!("JSON parse task panicked: {e}"),
+                );
+            }
+        };
 
     let fields = match miner_response::extract_dslice_fields(&body) {
         Ok(f) => f,
@@ -292,32 +289,31 @@ async fn handle_query_verify_store(
 
     match verify_result {
         Ok(vr) => {
-            let stored =
-                if let (Some(key), Some(shape)) = (req.store_key, req.output_shape) {
-                    let [_, channels, height, width] = shape;
-                    let expected_len = channels * height * width;
-                    if vr.rescaled_outputs.len() == expected_len {
-                        store.insert(
-                            key,
-                            StoredTile {
-                                data: vr.rescaled_outputs,
-                                channels,
-                                height,
-                                width,
-                            },
-                        );
-                        true
-                    } else {
-                        warn!(
-                            expected = expected_len,
-                            actual = vr.rescaled_outputs.len(),
-                            "output length mismatch, not storing tile"
-                        );
-                        false
-                    }
+            let stored = if let (Some(key), Some(shape)) = (req.store_key, req.output_shape) {
+                let [_, channels, height, width] = shape;
+                let expected_len = channels * height * width;
+                if vr.rescaled_outputs.len() == expected_len {
+                    store.insert(
+                        key,
+                        StoredTile {
+                            data: vr.rescaled_outputs,
+                            channels,
+                            height,
+                            width,
+                        },
+                    );
+                    true
                 } else {
+                    warn!(
+                        expected = expected_len,
+                        actual = vr.rescaled_outputs.len(),
+                        "output length mismatch, not storing tile"
+                    );
                     false
-                };
+                }
+            } else {
+                false
+            };
 
             QueryVerifyStoreResponse {
                 request_id: req.request_id,

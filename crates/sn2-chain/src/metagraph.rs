@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use sp_core::crypto::Ss58Codec;
 use subxt::dynamic::Value;
+use subxt::ext::scale_value::At;
 use subxt::{OnlineClient, PolkadotConfig};
 use tracing::{info, warn};
 
@@ -10,6 +12,7 @@ pub struct NeuronInfo {
     pub uid: u16,
     pub hotkey: String,
     pub coldkey: String,
+    pub hotkey_bytes: [u8; 32],
     pub stake: u64,
     pub rank: u16,
     pub trust: u16,
@@ -56,7 +59,12 @@ impl Metagraph {
         let n = self.query_subnet_n(client).await?;
         self.n = n;
 
-        info!(netuid = self.netuid, n = n, block = self.block, "syncing metagraph");
+        info!(
+            netuid = self.netuid,
+            n = n,
+            block = self.block,
+            "syncing metagraph"
+        );
 
         let mut neurons = Vec::with_capacity(n as usize);
 
@@ -78,7 +86,11 @@ impl Metagraph {
         }
 
         self.neurons = neurons;
-        info!(netuid = self.netuid, neurons = self.neurons.len(), "metagraph synced");
+        info!(
+            netuid = self.netuid,
+            neurons = self.neurons.len(),
+            "metagraph synced"
+        );
         Ok(())
     }
 
@@ -89,12 +101,7 @@ impl Metagraph {
             vec![Value::from(self.netuid as u64)],
         );
 
-        let result = client
-            .storage()
-            .at_latest()
-            .await?
-            .fetch(&query)
-            .await?;
+        let result = client.storage().at_latest().await?.fetch(&query).await?;
 
         match result {
             Some(val) => {
@@ -110,23 +117,54 @@ impl Metagraph {
         client: &OnlineClient<PolkadotConfig>,
         uid: u16,
     ) -> Result<NeuronInfo> {
-        let hotkey = self.query_hotkey(client, uid).await?;
-        let coldkey = self.query_coldkey(client, &hotkey).await.unwrap_or_default();
-        let stake = self.query_stake(client, &hotkey).await.unwrap_or(0);
-        let rank = self.query_u16_storage(client, "Rank", uid).await.unwrap_or(0);
-        let trust = self.query_u16_storage(client, "Trust", uid).await.unwrap_or(0);
-        let consensus = self.query_u16_storage(client, "Consensus", uid).await.unwrap_or(0);
-        let incentive = self.query_u16_storage(client, "Incentive", uid).await.unwrap_or(0);
-        let dividends = self.query_u16_storage(client, "Dividends", uid).await.unwrap_or(0);
-        let emission = self.query_u64_storage(client, "Emission", uid).await.unwrap_or(0);
-        let is_active = self.query_bool_storage(client, "Active", uid).await.unwrap_or(false);
-        let last_update = self.query_u64_storage(client, "LastUpdate", uid).await.unwrap_or(0);
-        let (axon_ip, axon_port, axon_protocol) = self.query_axon(client, &hotkey).await.unwrap_or_default();
+        let (hotkey_bytes, hotkey) = self.query_hotkey(client, uid).await?;
+        let coldkey = self
+            .query_coldkey(client, &hotkey_bytes)
+            .await
+            .unwrap_or_default();
+        let stake = self.query_stake(client, &hotkey_bytes).await.unwrap_or(0);
+        let rank = self
+            .query_u16_storage(client, "Rank", uid)
+            .await
+            .unwrap_or(0);
+        let trust = self
+            .query_u16_storage(client, "Trust", uid)
+            .await
+            .unwrap_or(0);
+        let consensus = self
+            .query_u16_storage(client, "Consensus", uid)
+            .await
+            .unwrap_or(0);
+        let incentive = self
+            .query_u16_storage(client, "Incentive", uid)
+            .await
+            .unwrap_or(0);
+        let dividends = self
+            .query_u16_storage(client, "Dividends", uid)
+            .await
+            .unwrap_or(0);
+        let emission = self
+            .query_u64_storage(client, "Emission", uid)
+            .await
+            .unwrap_or(0);
+        let is_active = self
+            .query_bool_storage(client, "Active", uid)
+            .await
+            .unwrap_or(false);
+        let last_update = self
+            .query_u64_storage(client, "LastUpdate", uid)
+            .await
+            .unwrap_or(0);
+        let (axon_ip, axon_port, axon_protocol) = self
+            .query_axon(client, &hotkey_bytes)
+            .await
+            .unwrap_or_default();
 
         Ok(NeuronInfo {
             uid,
             hotkey,
             coldkey,
+            hotkey_bytes,
             stake,
             rank,
             trust,
@@ -146,14 +184,11 @@ impl Metagraph {
         &self,
         client: &OnlineClient<PolkadotConfig>,
         uid: u16,
-    ) -> Result<String> {
+    ) -> Result<([u8; 32], String)> {
         let query = subxt::dynamic::storage(
             "SubtensorModule",
             "Keys",
-            vec![
-                Value::from(self.netuid as u64),
-                Value::from(uid as u64),
-            ],
+            vec![Value::from(self.netuid as u64), Value::from(uid as u64)],
         );
 
         let result = client
@@ -164,19 +199,21 @@ impl Metagraph {
             .await?
             .context("hotkey not found")?;
 
-        let val = result.to_value()?;
-        Ok(format!("{val}"))
+        let account_id: subxt::utils::AccountId32 = result.as_type()?;
+        let bytes = account_id.0;
+        let ss58 = sp_core::crypto::AccountId32::new(bytes).to_ss58check();
+        Ok((bytes, ss58))
     }
 
     async fn query_coldkey(
         &self,
         client: &OnlineClient<PolkadotConfig>,
-        hotkey: &str,
+        hotkey_bytes: &[u8; 32],
     ) -> Result<String> {
         let query = subxt::dynamic::storage(
             "SubtensorModule",
             "Owner",
-            vec![Value::from_bytes(hotkey.as_bytes())],
+            vec![Value::from_bytes(hotkey_bytes)],
         );
 
         let result = client
@@ -187,27 +224,23 @@ impl Metagraph {
             .await?
             .context("coldkey not found")?;
 
-        let val = result.to_value()?;
-        Ok(format!("{val}"))
+        let account_id: subxt::utils::AccountId32 = result.as_type()?;
+        let ss58 = sp_core::crypto::AccountId32::new(account_id.0).to_ss58check();
+        Ok(ss58)
     }
 
     async fn query_stake(
         &self,
         client: &OnlineClient<PolkadotConfig>,
-        hotkey: &str,
+        hotkey_bytes: &[u8; 32],
     ) -> Result<u64> {
         let query = subxt::dynamic::storage(
             "SubtensorModule",
             "TotalHotkeyStake",
-            vec![Value::from_bytes(hotkey.as_bytes())],
+            vec![Value::from_bytes(hotkey_bytes)],
         );
 
-        let result = client
-            .storage()
-            .at_latest()
-            .await?
-            .fetch(&query)
-            .await?;
+        let result = client.storage().at_latest().await?.fetch(&query).await?;
 
         match result {
             Some(val) => Ok(val.to_value()?.as_u128().unwrap_or(0) as u64),
@@ -224,18 +257,10 @@ impl Metagraph {
         let query = subxt::dynamic::storage(
             "SubtensorModule",
             storage_name,
-            vec![
-                Value::from(self.netuid as u64),
-                Value::from(uid as u64),
-            ],
+            vec![Value::from(self.netuid as u64), Value::from(uid as u64)],
         );
 
-        let result = client
-            .storage()
-            .at_latest()
-            .await?
-            .fetch(&query)
-            .await?;
+        let result = client.storage().at_latest().await?.fetch(&query).await?;
 
         match result {
             Some(val) => Ok(val.to_value()?.as_u128().unwrap_or(0) as u16),
@@ -252,18 +277,10 @@ impl Metagraph {
         let query = subxt::dynamic::storage(
             "SubtensorModule",
             storage_name,
-            vec![
-                Value::from(self.netuid as u64),
-                Value::from(uid as u64),
-            ],
+            vec![Value::from(self.netuid as u64), Value::from(uid as u64)],
         );
 
-        let result = client
-            .storage()
-            .at_latest()
-            .await?
-            .fetch(&query)
-            .await?;
+        let result = client.storage().at_latest().await?.fetch(&query).await?;
 
         match result {
             Some(val) => Ok(val.to_value()?.as_u128().unwrap_or(0) as u64),
@@ -280,18 +297,10 @@ impl Metagraph {
         let query = subxt::dynamic::storage(
             "SubtensorModule",
             storage_name,
-            vec![
-                Value::from(self.netuid as u64),
-                Value::from(uid as u64),
-            ],
+            vec![Value::from(self.netuid as u64), Value::from(uid as u64)],
         );
 
-        let result = client
-            .storage()
-            .at_latest()
-            .await?
-            .fetch(&query)
-            .await?;
+        let result = client.storage().at_latest().await?.fetch(&query).await?;
 
         match result {
             Some(val) => Ok(val.to_value()?.as_bool().unwrap_or(false)),
@@ -302,31 +311,25 @@ impl Metagraph {
     async fn query_axon(
         &self,
         client: &OnlineClient<PolkadotConfig>,
-        hotkey: &str,
+        hotkey_bytes: &[u8; 32],
     ) -> Result<(String, u16, u8)> {
         let query = subxt::dynamic::storage(
             "SubtensorModule",
             "Axons",
             vec![
                 Value::from(self.netuid as u64),
-                Value::from_bytes(hotkey.as_bytes()),
+                Value::from_bytes(hotkey_bytes),
             ],
         );
 
-        let result = client
-            .storage()
-            .at_latest()
-            .await?
-            .fetch(&query)
-            .await?;
+        let result = client.storage().at_latest().await?.fetch(&query).await?;
 
         match result {
             Some(val) => {
                 let v = val.to_value()?;
-                let debug = format!("{v:?}");
-                let ip_raw = extract_named_u128(&debug, "ip").unwrap_or(0) as u32;
-                let port = extract_named_u128(&debug, "port").unwrap_or(0) as u16;
-                let protocol = extract_named_u128(&debug, "protocol").unwrap_or(0) as u8;
+                let ip_raw = v.at("ip").and_then(|v| v.as_u128()).unwrap_or(0) as u32;
+                let port = v.at("port").and_then(|v| v.as_u128()).unwrap_or(0) as u16;
+                let protocol = v.at("protocol").and_then(|v| v.as_u128()).unwrap_or(0) as u8;
 
                 let ip = format!(
                     "{}.{}.{}.{}",
@@ -365,12 +368,4 @@ impl Metagraph {
     pub fn active_neurons(&self) -> impl Iterator<Item = &NeuronInfo> {
         self.neurons.iter().filter(|n| n.is_active)
     }
-}
-
-fn extract_named_u128(debug_str: &str, field: &str) -> Option<u128> {
-    let pattern = format!("{field}: ");
-    let start = debug_str.find(&pattern)? + pattern.len();
-    let rest = &debug_str[start..];
-    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
-    rest[..end].parse().ok()
 }

@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const MAX_FRAME_SIZE: usize = 512 * 1024 * 1024;
@@ -23,9 +23,10 @@ pub async fn read_frame<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Option<V
 }
 
 pub async fn write_frame<W: AsyncWrite + Unpin>(stream: &mut W, data: &[u8]) -> Result<()> {
-    let len: u32 = data.len().try_into().map_err(|_| {
-        anyhow::anyhow!("frame payload {} bytes exceeds u32::MAX", data.len())
-    })?;
+    let len: u32 = data
+        .len()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("frame payload {} bytes exceeds u32::MAX", data.len()))?;
     stream.write_all(&len.to_be_bytes()).await?;
     stream.write_all(data).await?;
     stream.flush().await?;

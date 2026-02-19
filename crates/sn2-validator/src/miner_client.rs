@@ -3,7 +3,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use btlightning::{LightningClient, QuicAxonInfo, QuicRequest};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use sp_core::{sr25519, Pair};
 
 pub struct MinerQueryClient {
@@ -117,7 +117,11 @@ impl MinerQueryClient {
         if !response.status().is_success() {
             let status = response.status();
             let body_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("HTTP {status} from miner: {}", &body_text[..body_text.len().min(500)]);
+            let truncated = match body_text.char_indices().nth(500) {
+                Some((idx, _)) => &body_text[..idx],
+                None => &body_text,
+            };
+            anyhow::bail!("HTTP {status} from miner: {truncated}");
         }
 
         let body: serde_json::Value = response.json().await.context("parsing miner response")?;

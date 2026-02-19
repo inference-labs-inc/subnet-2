@@ -29,21 +29,18 @@ pub async fn verify_inner(
     let witness_hex = witness_hex.to_string();
     let circuit_path = PathBuf::from(circuit_path);
     let proof_hex = proof_hex.to_string();
-    let num_inputs = num_inputs;
     let expected_inputs = expected_inputs.clone();
     let pcs_type = pcs_type.to_string();
 
     let (_witness_data, extracted_io, tmp_dir) =
         tokio::task::spawn_blocking(move || -> Result<_> {
-            let witness_bytes =
-                hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
+            let witness_bytes = hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
             let proof_bytes = hex::decode(proof_hex.trim()).context("hex-decoding proof")?;
 
-            let witness_raw = witness::decompress_if_needed(&witness_bytes)
-                .context("decompressing witness")?;
+            let witness_raw =
+                witness::decompress_if_needed(&witness_bytes).context("decompressing witness")?;
 
-            let tmp_dir =
-                TempDir::new_in(std::env::temp_dir()).context("creating temp dir")?;
+            let tmp_dir = TempDir::new_in(std::env::temp_dir()).context("creating temp dir")?;
             let witness_path = tmp_dir.path().join("witness.bin");
             let proof_path = tmp_dir.path().join("proof.bin");
             std::fs::write(&witness_path, &witness_raw).context("writing witness")?;
@@ -68,11 +65,8 @@ pub async fn verify_inner(
                     extracted.scale_exponent,
                     &extracted.modulus,
                 );
-                if !field::compare_field_values(&scaled, &extracted.inputs, &extracted.modulus, 1)
-                {
-                    anyhow::bail!(
-                        "input verification failed: witness inputs don't match expected"
-                    );
+                if !field::compare_field_values(&scaled, &extracted.inputs, &extracted.modulus, 1) {
+                    anyhow::bail!("input verification failed: witness inputs don't match expected");
                 }
             }
 
@@ -128,7 +122,10 @@ pub async fn handle_request(req: VerifyRequest) -> VerifyResponse {
     }
 }
 
-pub async fn handle_store_request(req: VerifyAndStoreRequest, store: &Arc<TileStore>) -> StoreResponse {
+pub async fn handle_store_request(
+    req: VerifyAndStoreRequest,
+    store: &Arc<TileStore>,
+) -> StoreResponse {
     match verify_inner(
         &req.request_id,
         &req.circuit_path,

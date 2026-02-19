@@ -40,10 +40,7 @@ pub async fn run_http_server(
             &format!("/{}", ProofOfWeightsDataModel::NAME),
             post(handle_proof_of_weights),
         )
-        .route(
-            &format!("/{}", Competition::NAME),
-            post(handle_competition),
-        )
+        .route(&format!("/{}", Competition::NAME), post(handle_competition))
         .route(
             &format!("/{}", DSliceProofGenerationDataModel::NAME),
             post(handle_dslice),

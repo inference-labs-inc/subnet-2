@@ -9,5 +9,5 @@ pub mod store;
 pub mod verify;
 pub mod witness;
 
+pub use store::{StoredTile, TileStore};
 pub use verify::{verify_inner, VerifyResult};
-pub use store::{TileStore, StoredTile};

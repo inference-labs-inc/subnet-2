@@ -41,7 +41,8 @@ RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | b
     npm install --prefix /opt/.snarkjs snarkjs@0.7.4 && \
     mkdir -p ~/.local/bin && \
     ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/node" /home/subnet2/.local/bin/node && \
-    ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/npm" /home/subnet2/.local/bin/npm
+    ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/npm" /home/subnet2/.local/bin/npm && \
+    ln -s /opt/.snarkjs/node_modules/.bin/snarkjs /home/subnet2/.local/bin/snarkjs
 ENV PATH="/home/subnet2/.local/bin:${PATH}"
 
 USER root

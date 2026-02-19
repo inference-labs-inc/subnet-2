@@ -1,11 +1,9 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
 
-const BINARY_SEARCH_PATHS: &[&str] = &[
-    "./Expander/target/release/expander-exec",
-];
+const BINARY_SEARCH_PATHS: &[&str] = &["./Expander/target/release/expander-exec"];
 
 const TIMEOUT: Duration = Duration::from_secs(120);
 

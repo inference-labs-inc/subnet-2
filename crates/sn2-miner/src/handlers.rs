@@ -20,10 +20,7 @@ impl MinerHandlers {
         }
     }
 
-    pub async fn handle_query_zk_proof(
-        &self,
-        data: QueryZkProof,
-    ) -> Result<serde_json::Value> {
+    pub async fn handle_query_zk_proof(&self, data: QueryZkProof) -> Result<serde_json::Value> {
         let model_id = data.model_id.as_deref().unwrap_or("");
         info!(model_id = model_id, "handling QueryZkProof");
 
@@ -48,10 +45,7 @@ impl MinerHandlers {
 
         let result = self
             .dsperse
-            .prove(
-                &data.verification_key_hash,
-                &data.inputs,
-            )
+            .prove(&data.verification_key_hash, &data.inputs)
             .await?;
 
         Ok(json!({
@@ -60,10 +54,7 @@ impl MinerHandlers {
         }))
     }
 
-    pub async fn handle_competition(
-        &self,
-        data: Competition,
-    ) -> Result<serde_json::Value> {
+    pub async fn handle_competition(&self, data: Competition) -> Result<serde_json::Value> {
         info!(id = data.id, hash = %data.hash, file = %data.file_name, "handling Competition");
 
         let commitment = self.circuit_manager.get_commitment().await?;
@@ -92,11 +83,7 @@ impl MinerHandlers {
         let circuit_id = data.circuit.as_deref().unwrap_or("");
         let slice_num = data.slice_num.as_deref().unwrap_or("");
 
-        info!(
-            circuit = circuit_id,
-            slice = slice_num,
-            "handling DSlice"
-        );
+        info!(circuit = circuit_id, slice = slice_num, "handling DSlice");
 
         let result = self
             .dsperse

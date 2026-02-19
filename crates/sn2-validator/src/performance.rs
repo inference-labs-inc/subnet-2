@@ -3,10 +3,9 @@ use std::path::PathBuf;
 
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
-    CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP, CAPACITY_RAMP_THRESHOLD,
-    CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS, MAX_CONCURRENT_REQUESTS,
-    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_SCORING_PERCENTILE,
-    PERFORMANCE_WINDOW_SIZE,
+    CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP, CAPACITY_RAMP_THRESHOLD, CAPACITY_WINDOW_SIZE,
+    CIRCUIT_TIMEOUT_SECONDS, MAX_CONCURRENT_REQUESTS, PERFORMANCE_MIN_SAMPLES,
+    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_SCORING_PERCENTILE, PERFORMANCE_WINDOW_SIZE,
 };
 use tracing::{info, warn};
 
@@ -112,10 +111,7 @@ impl PerformanceTracker {
                 .get(uid)
                 .map(|r| r.iter().copied().collect())
                 .unwrap_or_default();
-            capacities_json.insert(
-                uid.to_string(),
-                serde_json::json!([*cap, results]),
-            );
+            capacities_json.insert(uid.to_string(), serde_json::json!([*cap, results]));
         }
 
         let data = serde_json::json!({

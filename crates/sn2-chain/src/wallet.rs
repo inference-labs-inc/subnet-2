@@ -14,11 +14,7 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    pub fn from_paths(
-        name: &str,
-        hotkey_name: &str,
-        wallet_path: Option<&str>,
-    ) -> Result<Self> {
+    pub fn from_paths(name: &str, hotkey_name: &str, wallet_path: Option<&str>) -> Result<Self> {
         let base = match wallet_path {
             Some(p) => PathBuf::from(p),
             None => dirs_next::home_dir()
@@ -33,8 +29,8 @@ impl Wallet {
 
         let hotkey_data = std::fs::read_to_string(&hotkey_path)
             .with_context(|| format!("reading hotkey from {}", hotkey_path.display()))?;
-        let hotkey_json: serde_json::Value = serde_json::from_str(&hotkey_data)
-            .context("parsing hotkey JSON")?;
+        let hotkey_json: serde_json::Value =
+            serde_json::from_str(&hotkey_data).context("parsing hotkey JSON")?;
 
         let hotkey_secret = hotkey_json
             .get("secretSeed")
@@ -56,8 +52,8 @@ impl Wallet {
 
         let coldkey_data = std::fs::read_to_string(&coldkey_path)
             .with_context(|| format!("reading coldkey from {}", coldkey_path.display()))?;
-        let coldkey_json: serde_json::Value = serde_json::from_str(&coldkey_data)
-            .context("parsing coldkey JSON")?;
+        let coldkey_json: serde_json::Value =
+            serde_json::from_str(&coldkey_data).context("parsing coldkey JSON")?;
 
         let coldkey_ss58 = coldkey_json
             .get("ss58Address")
