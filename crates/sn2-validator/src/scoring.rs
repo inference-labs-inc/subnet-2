@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -80,6 +80,22 @@ impl ScoreManager {
         self.scores.retain(|uid, _| active_uids.contains(uid));
         for &uid in active_uids {
             self.scores.entry(uid).or_insert(0.0);
+        }
+    }
+
+    pub fn apply_pow_scores(&mut self, miner_uids: &[u16], scores: &[f64]) {
+        for (&uid, &score) in miner_uids.iter().zip(scores.iter()) {
+            if self.scores.contains_key(&uid) {
+                self.scores.insert(uid, score.max(0.0));
+            }
+        }
+    }
+
+    pub fn zero_non_queryable(&mut self, queryable_uids: &HashSet<u16>) {
+        for (uid, score) in self.scores.iter_mut() {
+            if !queryable_uids.contains(uid) {
+                *score = 0.0;
+            }
         }
     }
 

@@ -49,6 +49,8 @@ pub enum RequestType {
     Rwr,
     #[serde(rename = "dslice_request")]
     DSlice,
+    #[serde(rename = "proof_of_weights")]
+    ProofOfWeights,
 }
 
 impl std::fmt::Display for RequestType {
@@ -57,6 +59,7 @@ impl std::fmt::Display for RequestType {
             Self::Benchmark => write!(f, "benchmark_request"),
             Self::Rwr => write!(f, "real_world_request"),
             Self::DSlice => write!(f, "dslice_request"),
+            Self::ProofOfWeights => write!(f, "proof_of_weights"),
         }
     }
 }

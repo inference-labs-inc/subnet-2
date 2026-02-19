@@ -14,8 +14,10 @@ use tracing::{error, info, warn};
 use crate::circuit_store::CircuitStore;
 use crate::config::ValidatorConfig;
 use crate::dsperse::DSperseManager;
+use crate::incremental_runner::{IncrementalRunManager, SliceArtifact};
 use crate::miner_client::MinerQueryClient;
 use crate::performance::PerformanceTracker;
+use crate::proof_uploader::ProofUploader;
 use crate::relay::{DsperseSubmission, RelayManager, RwrSubmission};
 use crate::request_pipeline::RequestPipeline;
 use crate::response_processor::ResponseProcessor;
@@ -158,6 +160,8 @@ pub struct ValidatorLoop {
     last_health_log: Instant,
     last_replenish: Instant,
     task_meta: HashMap<tokio::task::Id, (u16, Option<String>)>,
+    run_manager: IncrementalRunManager,
+    proof_uploader: Arc<ProofUploader>,
 }
 
 impl ValidatorLoop {
@@ -196,6 +200,11 @@ impl ValidatorLoop {
         let response_processor = ResponseProcessor::new();
         let dsperse = DSperseManager::new(config.dsperse_socket.clone());
         let circuit_store = CircuitStore::new();
+        let run_manager = IncrementalRunManager::new();
+        let proof_uploader = Arc::new(ProofUploader::new(
+            config.wallet.clone(),
+            config.proof_api_url.clone(),
+        ));
 
         let now = Instant::now();
 
@@ -228,6 +237,8 @@ impl ValidatorLoop {
             last_health_log: now,
             last_replenish: now,
             task_meta: HashMap::new(),
+            run_manager,
+            proof_uploader,
         })
     }
 
@@ -342,6 +353,14 @@ impl ValidatorLoop {
                     .to_string();
 
                 info!(run_uid = %run_uid, circuit = %circuit.id, "started incremental run");
+
+                self.run_manager.start_run(
+                    run_uid.clone(),
+                    circuit.id.clone(),
+                    circuit.metadata.name.clone(),
+                    RunSource::Api,
+                    submission.request_id.clone(),
+                );
 
                 self.relay.register_pending(&run_uid).await;
 
@@ -616,7 +635,7 @@ impl ValidatorLoop {
                 {
                     let items = self.pow_manager.drain_batch();
                     let inputs = PowManager::prepare_inputs(&items);
-                    request_type = RequestType::Rwr;
+                    request_type = RequestType::ProofOfWeights;
                     external_request_hash = None;
                     retry_count = 0;
                     slice_num = None;
@@ -635,7 +654,7 @@ impl ValidatorLoop {
                     });
                     guard_hash = Some(String::new());
                     task_circuit = Some(pow_circ.clone());
-                    task_inputs = None;
+                    task_inputs = Some(inputs.clone());
                     task_proof_system = Some(pow_circ.proof_system);
                     retry_payload = RetryPayload::None;
                 } else if let Some(rwr) = self.rwr_queue.pop_front() {
@@ -1001,63 +1020,69 @@ impl ValidatorLoop {
                 response.verification_result = verified;
 
                 if verified {
-                    let elapsed = response.response_time;
-                    let verification_time = response.verification_time.unwrap_or(0.0);
+                    if request_type == RequestType::ProofOfWeights {
+                        self.handle_pow_success(response).await;
+                        info!(uid = uid, rtype = %request_type, "PoW proof verified, scores applied");
+                        None
+                    } else {
+                        let elapsed = response.response_time;
+                        let verification_time = response.verification_time.unwrap_or(0.0);
 
-                    self.performance_tracker
-                        .record(uid, true, elapsed, was_at_capacity);
-                    let previous_score = self.score_manager.get_score(uid);
-                    self.score_manager.update_score(
-                        uid,
-                        true,
-                        elapsed,
-                        VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
-                        0.0,
-                    );
-                    metrics::record_response(true, elapsed);
+                        self.performance_tracker
+                            .record(uid, true, elapsed, was_at_capacity);
+                        let previous_score = self.score_manager.get_score(uid);
+                        self.score_manager.update_score(
+                            uid,
+                            true,
+                            elapsed,
+                            VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
+                            0.0,
+                        );
+                        metrics::record_response(true, elapsed);
 
-                    let n = self.config.metagraph.n.max(1) as f64;
-                    self.pow_manager.push(PowItem {
-                        miner_uid: uid,
-                        validator_uid: self.config.user_uid,
-                        verified: true,
-                        response_time: elapsed,
-                        proof_size: response.proof_size as u64,
-                        previous_score,
-                        maximum_score: 1.0 / n,
-                        maximum_response_time: VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
-                        minimum_response_time: 0.0,
-                        block_number: 0,
-                    });
+                        let n = self.config.metagraph.n.max(1) as f64;
+                        self.pow_manager.push(PowItem {
+                            miner_uid: uid,
+                            validator_uid: self.config.user_uid,
+                            verified: true,
+                            response_time: elapsed,
+                            proof_size: response.proof_size as u64,
+                            previous_score,
+                            maximum_score: 1.0 / n,
+                            maximum_response_time: VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
+                            minimum_response_time: 0.0,
+                            block_number: 0,
+                        });
 
-                    info!(uid = uid, elapsed = format!("{elapsed:.3}s"), rtype = %request_type, "proof verified");
+                        info!(uid = uid, elapsed = format!("{elapsed:.3}s"), rtype = %request_type, "proof verified");
 
-                    if request_type == RequestType::DSlice {
-                        self.handle_dslice_success(
-                            &run_uid,
-                            &slice_num,
-                            is_tile,
-                            task_id.as_deref(),
-                            tile_idx,
-                            response,
-                            verification_time,
-                        )
-                        .await;
-                    }
-
-                    if let Some(req_id) = &external_request_hash {
-                        self.relay
-                            .send_response(
-                                req_id,
-                                serde_json::json!({
-                                    "success": true,
-                                    "proof": response.proof_content,
-                                    "public_signals": response.public_json,
-                                }),
+                        if request_type == RequestType::DSlice {
+                            self.handle_dslice_success(
+                                &run_uid,
+                                &slice_num,
+                                is_tile,
+                                task_id.as_deref(),
+                                tile_idx,
+                                response,
+                                verification_time,
                             )
                             .await;
+                        }
+
+                        if let Some(req_id) = &external_request_hash {
+                            self.relay
+                                .send_response(
+                                    req_id,
+                                    serde_json::json!({
+                                        "success": true,
+                                        "proof": response.proof_content,
+                                        "public_signals": response.public_json,
+                                    }),
+                                )
+                                .await;
+                        }
+                        None
                     }
-                    None
                 } else {
                     let reason = match verify_result {
                         Ok(false) => "verification failed".to_string(),
@@ -1094,6 +1119,42 @@ impl ValidatorLoop {
         }
     }
 
+    async fn handle_pow_success(&mut self, response: &MinerResponse) {
+        let rescaled_outputs: Vec<f64> = match &response.computed_outputs {
+            Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+            None => {
+                warn!("PoW response missing computed_outputs");
+                return;
+            }
+        };
+
+        let batch_size = MAX_POW_QUEUE_SIZE;
+        let expected_len = batch_size * 4;
+        if rescaled_outputs.len() < expected_len {
+            warn!(
+                outputs_len = rescaled_outputs.len(),
+                expected = expected_len,
+                "PoW witness outputs too short"
+            );
+            return;
+        }
+
+        let scores = &rescaled_outputs[..batch_size];
+        let miner_uid_floats = &rescaled_outputs[batch_size * 2..batch_size * 3];
+        let miner_uids: Vec<u16> = miner_uid_floats.iter().map(|v| v.round() as u16).collect();
+
+        self.score_manager.apply_pow_scores(&miner_uids, scores);
+
+        info!(
+            batch = batch_size,
+            "applied PoW-derived scores from verified witness"
+        );
+
+        if let Err(e) = self.score_manager.save() {
+            warn!(error = %e, "saving scores after PoW update");
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn handle_dslice_success(
         &mut self,
@@ -1116,6 +1177,20 @@ impl ValidatorLoop {
 
         let proof_str = response.proof_content.as_ref().and_then(|v| v.as_str());
         let proof_system_str = response.proof_system.as_ref().map(|ps| ps.to_string());
+
+        self.run_manager.push_artifact(
+            &run_uid,
+            SliceArtifact {
+                slice_num: slice_num.clone(),
+                proof_system: response.proof_system,
+                proof_hex: proof_str.map(|s| s.to_string()),
+                witness_hex: response.witness.clone(),
+                computed_outputs: response.computed_outputs.clone(),
+                tile_idx,
+                response_time: response.response_time,
+                verification_time,
+            },
+        );
 
         let apply_result = if is_tile {
             let tid = task_id.unwrap_or("");
@@ -1159,6 +1234,39 @@ impl ValidatorLoop {
 
                 if is_complete {
                     info!(run_uid = %run_uid, "incremental run complete");
+
+                    let artifacts = self.run_manager.take_artifacts(&run_uid);
+                    let active_run = self.run_manager.remove_run(&run_uid);
+
+                    if !artifacts.is_empty() {
+                        let uploader = Arc::clone(&self.proof_uploader);
+                        let uid_clone = run_uid.clone();
+                        let circuit_id = active_run
+                            .as_ref()
+                            .map(|r| r.circuit_id.clone())
+                            .unwrap_or_default();
+                        let circuit_name = active_run
+                            .as_ref()
+                            .map(|r| r.circuit_name.clone())
+                            .unwrap_or_default();
+                        let final_output = status.get("final_output").cloned();
+
+                        tokio::spawn(async move {
+                            if let Err(e) = uploader
+                                .upload_run_artifacts(
+                                    &uid_clone,
+                                    &circuit_id,
+                                    &circuit_name,
+                                    artifacts,
+                                    final_output,
+                                )
+                                .await
+                            {
+                                warn!(run_uid = %uid_clone, error = %e, "proof upload failed");
+                            }
+                        });
+                    }
+
                     self.relay
                         .set_request_result(
                             &run_uid,
@@ -1273,6 +1381,7 @@ impl ValidatorLoop {
                         .await;
                 }
 
+                self.run_manager.remove_run(run_uid);
                 self.relay.remove_pending(run_uid).await;
             }
         }
@@ -1334,12 +1443,15 @@ impl ValidatorLoop {
             self.last_replenish = now;
         }
 
+        self.run_manager.gc_stale(Duration::from_secs(600));
+
         if now.duration_since(self.last_health_log) > Duration::from_secs(15) {
             info!(
                 active_tasks = self.tasks.len(),
                 rwr_queue = self.rwr_queue.len(),
                 api_dslice_queue = self.api_dslice_queue.len(),
                 stacked_dslice_queue = self.stacked_dslice_queue.len(),
+                active_runs = self.run_manager.active_count(),
                 "health"
             );
             self.last_health_log = now;
@@ -1357,6 +1469,10 @@ impl ValidatorLoop {
 
         let uids = self.config.metagraph.uids();
         self.score_manager.sync_uids(&uids);
+
+        let queryable = self.get_queryable_neurons();
+        let queryable_uids: HashSet<u16> = queryable.iter().map(|n| n.uid).collect();
+        self.score_manager.zero_non_queryable(&queryable_uids);
 
         for neuron in self.config.metagraph.active_neurons() {
             if let Some(prev_hotkey) = self.uid_hotkeys.get(&neuron.uid) {
