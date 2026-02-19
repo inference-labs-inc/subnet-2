@@ -1254,21 +1254,6 @@ impl ValidatorLoop {
         }
     }
 
-    async fn attempt_local_prove_fallback(&self, run_uid: &str, slice_num: &str) {
-        match self
-            .dsperse
-            .prove_slice(run_uid, slice_num, &serde_json::Value::Null, None, "JSTPROVE")
-            .await
-        {
-            Ok(_) => {
-                info!(run_uid = %run_uid, slice = slice_num, "local prove fallback succeeded");
-            }
-            Err(e) => {
-                warn!(run_uid = %run_uid, slice = slice_num, error = %e, "local prove fallback failed");
-            }
-        }
-    }
-
     async fn run_periodic_tasks(&mut self) -> Result<()> {
         let now = Instant::now();
 

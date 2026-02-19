@@ -11,26 +11,6 @@ impl DSperseManager {
         Self { socket_path }
     }
 
-    pub async fn prove_slice(
-        &self,
-        circuit_id: &str,
-        slice_num: &str,
-        inputs: &serde_json::Value,
-        outputs: Option<&serde_json::Value>,
-        proof_system: &str,
-    ) -> Result<serde_json::Value> {
-        let request = serde_json::json!({
-            "method": "prove_slice",
-            "circuit_id": circuit_id,
-            "slice_num": slice_num,
-            "inputs": inputs,
-            "outputs": outputs,
-            "proof_system": proof_system,
-        });
-
-        self.send_ipc(&request).await
-    }
-
     pub async fn start_incremental_run(
         &self,
         circuit_id: &str,
@@ -158,15 +138,6 @@ impl DSperseManager {
     pub async fn generate_requests(&self) -> Result<serde_json::Value> {
         let request = serde_json::json!({
             "method": "generate_requests",
-        });
-
-        self.send_ipc(&request).await
-    }
-
-    pub async fn abort_run(&self, run_uid: &str) -> Result<serde_json::Value> {
-        let request = serde_json::json!({
-            "method": "abort_run",
-            "run_uid": run_uid,
         });
 
         self.send_ipc(&request).await
