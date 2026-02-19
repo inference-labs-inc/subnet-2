@@ -2,7 +2,6 @@ import hashlib
 import json
 import os
 import platform
-import stat
 import subprocess
 import sys
 import time
@@ -214,9 +213,12 @@ class AutoUpdate:
         return None
 
     def _download_file(self, url: str, dest: str) -> bool:
+        if not url.startswith("https://"):
+            logging.warning(f"Refusing to download from non-HTTPS URL: {url}")
+            return False
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "subnet-2-auto-updater"})
-            with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
+            with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:  # noqa: S310
                 while True:
                     chunk = resp.read(65536)
                     if not chunk:
@@ -261,8 +263,8 @@ class AutoUpdate:
             for proc in processes:
                 if proc.get("pid") == pid:
                     return proc.get("name")
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"PM2 process lookup failed: {e}")
         role = self._detect_role()
         return f"subnet-2-{role}"
 
@@ -347,7 +349,7 @@ class AutoUpdate:
             os.unlink(tmp_path)
             return False
 
-        os.chmod(tmp_path, os.stat(tmp_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        os.chmod(tmp_path, 0o755)
         os.replace(tmp_path, binary_path)
 
         logging.info(f"Rust binary installed at {binary_path}")
