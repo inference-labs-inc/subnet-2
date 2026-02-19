@@ -34,7 +34,7 @@ The reward mechanism scores the initial AI predictions based on the cryptographi
 ### Validators
 
 - Produce input data and distribute requests for verified inference throughout miners participating on the subnet
-- Confirm that miners are acting faithfully, by verifying the authenticity of the miner's returned zero knowledge proof
+- Confirm that miners are acting faithfully, by verifying the authenticity of the miner's returned zero-knowledge proof
 - Score results from miners based on performance metrics such as proof size and response time
 
 ## Quickstart
@@ -47,7 +47,7 @@ The reward mechanism scores the initial AI predictions based on the cryptographi
 | [PM2](https://pm2.keymetrics.io/) | Process manager used to run and monitor the binaries in the background |
 | [btcli](https://docs.bittensor.com/getting-started/installation) | CLI for interacting with the Bittensor network (wallet creation, registration) |
 
-Alternatively, use Docker — no Rust toolchain needed. See the [Docker instructions](#docker) below.
+Alternatively, use Docker — no Rust toolchain needed. See the Docker instructions under [Run the Miner](#run-the-miner) and [Run the Validator](#run-the-validator) below.
 
 ### Install from pre-built binary
 
@@ -222,7 +222,7 @@ pm2 start ./sn2-validator --name subnet-2-validator --kill-timeout 3000 -- \
 
 ## Miner
 
-Miners contribute to this subnet by providing compute to generate output from, and prove AI model inferences. Miners receive workloads from validators in the form of input data, perform verified inferences on those inputs and respond with output along with a zero knowledge proof of inference.
+Miners contribute to this subnet by providing compute to generate output from, and prove AI model inferences. Miners receive workloads from validators in the form of input data, perform verified inferences on those inputs and respond with output along with a zero-knowledge proof of inference.
 
 ### Hardware requirements
 
