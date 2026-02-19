@@ -5,7 +5,6 @@ import platform
 import subprocess
 import sys
 import time
-import urllib.request
 from typing import Optional
 
 import git
@@ -213,17 +212,12 @@ class AutoUpdate:
         return None
 
     def _download_file(self, url: str, dest: str) -> bool:
-        if not url.startswith("https://"):
-            logging.warning(f"Refusing to download from non-HTTPS URL: {url}")
-            return False
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "subnet-2-auto-updater"})
-            with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:  # noqa: S310
-                while True:
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    f.write(chunk)
+            with requests.get(url, stream=True, timeout=120) as resp:
+                resp.raise_for_status()
+                with open(dest, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        f.write(chunk)
             return True
         except Exception as e:
             logging.warning(f"Failed to download {url}: {e}")
@@ -263,10 +257,11 @@ class AutoUpdate:
             for proc in processes:
                 if proc.get("pid") == pid:
                     return proc.get("name")
+            logging.warning(f"PM2_HOME is set but current PID {pid} not found in pm2 process list")
+            return None
         except Exception as e:
-            logging.debug(f"PM2 process lookup failed: {e}")
-        role = self._detect_role()
-        return f"subnet-2-{role}"
+            logging.warning(f"PM2 process lookup failed: {e}")
+            return None
 
     def _collect_rust_args(self) -> list:
         argv = sys.argv[1:]
@@ -291,6 +286,25 @@ class AutoUpdate:
 
             args.append(arg)
         return args
+
+    def _ensure_binary(self, binary_path: str, binary_url: str, expected_hash: str, binary_name: str) -> bool:
+        if os.path.exists(binary_path) and self._verify_checksum(binary_path, expected_hash):
+            logging.info(f"Rust binary already installed and up to date at {binary_path}")
+            return True
+
+        logging.info(f"Downloading Rust binary: {binary_name}")
+        tmp_path = binary_path + ".tmp"
+        if not self._download_file(binary_url, tmp_path):
+            return False
+
+        if not self._verify_checksum(tmp_path, expected_hash):
+            os.unlink(tmp_path)
+            return False
+
+        os.chmod(tmp_path, 0o755)
+        os.replace(tmp_path, binary_path)
+        logging.info(f"Rust binary installed at {binary_path}")
+        return True
 
     def try_rust_migration(self) -> bool:
         release = self.get_latest_release()
@@ -335,24 +349,8 @@ class AutoUpdate:
             logging.warning(f"No checksum found for {binary_name} in SHA256SUMS")
             return False
 
-        if os.path.exists(binary_path):
-            if self._verify_checksum(binary_path, expected_hash):
-                logging.info(f"Rust binary already installed and up to date at {binary_path}")
-                return False
-
-        logging.info(f"Downloading Rust binary: {binary_name}")
-        tmp_path = binary_path + ".tmp"
-        if not self._download_file(binary_url, tmp_path):
+        if not self._ensure_binary(binary_path, binary_url, expected_hash, binary_name):
             return False
-
-        if not self._verify_checksum(tmp_path, expected_hash):
-            os.unlink(tmp_path)
-            return False
-
-        os.chmod(tmp_path, 0o755)
-        os.replace(tmp_path, binary_path)
-
-        logging.info(f"Rust binary installed at {binary_path}")
 
         rust_args = self._collect_rust_args()
 
@@ -368,10 +366,15 @@ class AutoUpdate:
                     ["pm2", "start", binary_path, "--name", pm2_name, "--"] + rust_args,
                     timeout=10, check=True, capture_output=True,
                 )
-                logging.info(f"PM2 process '{pm2_name}' reconfigured to Rust binary")
                 subprocess.run(["pm2", "save"], timeout=10, check=False, capture_output=True)
+                logging.info(f"PM2 process '{pm2_name}' reconfigured to Rust binary")
             except Exception as e:
-                logging.warning(f"PM2 reconfiguration failed: {e}")
+                logging.warning(f"PM2 reconfiguration failed, re-registering Python process: {e}")
+                subprocess.run(
+                    ["pm2", "start", sys.executable, "--name", pm2_name, "--"] + sys.argv,
+                    timeout=10, check=False, capture_output=True,
+                )
+                subprocess.run(["pm2", "save"], timeout=10, check=False, capture_output=True)
                 return False
             sys.exit(0)
         else:
