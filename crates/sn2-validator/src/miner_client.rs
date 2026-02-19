@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use btlightning::{LightningClient, QuicAxonInfo, QuicRequest};
@@ -68,37 +68,26 @@ impl MinerQueryClient {
         data: HashMap<String, serde_json::Value>,
         timeout_secs: f64,
     ) -> Result<(serde_json::Value, f64)> {
-        let rmpv_data: HashMap<String, rmpv::Value> = data
-            .into_iter()
-            .map(|(k, v)| rmpv::ext::to_value(v).map(|rv| (k, rv)))
-            .collect::<std::result::Result<_, _>>()
-            .context("converting request data to rmpv")?;
-        let request = QuicRequest {
-            synapse_type: synapse_type.to_string(),
-            data: rmpv_data,
-        };
+        let request = QuicRequest::from_typed(synapse_type, &data)
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context("serializing QUIC request")?;
 
         let start = Instant::now();
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs_f64(timeout_secs),
-            self.lightning.query_axon(axon.clone(), request),
-        )
-        .await
-        .context("QUIC query timed out")?
-        .context("QUIC query failed")?;
+        let response = self
+            .lightning
+            .query_axon_with_timeout(axon.clone(), request, Duration::from_secs_f64(timeout_secs))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context("QUIC query")?;
         let elapsed = start.elapsed().as_secs_f64();
 
-        if !response.success {
-            anyhow::bail!("QUIC query failed");
-        }
+        let response = response.into_result().map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let json_map: serde_json::Map<String, serde_json::Value> = response
-            .data
-            .into_iter()
-            .map(|(k, v)| serde_json::to_value(v).map(|jv| (k, jv)))
-            .collect::<serde_json::Result<_>>()
-            .context("converting response data from rmpv")?;
-        Ok((serde_json::Value::Object(json_map), elapsed))
+        let resp_body: serde_json::Value = response
+            .deserialize_data()
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context("deserializing QUIC response")?;
+        Ok((resp_body, elapsed))
     }
 
     pub async fn query_miner_http(

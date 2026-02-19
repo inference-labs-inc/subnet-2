@@ -25,7 +25,6 @@ metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 uuid = { workspace = true }
 rmp-serde = { workspace = true }
-rmpv = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 subxt = { workspace = true }

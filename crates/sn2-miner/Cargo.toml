@@ -28,5 +28,4 @@ base64 = { workspace = true }
 sp-core = { workspace = true }
 hex = { workspace = true }
 subxt = { workspace = true }
-rmpv = { workspace = true }
 async-trait = { workspace = true }
