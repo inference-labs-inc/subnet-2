@@ -4,6 +4,10 @@ set -euo pipefail
 REPO="inference-labs-inc/subnet-2"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 BINARY="${1:-all}"
+TMP_DIR=""
+
+cleanup() { [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"; }
+trap cleanup EXIT
 
 detect_platform() {
   local os arch
@@ -29,50 +33,49 @@ get_latest_tag() {
   curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
+download_sums() {
+  local tag="$1"
+  local sums_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS"
+  curl -fSL -o "${TMP_DIR}/SHA256SUMS" "$sums_url"
+}
+
 download_and_verify() {
   local tag="$1" platform="$2" binary="$3"
   local asset="${binary}-${platform}"
   local url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
-  local sums_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS"
-  local tmp
-  tmp="$(mktemp -d)"
 
   echo "Downloading ${asset} (${tag})..."
-  curl -fSL -o "${tmp}/${asset}" "$url"
-  curl -fSL -o "${tmp}/SHA256SUMS" "$sums_url"
+  curl -fSL -o "${TMP_DIR}/${asset}" "$url"
 
   echo "Verifying checksum..."
   local expected actual
-  expected="$(grep "${asset}" "${tmp}/SHA256SUMS" | awk '{print $1}')"
+  expected="$(grep "${asset}" "${TMP_DIR}/SHA256SUMS" | awk '{print $1}')"
   if [ -z "$expected" ]; then
     echo "Asset ${asset} not found in SHA256SUMS" >&2
-    rm -rf "$tmp"
     exit 1
   fi
 
   if command -v sha256sum &>/dev/null; then
-    actual="$(sha256sum "${tmp}/${asset}" | awk '{print $1}')"
+    actual="$(sha256sum "${TMP_DIR}/${asset}" | awk '{print $1}')"
   else
-    actual="$(shasum -a 256 "${tmp}/${asset}" | awk '{print $1}')"
+    actual="$(shasum -a 256 "${TMP_DIR}/${asset}" | awk '{print $1}')"
   fi
 
   if [ "$expected" != "$actual" ]; then
     echo "Checksum mismatch for ${asset}" >&2
     echo "  expected: ${expected}" >&2
     echo "  actual:   ${actual}" >&2
-    rm -rf "$tmp"
     exit 1
   fi
 
-  chmod +x "${tmp}/${asset}"
+  chmod +x "${TMP_DIR}/${asset}"
 
   if [ -w "$INSTALL_DIR" ]; then
-    mv "${tmp}/${asset}" "${INSTALL_DIR}/${binary}"
+    mv "${TMP_DIR}/${asset}" "${INSTALL_DIR}/${binary}"
   else
-    sudo mv "${tmp}/${asset}" "${INSTALL_DIR}/${binary}"
+    sudo mv "${TMP_DIR}/${asset}" "${INSTALL_DIR}/${binary}"
   fi
 
-  rm -rf "$tmp"
   echo "Installed ${binary} to ${INSTALL_DIR}/${binary}"
 }
 
@@ -86,6 +89,9 @@ main() {
     echo "Could not determine latest release" >&2
     exit 1
   fi
+
+  TMP_DIR="$(mktemp -d)"
+  download_sums "$tag"
 
   case "$BINARY" in
     all)
