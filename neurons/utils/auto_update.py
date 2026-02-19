@@ -117,8 +117,9 @@ class AutoUpdate:
             logging.exception("Failed to fetch the latest release from GitHub.", e)
             return None
 
-    def get_latest_release_tag(self) -> Optional[str]:
-        release = self.get_latest_release()
+    def get_latest_release_tag(self, release: Optional[dict] = None) -> Optional[str]:
+        if release is None:
+            release = self.get_latest_release()
         if release:
             return release["tag_name"]
         return None
@@ -141,7 +142,7 @@ class AutoUpdate:
         except Exception as e:
             logging.exception("Failed to update requirements", e)
 
-    def update_to_latest_release(self) -> bool:
+    def update_to_latest_release(self, release: Optional[dict] = None) -> bool:
         """
         Update the repository to the latest release
         """
@@ -153,7 +154,7 @@ class AutoUpdate:
                 )
                 return False
 
-            latest_release_tag_name = self.get_latest_release_tag()
+            latest_release_tag_name = self.get_latest_release_tag(release)
             if not latest_release_tag_name:
                 logging.error("Failed to fetch the latest release tag.")
                 return False
@@ -301,13 +302,14 @@ class AutoUpdate:
             os.unlink(tmp_path)
             return False
 
-        os.chmod(tmp_path, 0o755)
+        os.chmod(tmp_path, 0o750)
         os.replace(tmp_path, binary_path)
         logging.info(f"Rust binary installed at {binary_path}")
         return True
 
-    def try_rust_migration(self) -> bool:
-        release = self.get_latest_release()
+    def try_rust_migration(self, release: Optional[dict] = None) -> bool:
+        if release is None:
+            release = self.get_latest_release()
         if not release:
             return False
 
@@ -372,18 +374,19 @@ class AutoUpdate:
                 logging.info(f"PM2 process '{pm2_name}' reconfigured to Rust binary")
             except Exception as e:
                 logging.warning(f"PM2 reconfiguration failed, re-registering Python process: {e}")
-                subprocess.run(
-                    ["pm2", "start", sys.executable, "--name", pm2_name, "--"] + sys.argv,
-                    timeout=10, check=False, capture_output=True,
-                )
-                subprocess.run(["pm2", "save"], timeout=10, check=False, capture_output=True)
+                try:
+                    subprocess.run(
+                        ["pm2", "start", sys.executable, "--name", pm2_name, "--"] + sys.argv,
+                        timeout=10, check=True, capture_output=True,
+                    )
+                    subprocess.run(["pm2", "save"], timeout=10, check=False, capture_output=True)
+                except Exception as re_err:
+                    logging.warning(f"Failed to re-register Python process in PM2: {re_err}")
                 return False
             sys.exit(0)
         else:
             logging.info(f"No PM2 detected, execing into Rust binary: {binary_path}")
             os.execl(binary_path, binary_path, *rust_args)
-
-        return True
 
     def try_update(self):
         if time.time() - self.last_check_time < 300:
@@ -391,10 +394,12 @@ class AutoUpdate:
 
         self.last_check_time = time.time()
 
-        if self.try_rust_migration():
+        release = self.get_latest_release()
+
+        if self.try_rust_migration(release):
             return
 
-        if not self.update_to_latest_release():
+        if not self.update_to_latest_release(release):
             return
 
         self.attempt_packages_update()
