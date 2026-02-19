@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use sp_core::sr25519;
@@ -10,7 +10,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 
 use sn2_types::{
-    RELAY_AUTH_TIMEOUT, RELAY_PING_INTERVAL, RELAY_RECONNECT_BASE_DELAY, RELAY_RECONNECT_MAX_DELAY,
+    RELAY_AUTH_TIMEOUT, RELAY_PING_INTERVAL, RELAY_PING_TIMEOUT, RELAY_RECONNECT_BASE_DELAY,
+    RELAY_RECONNECT_MAX_DELAY,
 };
 
 type PendingMap = Arc<RwLock<HashMap<String, Arc<Mutex<PendingRequest>>>>>;
@@ -149,6 +150,7 @@ impl RelayManager {
 
         let ping_interval = tokio::time::interval(Duration::from_secs(RELAY_PING_INTERVAL));
         tokio::pin!(ping_interval);
+        let mut last_pong = Instant::now();
 
         loop {
             tokio::select! {
@@ -171,6 +173,9 @@ impl RelayManager {
                                 }
                             }
                         }
+                        Some(Ok(Message::Pong(_))) => {
+                            last_pong = Instant::now();
+                        }
                         Some(Ok(Message::Close(frame))) => {
                             let code = frame.as_ref().map(|f| f.code);
                             if code == Some(tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::from(4000)) {
@@ -187,6 +192,10 @@ impl RelayManager {
                     write.send(msg).await?;
                 }
                 _ = ping_interval.tick() => {
+                    if last_pong.elapsed() > Duration::from_secs(RELAY_PING_TIMEOUT) {
+                        warn!("relay pong timeout after {}s, reconnecting", RELAY_PING_TIMEOUT);
+                        return Err(anyhow::anyhow!("relay pong timeout"));
+                    }
                     write.send(Message::Ping(vec![])).await?;
                 }
             }

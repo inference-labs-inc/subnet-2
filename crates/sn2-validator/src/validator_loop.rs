@@ -614,7 +614,10 @@ impl ValidatorLoop {
                 let task_proof_system: Option<ProofSystem>;
                 let retry_payload: RetryPayload;
 
-                if let Some(pow_circ) = pow_circuit.as_ref().filter(|_| self.pow_manager.should_batch()) {
+                if let Some(pow_circ) = pow_circuit
+                    .as_ref()
+                    .filter(|_| self.pow_manager.should_batch())
+                {
                     let items = self.pow_manager.drain_batch();
                     let inputs = PowManager::prepare_inputs(&items);
                     request_type = RequestType::Rwr;
@@ -997,8 +1000,13 @@ impl ValidatorLoop {
                     self.performance_tracker
                         .record(uid, true, elapsed, was_at_capacity);
                     let previous_score = self.score_manager.get_score(uid);
-                    self.score_manager
-                        .update_score(uid, true, elapsed, 120.0, 0.0);
+                    self.score_manager.update_score(
+                        uid,
+                        true,
+                        elapsed,
+                        VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
+                        0.0,
+                    );
                     metrics::record_response(true, elapsed);
 
                     let n = self.config.metagraph.n.max(1) as f64;
@@ -1010,7 +1018,7 @@ impl ValidatorLoop {
                         proof_size: response.proof_size as u64,
                         previous_score,
                         maximum_score: 1.0 / n,
-                        maximum_response_time: 120.0,
+                        maximum_response_time: VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
                         minimum_response_time: 0.0,
                         block_number: 0,
                     });
@@ -1197,8 +1205,13 @@ impl ValidatorLoop {
         self.performance_tracker.record_reschedule(uid);
 
         let elapsed = 0.0;
-        self.score_manager
-            .update_score(uid, false, elapsed, 120.0, 0.0);
+        self.score_manager.update_score(
+            uid,
+            false,
+            elapsed,
+            VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
+            0.0,
+        );
         metrics::record_response(false, elapsed);
 
         let max_retries = match (&request_type, &retry_payload) {

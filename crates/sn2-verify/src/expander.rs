@@ -47,6 +47,7 @@ pub async fn run_expander_verify(
             "-i",
             proof_path.to_str().context("proof_path not utf8")?,
         ])
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
