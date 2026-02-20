@@ -143,9 +143,10 @@ async fn main() -> Result<()> {
         let meta = metagraph.clone();
         let client = chain_client.clone();
         let netuid = cli.netuid;
+        let sync_interval = cli.metagraph_sync_interval;
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(sync_interval)).await;
                 let mut fresh = sn2_chain::Metagraph::new(netuid);
                 match fresh.sync(&client).await {
                     Ok(()) => {

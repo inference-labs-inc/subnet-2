@@ -50,4 +50,7 @@ pub struct Cli {
 
     #[arg(long, default_value_t = false)]
     pub disable_blacklist: bool,
+
+    #[arg(long, default_value_t = 600)]
+    pub metagraph_sync_interval: u64,
 }
