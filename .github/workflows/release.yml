@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["*.*.*"]
+    branches: [testnet]
   pull_request:
     types: [labeled]
 
@@ -12,7 +13,7 @@ permissions:
 jobs:
   build-linux:
     name: Build Linux x86_64
-    if: startsWith(github.ref, 'refs/tags/') || github.event.label.name == 'run-build'
+    if: startsWith(github.ref, 'refs/tags/') || github.event.label.name == 'run-build' || github.ref == 'refs/heads/testnet'
     runs-on: ubuntu-latest
     container:
       image: quay.io/pypa/manylinux_2_28_x86_64
@@ -31,6 +32,7 @@ jobs:
           cargo build --release --locked --bin sn2-validator --bin sn2-miner
         env:
           PYO3_PYTHON: /usr/bin/python3.12
+          SN2_RELEASE_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/') && 'mainnet' || '' }}
 
       - name: Rename binaries
         run: |
@@ -46,7 +48,7 @@ jobs:
 
   build-macos:
     name: Build macOS aarch64
-    if: startsWith(github.ref, 'refs/tags/') || github.event.label.name == 'run-build'
+    if: startsWith(github.ref, 'refs/tags/') || github.event.label.name == 'run-build' || github.ref == 'refs/heads/testnet'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -63,6 +65,7 @@ jobs:
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
         env:
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+          SN2_RELEASE_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/') && 'mainnet' || '' }}
 
       - name: Rename binaries
         run: |
@@ -99,6 +102,40 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          files: |
+            sn2-validator-linux-x86_64
+            sn2-miner-linux-x86_64
+            sn2-validator-macos-aarch64
+            sn2-miner-macos-aarch64
+            SHA256SUMS
+
+  release-testnet:
+    name: Create Testnet Release
+    if: github.ref == 'refs/heads/testnet'
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          find . -type f -name 'sn2-*' -exec cp {} ../ \;
+          cd ..
+          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
+
+      - name: Create Testnet Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: testnet-latest
+          name: Testnet (latest)
+          prerelease: true
+          make_latest: false
+          target_commitish: testnet
           files: |
             sn2-validator-linux-x86_64
             sn2-miner-linux-x86_64

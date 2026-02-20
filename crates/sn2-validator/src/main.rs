@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    if !cli.no_auto_update {
+    if !cli.no_auto_update && option_env!("SN2_RELEASE_CHANNEL") == Some("mainnet") {
         let _update_handle = sn2_chain::auto_update::spawn_update_loop("sn2-validator");
     }
 
