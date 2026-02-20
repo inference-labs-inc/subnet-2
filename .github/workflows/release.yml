@@ -117,6 +117,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Remove previous testnet release
+        run: gh release delete testnet-latest --cleanup-tag --yes || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+
       - uses: actions/download-artifact@v5
         with:
           path: artifacts
@@ -133,6 +139,7 @@ jobs:
         with:
           tag_name: testnet-latest
           name: Testnet (latest)
+          body: "Built from ${{ github.sha }}"
           prerelease: true
           make_latest: false
           target_commitish: testnet

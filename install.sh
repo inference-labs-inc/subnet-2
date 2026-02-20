@@ -3,8 +3,13 @@ set -euo pipefail
 
 REPO="inference-labs-inc/subnet-2"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
-NETWORK="${NETWORK:-mainnet}"
+NETWORK="$(echo "${NETWORK:-mainnet}" | tr '[:upper:]' '[:lower:]')"
 BINARY="${1:-all}"
+
+case "$NETWORK" in
+  mainnet|testnet) ;;
+  *) echo "Unknown NETWORK: $NETWORK (expected 'mainnet' or 'testnet')" >&2; exit 1 ;;
+esac
 TMP_DIR=""
 
 cleanup() { [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"; }
