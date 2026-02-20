@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::cli::Cli;
 
@@ -170,8 +170,11 @@ async fn main() -> Result<()> {
         _ = circuit_monitor => {
             warn!("circuit monitor exited unexpectedly");
         }
-        _ = metagraph_sync => {
-            warn!("metagraph sync loop exited unexpectedly");
+        r = metagraph_sync => {
+            match r {
+                Ok(()) => warn!("metagraph sync loop exited unexpectedly"),
+                Err(e) => error!(error = %e, "metagraph sync task panicked"),
+            }
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");

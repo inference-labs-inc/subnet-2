@@ -51,6 +51,6 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub disable_blacklist: bool,
 
-    #[arg(long, default_value_t = 600)]
+    #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..))]
     pub metagraph_sync_interval: u64,
 }
