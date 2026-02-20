@@ -30,7 +30,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 subxt = { workspace = true }
 base64 = { workspace = true }
-rand = "0.8"
-dirs-next = "2"
-futures-util = "0.3"
-shellexpand = "3"
+rand = { workspace = true }
+dirs-next = { workspace = true }
+futures-util = { workspace = true }
+shellexpand = { workspace = true }

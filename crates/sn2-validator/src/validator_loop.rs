@@ -159,6 +159,7 @@ pub struct ValidatorLoop {
     last_perf_save: Instant,
     last_health_log: Instant,
     last_replenish: Instant,
+    last_gc: Instant,
     task_meta: HashMap<tokio::task::Id, (u16, Option<String>, bool)>,
     run_manager: IncrementalRunManager,
     proof_uploader: Arc<ProofUploader>,
@@ -238,6 +239,7 @@ impl ValidatorLoop {
             last_perf_save: now,
             last_health_log: now,
             last_replenish: now,
+            last_gc: now,
             task_meta: HashMap::new(),
             run_manager,
             proof_uploader,
@@ -1245,6 +1247,16 @@ impl ValidatorLoop {
         let proof_str = response.proof_content.as_ref().and_then(|v| v.as_str());
         let proof_system_str = response.proof_system.as_ref().map(|ps| ps.to_string());
 
+        if !self.run_manager.has_run(&run_uid) {
+            let (cid, cname) = response
+                .circuit
+                .as_ref()
+                .map(|c| (c.id.clone(), c.metadata.name.clone()))
+                .unwrap_or_default();
+            self.run_manager
+                .start_run(run_uid.clone(), cid, cname, RunSource::Benchmark, None);
+        }
+
         self.run_manager.push_artifact(
             &run_uid,
             SliceArtifact {
@@ -1527,7 +1539,10 @@ impl ValidatorLoop {
             self.last_replenish = now;
         }
 
-        self.run_manager.gc_stale(Duration::from_secs(600));
+        if now.duration_since(self.last_gc) > Duration::from_secs(120) {
+            self.run_manager.gc_stale(Duration::from_secs(600));
+            self.last_gc = now;
+        }
 
         while let Some(result) = self.upload_tasks.try_join_next() {
             if let Err(e) = result {
@@ -1651,12 +1666,18 @@ impl ValidatorLoop {
             );
         }
 
-        let owner_uid = self
+        let owner_uid = match self
             .config
             .metagraph
             .query_subnet_owner(&self.config.chain_client)
             .await
-            .unwrap_or(None);
+        {
+            Ok(uid) => uid,
+            Err(e) => {
+                warn!(error = %e, "query_subnet_owner failed, proceeding without owner weight");
+                None
+            }
+        };
         let (weight_uids, weights) = self
             .score_manager
             .compute_throughput_weights(&uids, &snap, owner_uid);
@@ -1684,10 +1705,14 @@ impl ValidatorLoop {
     }
 
     async fn shutdown(&mut self) {
-        info!("saving state before shutdown");
+        info!("aborting in-flight miner tasks");
         self.tasks.shutdown().await;
-        info!("awaiting in-flight proof uploads");
-        self.upload_tasks.shutdown().await;
+        info!("draining in-flight proof uploads");
+        while let Some(result) = self.upload_tasks.join_next().await {
+            if let Err(e) = result {
+                warn!(error = %e, "upload task failed during shutdown");
+            }
+        }
         self.pipeline.clear_guard();
         if let Err(e) = self.score_manager.save() {
             error!(error = %e, "saving scores during shutdown");

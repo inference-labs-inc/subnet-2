@@ -68,6 +68,10 @@ impl IncrementalRunManager {
         );
     }
 
+    pub fn has_run(&self, run_uid: &str) -> bool {
+        self.runs.contains_key(run_uid)
+    }
+
     pub fn push_artifact(&mut self, run_uid: &str, artifact: SliceArtifact) {
         if let Some(run) = self.runs.get_mut(run_uid) {
             run.artifacts.push(artifact);
