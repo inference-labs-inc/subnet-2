@@ -25,6 +25,7 @@ pub struct NeuronInfo {
     pub axon_ip: String,
     pub axon_port: u16,
     pub axon_protocol: u8,
+    pub validator_permit: bool,
 }
 
 pub struct Metagraph {
@@ -68,11 +69,26 @@ impl Metagraph {
             "syncing metagraph"
         );
 
+        let validator_permits = self.query_validator_permits(client).await.map_err(|e| {
+            warn!(
+                netuid = self.netuid,
+                error = %e,
+                "validator permits not updated"
+            );
+            e
+        })?;
+
         let mut neurons = Vec::with_capacity(n as usize);
 
         for uid in 0..n {
             match self.query_neuron(client, uid).await {
-                Ok(neuron) => neurons.push(neuron),
+                Ok(mut neuron) => {
+                    neuron.validator_permit = validator_permits
+                        .get(uid as usize)
+                        .copied()
+                        .unwrap_or(false);
+                    neurons.push(neuron);
+                }
                 Err(e) => {
                     warn!(uid = uid, error = %e, "skipping neuron");
                 }
@@ -184,6 +200,7 @@ impl Metagraph {
             axon_ip,
             axon_port,
             axon_protocol,
+            validator_permit: false,
         })
     }
 
@@ -349,6 +366,26 @@ impl Metagraph {
                 Ok((ip, port, protocol))
             }
             None => Ok((String::new(), 0, 0)),
+        }
+    }
+
+    async fn query_validator_permits(
+        &self,
+        client: &OnlineClient<PolkadotConfig>,
+    ) -> Result<Vec<bool>> {
+        let query = subxt::dynamic::storage(
+            "SubtensorModule",
+            "ValidatorPermit",
+            vec![Value::from(self.netuid as u64)],
+        );
+
+        let result = client.storage().at_latest().await?.fetch(&query).await?;
+
+        match result {
+            Some(val) => val
+                .as_type::<Vec<bool>>()
+                .context("decoding ValidatorPermit"),
+            None => Ok(Vec::new()),
         }
     }
 

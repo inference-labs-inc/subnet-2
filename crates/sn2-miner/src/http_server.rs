@@ -8,8 +8,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
 use sha2::{Digest, Sha256};
-use tracing::{error, info, warn};
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
+use sn2_chain::Metagraph;
 use sn2_types::*;
 
 use crate::handlers::MinerHandlers;
@@ -18,6 +20,8 @@ use crate::signature;
 struct AppState {
     handlers: Arc<MinerHandlers>,
     miner_hotkey: String,
+    metagraph: Arc<RwLock<Metagraph>>,
+    disable_blacklist: bool,
 }
 
 pub async fn run_http_server(
@@ -25,10 +29,14 @@ pub async fn run_http_server(
     port: u16,
     handlers: Arc<MinerHandlers>,
     miner_hotkey: &str,
+    metagraph: Arc<RwLock<Metagraph>>,
+    disable_blacklist: bool,
 ) -> Result<()> {
     let state = Arc::new(AppState {
         handlers,
         miner_hotkey: miner_hotkey.to_string(),
+        metagraph,
+        disable_blacklist,
     });
 
     let synapse_routes = Router::new()
@@ -113,6 +121,39 @@ async fn verify_signature_middleware(
         Err(e) => {
             warn!(validator = validator_hotkey, error = %e, "signature verification error");
             return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    if !state.disable_blacklist {
+        let meta = state.metagraph.read().await;
+        match meta.get_uid_by_hotkey(validator_hotkey) {
+            Some(uid) => {
+                let neuron = meta.get_neuron(uid);
+                let has_permit = neuron.map(|n| n.validator_permit).unwrap_or(false);
+                let stake = neuron.map(|n| n.stake).unwrap_or(0);
+                debug!(
+                    validator = validator_hotkey,
+                    uid = uid,
+                    stake = stake,
+                    permit = has_permit,
+                    "request from validator"
+                );
+                if !has_permit {
+                    warn!(
+                        validator = validator_hotkey,
+                        uid = uid,
+                        "no validator permit"
+                    );
+                    return Err(StatusCode::FORBIDDEN);
+                }
+            }
+            None => {
+                warn!(
+                    validator = validator_hotkey,
+                    "hotkey not registered in metagraph"
+                );
+                return Err(StatusCode::FORBIDDEN);
+            }
         }
     }
 

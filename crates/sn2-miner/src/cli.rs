@@ -47,4 +47,7 @@ pub struct Cli {
 
     #[arg(long, default_value_t = false)]
     pub no_auto_update: bool,
+
+    #[arg(long, default_value_t = false)]
+    pub disable_blacklist: bool,
 }

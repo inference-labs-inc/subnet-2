@@ -6,8 +6,11 @@ mod http_server;
 mod lightning_server;
 mod signature;
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use clap::Parser;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::cli::Cli;
@@ -62,6 +65,13 @@ async fn main() -> Result<()> {
 
     let registration = sn2_chain::Registration::new(cli.netuid);
 
+    let mut metagraph = sn2_chain::Metagraph::new(cli.netuid);
+    metagraph
+        .sync(&chain_client)
+        .await
+        .context("initial metagraph sync")?;
+    let metagraph = Arc::new(RwLock::new(metagraph));
+
     let external_ip: std::net::IpAddr = cli
         .external_ip
         .as_deref()
@@ -83,12 +93,23 @@ async fn main() -> Result<()> {
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_mgr);
     let handlers = std::sync::Arc::new(handlers);
 
+    let disable_blacklist = cli.disable_blacklist;
+
     let http_handle = {
         let handlers = handlers.clone();
         let hotkey_ss58 = wallet.hotkey_ss58().to_string();
         let axon_host = cli.axon_host.clone();
+        let meta = metagraph.clone();
         tokio::spawn(async move {
-            http_server::run_http_server(&axon_host, http_port, handlers, &hotkey_ss58).await
+            http_server::run_http_server(
+                &axon_host,
+                http_port,
+                handlers,
+                &hotkey_ss58,
+                meta,
+                disable_blacklist,
+            )
+            .await
         })
     };
 
@@ -118,6 +139,26 @@ async fn main() -> Result<()> {
         "miner running"
     );
 
+    let metagraph_sync = {
+        let meta = metagraph.clone();
+        let client = chain_client.clone();
+        let netuid = cli.netuid;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                let mut fresh = sn2_chain::Metagraph::new(netuid);
+                match fresh.sync(&client).await {
+                    Ok(()) => {
+                        *meta.write().await = fresh;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "metagraph sync failed, retaining previous state");
+                    }
+                }
+            }
+        })
+    };
+
     tokio::select! {
         r = http_handle => {
             r?.context("HTTP server")?;
@@ -127,6 +168,9 @@ async fn main() -> Result<()> {
         }
         _ = circuit_monitor => {
             warn!("circuit monitor exited unexpectedly");
+        }
+        _ = metagraph_sync => {
+            warn!("metagraph sync loop exited unexpectedly");
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");
