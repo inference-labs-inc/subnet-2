@@ -1179,8 +1179,7 @@ impl ValidatorLoop {
             }
         };
 
-        let batch_size = MAX_POW_QUEUE_SIZE;
-        let expected_len = batch_size * 4;
+        let expected_len = POW_OUTPUT_STRIDE * POW_NUM_OUTPUT_ARRAYS;
         if rescaled_outputs.len() < expected_len {
             warn!(
                 outputs_len = rescaled_outputs.len(),
@@ -1190,16 +1189,12 @@ impl ValidatorLoop {
             return;
         }
 
-        let score_start = 0;
-        let score_end = batch_size;
-        let uid_start = batch_size * 2;
-        let uid_end = batch_size * 3;
+        let score_slice =
+            &rescaled_outputs[POW_SCORES_OFFSET..POW_SCORES_OFFSET + POW_OUTPUT_STRIDE];
+        let uid_slice = &rescaled_outputs[POW_UIDS_OFFSET..POW_UIDS_OFFSET + POW_OUTPUT_STRIDE];
 
-        let score_slice = &rescaled_outputs[score_start..score_end];
-        let uid_slice = &rescaled_outputs[uid_start..uid_end];
-
-        let mut valid_uids = Vec::with_capacity(batch_size);
-        let mut valid_scores = Vec::with_capacity(batch_size);
+        let mut valid_uids = Vec::with_capacity(POW_OUTPUT_STRIDE);
+        let mut valid_scores = Vec::with_capacity(POW_OUTPUT_STRIDE);
         for (uid_f, &score) in uid_slice.iter().zip(score_slice.iter()) {
             if !uid_f.is_finite() || uid_f.round() < 0.0 || uid_f.round() > u16::MAX as f64 {
                 continue;
@@ -1215,7 +1210,7 @@ impl ValidatorLoop {
             .apply_pow_scores(&valid_uids, &valid_scores);
 
         info!(
-            batch = batch_size,
+            batch = POW_OUTPUT_STRIDE,
             "applied PoW-derived scores from verified witness"
         );
 
@@ -1540,7 +1535,10 @@ impl ValidatorLoop {
         }
 
         if now.duration_since(self.last_gc) > Duration::from_secs(120) {
-            self.run_manager.gc_stale(Duration::from_secs(600));
+            let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
+            for uid in &evicted {
+                self.relay.remove_pending(uid).await;
+            }
             self.last_gc = now;
         }
 

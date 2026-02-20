@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use sn2_types::{ProofSystem, RunSource};
-use tracing::warn;
+use tracing::{info, warn};
 
 #[allow(dead_code)]
 pub struct SliceArtifact {
@@ -27,15 +27,14 @@ pub struct ActiveRun {
     pub relay_request_id: Option<String>,
 }
 
+#[derive(Default)]
 pub struct IncrementalRunManager {
     runs: HashMap<String, ActiveRun>,
 }
 
 impl IncrementalRunManager {
     pub fn new() -> Self {
-        Self {
-            runs: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn start_run(
@@ -93,9 +92,20 @@ impl IncrementalRunManager {
         self.runs.len()
     }
 
-    pub fn gc_stale(&mut self, max_age: Duration) {
+    pub fn gc_stale(&mut self, max_age: Duration) -> Vec<String> {
         let now = Instant::now();
-        self.runs
-            .retain(|_, run| now.duration_since(run.started_at) < max_age);
+        let stale: Vec<String> = self
+            .runs
+            .iter()
+            .filter(|(_, run)| now.duration_since(run.started_at) >= max_age)
+            .map(|(uid, _)| uid.clone())
+            .collect();
+        if !stale.is_empty() {
+            info!(count = stale.len(), run_uids = ?stale, "evicting stale runs");
+        }
+        for uid in &stale {
+            self.runs.remove(uid);
+        }
+        stale
     }
 }
