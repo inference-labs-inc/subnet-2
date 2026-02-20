@@ -34,6 +34,7 @@ pub struct Metagraph {
     pub block: u64,
     uid_to_idx: HashMap<u16, usize>,
     hotkey_to_uid: HashMap<String, u16>,
+    coldkey_to_uid: HashMap<String, u16>,
 }
 
 impl Metagraph {
@@ -45,6 +46,7 @@ impl Metagraph {
             block: 0,
             uid_to_idx: HashMap::new(),
             hotkey_to_uid: HashMap::new(),
+            coldkey_to_uid: HashMap::new(),
         }
     }
 
@@ -79,10 +81,13 @@ impl Metagraph {
 
         self.uid_to_idx.clear();
         self.hotkey_to_uid.clear();
+        self.coldkey_to_uid.clear();
 
         for (idx, neuron) in neurons.iter().enumerate() {
             self.uid_to_idx.insert(neuron.uid, idx);
             self.hotkey_to_uid.insert(neuron.hotkey.clone(), neuron.uid);
+            self.coldkey_to_uid
+                .insert(neuron.coldkey.clone(), neuron.uid);
         }
 
         self.neurons = neurons;
@@ -354,10 +359,7 @@ impl Metagraph {
     }
 
     pub fn get_uid_by_coldkey(&self, coldkey: &str) -> Option<u16> {
-        self.neurons
-            .iter()
-            .find(|n| n.coldkey == coldkey)
-            .map(|n| n.uid)
+        self.coldkey_to_uid.get(coldkey).copied()
     }
 
     pub fn uids(&self) -> Vec<u16> {

@@ -2,6 +2,7 @@
 name = "sn2-chain"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 sn2-types = { workspace = true }

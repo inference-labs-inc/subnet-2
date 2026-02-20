@@ -2,6 +2,7 @@
 name = "sn2-verify"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "sn2_verify"

@@ -818,10 +818,7 @@ impl ValidatorLoop {
                         .get("default_input")
                         .cloned()
                         .unwrap_or(serde_json::json!({}));
-                    match self
-                        .pipeline
-                        .prepare_benchmark_request(uid, circuit, inputs)
-                    {
+                    match self.pipeline.prepare_benchmark_request(circuit, inputs) {
                         Some(req) => {
                             task_inputs = Some(req.inputs.clone());
                             body = serde_json::json!({
@@ -1203,6 +1200,9 @@ impl ValidatorLoop {
         let mut valid_scores = Vec::with_capacity(batch_size);
         for (uid_f, &score) in uid_slice.iter().zip(score_slice.iter()) {
             if !uid_f.is_finite() || uid_f.round() < 0.0 || uid_f.round() > u16::MAX as f64 {
+                continue;
+            }
+            if !score.is_finite() {
                 continue;
             }
             valid_uids.push(uid_f.round() as u16);

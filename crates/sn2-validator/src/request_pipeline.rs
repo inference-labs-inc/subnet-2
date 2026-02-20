@@ -41,7 +41,6 @@ impl RequestPipeline {
 
     pub fn prepare_benchmark_request(
         &mut self,
-        _uid: u16,
         circuit: &Circuit,
         inputs: serde_json::Value,
     ) -> Option<Request> {
