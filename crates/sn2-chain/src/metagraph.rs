@@ -353,6 +353,13 @@ impl Metagraph {
         self.hotkey_to_uid.get(hotkey).copied()
     }
 
+    pub fn get_uid_by_coldkey(&self, coldkey: &str) -> Option<u16> {
+        self.neurons
+            .iter()
+            .find(|n| n.coldkey == coldkey)
+            .map(|n| n.uid)
+    }
+
     pub fn uids(&self) -> Vec<u16> {
         self.neurons.iter().map(|n| n.uid).collect()
     }
@@ -385,7 +392,7 @@ impl Metagraph {
             Some(val) => {
                 let account_id: subxt::utils::AccountId32 = val.as_type()?;
                 let ss58 = sp_core::crypto::AccountId32::new(account_id.0).to_ss58check();
-                Ok(self.get_uid_by_hotkey(&ss58))
+                Ok(self.get_uid_by_coldkey(&ss58))
             }
             None => Ok(None),
         }

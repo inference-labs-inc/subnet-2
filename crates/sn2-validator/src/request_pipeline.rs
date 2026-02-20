@@ -82,6 +82,9 @@ impl RequestPipeline {
 
     pub fn release_hash(&mut self, hash: &str) {
         self.hash_guard.remove(hash);
+        if let Some(pos) = self.hash_order.iter().position(|h| h == hash) {
+            self.hash_order.remove(pos);
+        }
     }
 
     pub fn clear_guard(&mut self) {

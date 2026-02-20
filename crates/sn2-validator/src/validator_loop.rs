@@ -159,7 +159,7 @@ pub struct ValidatorLoop {
     last_perf_save: Instant,
     last_health_log: Instant,
     last_replenish: Instant,
-    task_meta: HashMap<tokio::task::Id, (u16, Option<String>)>,
+    task_meta: HashMap<tokio::task::Id, (u16, Option<String>, bool)>,
     run_manager: IncrementalRunManager,
     proof_uploader: Arc<ProofUploader>,
     benchmark_in_flight: usize,
@@ -278,10 +278,13 @@ impl ValidatorLoop {
                             self.handle_task_result(task_result).await;
                         }
                         Err(e) => {
-                            if let Some((uid, guard_hash)) = self.task_meta.remove(&e.id()) {
-                                warn!(uid = uid, "recovering leaked state from panicked task");
+                            if let Some((uid, guard_hash, is_benchmark)) = self.task_meta.remove(&e.id()) {
+                                warn!(uid = uid, is_benchmark = is_benchmark, "recovering leaked state from panicked task");
                                 if let Some(count) = self.miner_active_count.get_mut(&uid) {
                                     *count = count.saturating_sub(1);
+                                }
+                                if is_benchmark {
+                                    self.benchmark_in_flight = self.benchmark_in_flight.saturating_sub(1);
                                 }
                                 if let Some(hash) = &guard_hash {
                                     if !hash.is_empty() {
@@ -964,11 +967,12 @@ impl ValidatorLoop {
                         retry_payload: task_retry_payload,
                     }
                 });
+                let is_benchmark = request_type == RequestType::Benchmark;
                 self.task_meta
-                    .insert(abort_handle.id(), (uid, task_guard_hash));
+                    .insert(abort_handle.id(), (uid, task_guard_hash, is_benchmark));
 
                 *self.miner_active_count.entry(uid).or_insert(0) += 1;
-                if request_type == RequestType::Benchmark {
+                if is_benchmark {
                     self.benchmark_in_flight += 1;
                 }
                 dispatched += 1;
