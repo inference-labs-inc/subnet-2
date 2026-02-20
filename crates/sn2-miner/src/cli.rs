@@ -51,7 +51,7 @@ pub struct Cli {
     #[arg(
         long,
         default_value_t = false,
-        help = "Disable validator permit checks"
+        help = "[TESTING ONLY] Disable validator permit checks — bypasses all on-chain permit enforcement"
     )]
     pub disable_blacklist: bool,
 
