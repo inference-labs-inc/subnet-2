@@ -4309,7 +4309,7 @@ dependencies = [
 [[package]]
 name = "jstprove_circuits"
 version = "0.1.0"
-source = "git+ssh://git@github.com/inference-labs-inc/JSTprove.git?rev=cddc906#cddc906954b7e09de60d5239e3d96a94966998eb"
+source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=eed68685f722b694b3081f5cafcf08566d2b49ad#eed68685f722b694b3081f5cafcf08566d2b49ad"
 dependencies = [
  "ark-std",
  "chrono",
@@ -7651,7 +7651,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
- "jstprove_circuits 0.1.0 (git+ssh://git@github.com/inference-labs-inc/JSTprove.git?rev=cddc906)",
+ "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=eed68685f722b694b3081f5cafcf08566d2b49ad)",
  "reqwest 0.12.28",
  "rmp-serde",
  "serde",
