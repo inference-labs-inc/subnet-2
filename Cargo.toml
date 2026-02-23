@@ -57,5 +57,5 @@ futures-util = "0.3"
 shellexpand = "3.1.2"
 openssl = { version = "0.10", features = ["vendored"] }
 dsperse = { git = "https://github.com/inference-labs-inc/dsperse", branch = "migrate/runtime-to-rust" }
-jstprove_circuits = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "6f62e360477c424cfdac7a4a217eb29bdb65e308" }
+jstprove_circuits = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "e1e9fe05cf5714b1da67bd89c8749d4ed83c2e1b" }
 ndarray = { version = "0.16", features = ["serde"] }
