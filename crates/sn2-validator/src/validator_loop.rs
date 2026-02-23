@@ -602,7 +602,6 @@ impl ValidatorLoop {
                 let tile_idx: Option<u32>;
                 let task_circuit: Option<Circuit>;
                 let task_inputs: Option<serde_json::Value>;
-                let _task_inputs_path: Option<String>;
                 let task_proof_system: Option<ProofSystem>;
                 let retry_payload: RetryPayload;
 
@@ -632,7 +631,6 @@ impl ValidatorLoop {
                     guard_hash = Some(String::new());
                     task_circuit = Some(pow_circ.clone());
                     task_inputs = Some(inputs.clone());
-                    _task_inputs_path = None;
                     task_proof_system = Some(pow_circ.proof_system);
                     retry_payload = RetryPayload::None;
                 } else if let Some(rwr) = self.rwr_queue.pop_front() {
@@ -673,7 +671,6 @@ impl ValidatorLoop {
                     synapse_name = QueryZkProof::NAME;
                     task_circuit = Some(circuit.clone());
                     task_inputs = Some(rwr.inputs.clone());
-                    _task_inputs_path = None;
                     task_proof_system = Some(circuit.proof_system);
                     body = serde_json::json!({
                         "model_id": circuit.id,
@@ -697,7 +694,6 @@ impl ValidatorLoop {
                     tile_idx = dslice.tile_idx;
                     task_circuit = Some(dslice.circuit.clone());
                     task_inputs = Some(dslice.inputs.clone());
-                    _task_inputs_path = None;
                     task_proof_system = Some(dslice.proof_system);
                     synapse_name = DSliceProofGenerationDataModel::NAME;
                     let dslice_model = self.pipeline.prepare_dslice_request(
@@ -731,7 +727,6 @@ impl ValidatorLoop {
                     tile_idx = dslice.tile_idx;
                     task_circuit = Some(dslice.circuit.clone());
                     task_inputs = Some(dslice.inputs.clone());
-                    _task_inputs_path = None;
                     task_proof_system = Some(dslice.proof_system);
                     synapse_name = DSliceProofGenerationDataModel::NAME;
                     let dslice_model = self.pipeline.prepare_dslice_request(
@@ -790,7 +785,6 @@ impl ValidatorLoop {
                     match self.pipeline.prepare_benchmark_request(circuit, inputs) {
                         Some(req) => {
                             task_inputs = Some(req.inputs.clone());
-                            _task_inputs_path = None;
                             body = serde_json::json!({
                                 "model_id": req.circuit.id,
                                 "query_input": req.inputs,
