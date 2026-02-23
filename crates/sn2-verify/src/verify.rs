@@ -1,15 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
-use tempfile::TempDir;
 use tracing::warn;
 
-use crate::expander;
-use crate::field;
+use jstprove_circuits::onnx::verify_and_extract_bn254;
+
 use crate::protocol::{StoreResponse, VerifyAndStoreRequest, VerifyRequest, VerifyResponse};
 use crate::store::{StoredTile, TileStore};
-use crate::witness;
 
 pub struct VerifyResult {
     pub rescaled_outputs: Vec<f64>,
@@ -24,77 +21,40 @@ pub async fn verify_inner(
     proof_hex: &str,
     num_inputs: usize,
     expected_inputs: &Option<Vec<f64>>,
-    pcs_type: &str,
+    _pcs_type: &str,
 ) -> Result<VerifyResult> {
+    let circuit_path = circuit_path.to_string();
     let witness_hex = witness_hex.to_string();
-    let circuit_path = PathBuf::from(circuit_path);
     let proof_hex = proof_hex.to_string();
     let expected_inputs = expected_inputs.clone();
-    let pcs_type = pcs_type.to_string();
 
-    let (_witness_data, extracted_io, tmp_dir) =
-        tokio::task::spawn_blocking(move || -> Result<_> {
-            let witness_bytes = hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
-            let proof_bytes = hex::decode(proof_hex.trim()).context("hex-decoding proof")?;
+    tokio::task::spawn_blocking(move || -> Result<VerifyResult> {
+        let circuit_bytes =
+            std::fs::read(&circuit_path).with_context(|| format!("reading {circuit_path}"))?;
+        let witness_bytes = hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
+        let proof_bytes = hex::decode(proof_hex.trim()).context("hex-decoding proof")?;
 
-            let witness_raw =
-                witness::decompress_if_needed(&witness_bytes).context("decompressing witness")?;
+        let result = verify_and_extract_bn254(
+            &circuit_bytes,
+            &witness_bytes,
+            &proof_bytes,
+            num_inputs,
+            expected_inputs.as_deref(),
+        )
+        .map_err(|e| anyhow::anyhow!("verification: {e}"))?;
 
-            let tmp_dir = TempDir::new_in(std::env::temp_dir()).context("creating temp dir")?;
-            let witness_path = tmp_dir.path().join("witness.bin");
-            let proof_path = tmp_dir.path().join("proof.bin");
-            std::fs::write(&witness_path, &witness_raw).context("writing witness")?;
-            std::fs::write(&proof_path, &proof_bytes).context("writing proof")?;
+        if !result.valid {
+            anyhow::bail!("proof verification failed");
+        }
 
-            let wd = witness::load_witness_from_bytes(&witness_bytes)
-                .context("parsing witness binary")?;
-            let extracted =
-                witness::extract_io(&wd, num_inputs).context("extracting IO from witness")?;
-
-            if let Some(ref expected) = expected_inputs {
-                if expected.len() != extracted.inputs.len() {
-                    anyhow::bail!(
-                        "input length mismatch: expected {}, witness has {}",
-                        expected.len(),
-                        extracted.inputs.len()
-                    );
-                }
-                let scaled = field::scale_to_field(
-                    expected,
-                    extracted.scale_base,
-                    extracted.scale_exponent,
-                    &extracted.modulus,
-                );
-                if !field::compare_field_values(&scaled, &extracted.inputs, &extracted.modulus, 1) {
-                    anyhow::bail!("input verification failed: witness inputs don't match expected");
-                }
-            }
-
-            Ok((wd, extracted, tmp_dir))
+        Ok(VerifyResult {
+            rescaled_outputs: result.outputs,
+            scale_base: result.scale_base,
+            scale_exponent: result.scale_exponent,
         })
-        .await
-        .context("blocking task panicked")?
-        .context("verification preprocessing")?;
-
-    let witness_path = tmp_dir.path().join("witness.bin");
-    let proof_path = tmp_dir.path().join("proof.bin");
-
-    let success =
-        expander::run_expander_verify(&circuit_path, &witness_path, &proof_path, &pcs_type)
-            .await
-            .context("running expander-exec")?;
-
-    drop(tmp_dir);
-
-    if !success {
-        anyhow::bail!("expander-exec verification failed");
-    }
-
-    Ok(VerifyResult {
-        rescaled_outputs: extracted_io.rescaled_outputs,
-        scale_base: extracted_io.scale_base,
-        scale_exponent: extracted_io.scale_exponent,
     })
+    .await
+    .context("blocking task panicked")?
 }
 
 pub async fn handle_request(req: VerifyRequest) -> VerifyResponse {
