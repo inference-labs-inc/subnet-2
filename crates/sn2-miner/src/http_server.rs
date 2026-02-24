@@ -165,66 +165,47 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn handle_query_zk_proof(
-    State(state): State<Arc<AppState>>,
-    Json(data): Json<QueryZkProof>,
-) -> impl IntoResponse {
-    match state.handlers.handle_query_zk_proof(data).await {
-        Ok(result) => (StatusCode::OK, Json(result)),
-        Err(e) => {
-            error!(error = %e, "QueryZkProof handler");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
+macro_rules! synapse_handler {
+    ($name:ident, $ty:ty, $method:ident, $label:literal) => {
+        async fn $name(
+            State(state): State<Arc<AppState>>,
+            Json(data): Json<$ty>,
+        ) -> impl IntoResponse {
+            match state.handlers.$method(data).await {
+                Ok(result) => (StatusCode::OK, Json(result)),
+                Err(e) => {
+                    error!(error = %e, $label);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "internal server error"})),
+                    )
+                }
+            }
         }
-    }
+    };
 }
 
-async fn handle_proof_of_weights(
-    State(state): State<Arc<AppState>>,
-    Json(data): Json<ProofOfWeightsDataModel>,
-) -> impl IntoResponse {
-    match state.handlers.handle_proof_of_weights(data).await {
-        Ok(result) => (StatusCode::OK, Json(result)),
-        Err(e) => {
-            error!(error = %e, "ProofOfWeights handler");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        }
-    }
-}
-
-async fn handle_competition(
-    State(state): State<Arc<AppState>>,
-    Json(data): Json<Competition>,
-) -> impl IntoResponse {
-    match state.handlers.handle_competition(data).await {
-        Ok(result) => (StatusCode::OK, Json(result)),
-        Err(e) => {
-            error!(error = %e, "Competition handler");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        }
-    }
-}
-
-async fn handle_dslice(
-    State(state): State<Arc<AppState>>,
-    Json(data): Json<DSliceProofGenerationDataModel>,
-) -> impl IntoResponse {
-    match state.handlers.handle_dslice(data).await {
-        Ok(result) => (StatusCode::OK, Json(result)),
-        Err(e) => {
-            error!(error = %e, "DSlice handler");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        }
-    }
-}
+synapse_handler!(
+    handle_query_zk_proof,
+    QueryZkProof,
+    handle_query_zk_proof,
+    "QueryZkProof handler"
+);
+synapse_handler!(
+    handle_proof_of_weights,
+    ProofOfWeightsDataModel,
+    handle_proof_of_weights,
+    "ProofOfWeights handler"
+);
+synapse_handler!(
+    handle_competition,
+    Competition,
+    handle_competition,
+    "Competition handler"
+);
+synapse_handler!(
+    handle_dslice,
+    DSliceProofGenerationDataModel,
+    handle_dslice,
+    "DSlice handler"
+);

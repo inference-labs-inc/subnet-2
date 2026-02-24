@@ -1,3 +1,5 @@
+#![feature(ip)]
+
 mod circuit_store;
 mod cli;
 mod config;
@@ -5,6 +7,7 @@ mod incremental_runner;
 mod metrics_server;
 mod miner_client;
 mod performance;
+mod pow_manager;
 mod proof_uploader;
 mod relay;
 mod request_pipeline;

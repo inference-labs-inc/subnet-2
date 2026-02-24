@@ -19,17 +19,7 @@ pub async fn query_miner_http(
     headers: &HashMap<String, String>,
     timeout_secs: f64,
 ) -> Result<MinerHttpResponse> {
-    let host = if ip.contains(':') {
-        format!("[{ip}]")
-    } else {
-        ip.to_string()
-    };
-    let url = format!(
-        "http://{}:{}/{}",
-        host,
-        port,
-        url_path.trim_start_matches('/')
-    );
+    let url = sn2_types::format_http_url(ip, port, url_path);
 
     let mut req_builder = client
         .post(&url)

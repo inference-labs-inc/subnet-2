@@ -298,3 +298,93 @@ impl PerformanceTracker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_tracker() -> PerformanceTracker {
+        PerformanceTracker {
+            windows: HashMap::new(),
+            adaptive_caps: HashMap::new(),
+            at_cap_results: HashMap::new(),
+            window_size: PERFORMANCE_WINDOW_SIZE,
+            persistence_path: None,
+        }
+    }
+
+    #[test]
+    fn adaptive_timeout_returns_default_with_few_samples() {
+        let tracker = test_tracker();
+        assert_eq!(tracker.adaptive_timeout(), CIRCUIT_TIMEOUT_SECONDS as f64);
+    }
+
+    #[test]
+    fn record_populates_window() {
+        let mut tracker = test_tracker();
+        tracker.record(1, true, 5.0, false);
+        tracker.record(1, true, 6.0, false);
+        assert_eq!(tracker.windows.get(&1).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn record_reschedule_adds_penalty() {
+        let mut tracker = test_tracker();
+        tracker.record_reschedule(1);
+        let window = tracker.windows.get(&1).unwrap();
+        assert_eq!(window.len(), 1);
+        let (success, time) = window[0];
+        assert!(!success);
+        assert_eq!(time, PERFORMANCE_RESCHEDULE_PENALTY);
+    }
+
+    #[test]
+    fn reset_uid_clears_all_state() {
+        let mut tracker = test_tracker();
+        tracker.record(1, true, 5.0, true);
+        tracker.adaptive_caps.insert(1, 4);
+        tracker.reset_uid(1);
+        assert!(!tracker.windows.contains_key(&1));
+        assert!(!tracker.adaptive_caps.contains_key(&1));
+        assert!(!tracker.at_cap_results.contains_key(&1));
+    }
+
+    #[test]
+    fn adaptive_timeout_calculates_percentile_and_clamps() {
+        let mut tracker = test_tracker();
+        for i in 0..ADAPTIVE_TIMEOUT_MIN_SAMPLES {
+            tracker.record(1, true, (i + 1) as f64, false);
+        }
+        let timeout = tracker.adaptive_timeout();
+        let mut sorted: Vec<f64> = (1..=ADAPTIVE_TIMEOUT_MIN_SAMPLES)
+            .map(|i| i as f64)
+            .collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let idx =
+            ((sorted.len() as f64 * ADAPTIVE_TIMEOUT_PERCENTILE) as usize).min(sorted.len() - 1);
+        let expected =
+            (sorted[idx] * ADAPTIVE_TIMEOUT_MULTIPLIER).min(CIRCUIT_TIMEOUT_SECONDS as f64);
+        assert!(
+            (timeout - expected).abs() < 1e-9,
+            "timeout={timeout}, expected={expected}"
+        );
+
+        let mut tracker2 = test_tracker();
+        for _ in 0..ADAPTIVE_TIMEOUT_MIN_SAMPLES {
+            tracker2.record(1, true, 500.0, false);
+        }
+        assert_eq!(
+            tracker2.adaptive_timeout(),
+            CIRCUIT_TIMEOUT_SECONDS as f64,
+            "should clamp to CIRCUIT_TIMEOUT_SECONDS"
+        );
+    }
+
+    #[test]
+    fn miner_capacities_default_to_one() {
+        let mut tracker = test_tracker();
+        tracker.record(1, true, 5.0, false);
+        let caps = tracker.miner_capacities();
+        assert_eq!(caps.get(&1).copied().unwrap_or(0), 1);
+    }
+}

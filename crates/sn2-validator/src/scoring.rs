@@ -170,3 +170,151 @@ fn normalized_tangent_curve(x: f64) -> f64 {
     let scaled = shifted * std::f64::consts::PI * 0.9;
     (scaled.tan() / (std::f64::consts::PI * 0.45).tan() + 1.0) / 2.0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_manager() -> ScoreManager {
+        ScoreManager {
+            scores: HashMap::new(),
+            persistence_path: PathBuf::from("/dev/null"),
+        }
+    }
+
+    #[test]
+    fn default_score_is_zero() {
+        let mgr = test_manager();
+        assert_eq!(mgr.get_score(42), 0.0);
+    }
+
+    #[test]
+    fn update_score_verified_increases() {
+        let mut mgr = test_manager();
+        mgr.update_score(1, true, 1.0, 2.0, 0.5, 100);
+        assert!(mgr.get_score(1) > 0.0);
+    }
+
+    #[test]
+    fn update_score_unverified_decreases() {
+        let mut mgr = test_manager();
+        mgr.scores.insert(1, 0.005);
+        mgr.update_score(1, false, 1.0, 2.0, 0.5, 100);
+        assert!(mgr.get_score(1) < 0.005);
+    }
+
+    #[test]
+    fn score_never_negative() {
+        let mut mgr = test_manager();
+        mgr.scores.insert(1, 0.001);
+        for _ in 0..100 {
+            mgr.update_score(1, false, 1.0, 2.0, 0.5, 100);
+        }
+        assert!(mgr.get_score(1) >= 0.0);
+    }
+
+    #[test]
+    fn sync_uids_removes_stale() {
+        let mut mgr = test_manager();
+        mgr.scores.insert(1, 0.5);
+        mgr.scores.insert(2, 0.3);
+        mgr.scores.insert(3, 0.1);
+        mgr.sync_uids(&[1, 3]);
+        assert!(mgr.scores.contains_key(&1));
+        assert!(!mgr.scores.contains_key(&2));
+        assert!(mgr.scores.contains_key(&3));
+    }
+
+    #[test]
+    fn apply_pow_scores_updates_existing() {
+        let mut mgr = test_manager();
+        mgr.scores.insert(5, 0.0);
+        mgr.scores.insert(10, 0.0);
+        mgr.apply_pow_scores(&[5, 10, 42], &[0.8, 0.6, 0.9]);
+        assert_eq!(mgr.get_score(5), 0.8);
+        assert_eq!(mgr.get_score(10), 0.6);
+        assert!(!mgr.scores.contains_key(&42));
+    }
+
+    #[test]
+    fn compute_throughput_weights_normalizes_without_owner() {
+        let mgr = test_manager();
+        let mut snap = HashMap::new();
+        snap.insert(1u16, (10.0, 2, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(2u16, (5.0, 2, PERFORMANCE_MIN_SAMPLES));
+        let (uids, weights) = mgr.compute_throughput_weights(&[1, 2], &snap, None);
+        assert_eq!(uids, vec![1, 2]);
+        let total: u32 = weights.iter().map(|&w| w as u32).sum();
+        assert!(total > 0);
+        assert!(weights[0] > weights[1]);
+    }
+
+    #[test]
+    fn compute_throughput_weights_owner_boost() {
+        let mgr = test_manager();
+        let mut snap = HashMap::new();
+        snap.insert(1u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(2u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(3u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        let (_, weights_no_owner) = mgr.compute_throughput_weights(&[1, 2, 3], &snap, None);
+        let (_, weights_with_owner) = mgr.compute_throughput_weights(&[1, 2, 3], &snap, Some(1));
+        assert!(weights_with_owner[0] > weights_no_owner[0]);
+        let owner_ratio = weights_with_owner[0] as f64 / u16::MAX as f64;
+        assert!((owner_ratio - 0.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn compute_throughput_weights_below_min_samples_is_zero() {
+        let mgr = test_manager();
+        let mut snap = HashMap::new();
+        snap.insert(1u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES - 1));
+        snap.insert(2u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        let (_, weights) = mgr.compute_throughput_weights(&[1, 2], &snap, None);
+        assert_eq!(weights[0], 0);
+        assert!(weights[1] > 0);
+    }
+
+    #[test]
+    fn save_and_load_round_trip() {
+        let dir = std::env::temp_dir().join(format!(
+            "sn2_score_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = dir.join("scores.json");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut mgr = ScoreManager {
+            scores: HashMap::new(),
+            persistence_path: path.clone(),
+        };
+        mgr.scores.insert(1, 0.5);
+        mgr.scores.insert(2, 0.3);
+        mgr.save().unwrap();
+
+        let mut loaded = ScoreManager {
+            scores: HashMap::new(),
+            persistence_path: path.clone(),
+        };
+        loaded.load().unwrap();
+        assert_eq!(loaded.scores.len(), 2);
+        assert_eq!(loaded.get_score(1), 0.5);
+        assert_eq!(loaded.get_score(2), 0.3);
+
+        std::fs::remove_dir_all(&dir).expect("failed to remove temp dir after round-trip test");
+    }
+
+    #[test]
+    fn zero_non_queryable() {
+        let mut mgr = test_manager();
+        mgr.scores.insert(1, 0.5);
+        mgr.scores.insert(2, 0.3);
+        let queryable: HashSet<u16> = [1].into_iter().collect();
+        mgr.zero_non_queryable(&queryable);
+        assert_eq!(mgr.get_score(1), 0.5);
+        assert_eq!(mgr.get_score(2), 0.0);
+    }
+}

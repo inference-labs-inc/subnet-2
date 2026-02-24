@@ -99,7 +99,21 @@ pub async fn handle_store_request(
     {
         Ok(result) => {
             let [_, channels, height, width] = req.output_shape;
-            let expected_len = channels * height * width;
+            let expected_len = match channels
+                .checked_mul(height)
+                .and_then(|v| v.checked_mul(width))
+            {
+                Some(len) => len,
+                None => {
+                    return StoreResponse::error(
+                        req.request_id,
+                        format!(
+                            "output shape dimensions overflow: {}x{}x{}",
+                            channels, height, width
+                        ),
+                    );
+                }
+            };
             if result.rescaled_outputs.len() != expected_len {
                 return StoreResponse::error(
                     req.request_id,
@@ -111,15 +125,18 @@ pub async fn handle_store_request(
                     ),
                 );
             }
-            store.insert(
-                req.store_key,
+            let store_key = req.store_key;
+            if let Err(e) = store.insert(
+                store_key,
                 StoredTile {
                     data: result.rescaled_outputs,
                     channels,
                     height,
                     width,
                 },
-            );
+            ) {
+                return StoreResponse::error(req.request_id, format!("tile store insert: {e:#}"));
+            }
             StoreResponse::ok(req.request_id)
         }
         Err(e) => {

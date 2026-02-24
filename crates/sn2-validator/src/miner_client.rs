@@ -64,7 +64,7 @@ impl MinerQueryClient {
 
         let body_str = serde_json::to_string(body)?;
         let body_hash = hex::encode(Sha256::digest(body_str.as_bytes()));
-        let message = format!("{}:{}:{}", nonce, self.wallet.hotkey_ss58(), body_hash);
+        let message = sn2_types::signing_message(&nonce, self.wallet.hotkey_ss58(), &body_hash);
         let sig_bytes = self.wallet.sign_hotkey(message.as_bytes())?;
         let sig_hex = format!("0x{}", hex::encode(&sig_bytes));
 
@@ -121,12 +121,7 @@ impl MinerQueryClient {
         headers: &HashMap<String, String>,
         timeout_secs: f64,
     ) -> Result<(serde_json::Value, f64)> {
-        let host = if ip.contains(':') {
-            format!("[{ip}]")
-        } else {
-            ip.to_string()
-        };
-        let url = format!("http://{}:{}/{}", host, port, synapse_type);
+        let url = sn2_types::format_http_url(ip, port, synapse_type);
 
         let mut req = self
             .http

@@ -16,6 +16,7 @@ use crate::config::ValidatorConfig;
 use crate::incremental_runner::{IncrementalRunManager, SliceArtifact};
 use crate::miner_client::MinerQueryClient;
 use crate::performance::PerformanceTracker;
+use crate::pow_manager::{PowItem, PowManager};
 use crate::proof_uploader::ProofUploader;
 use crate::relay::{DsperseSubmission, RelayManager, RwrSubmission};
 use crate::request_pipeline::RequestPipeline;
@@ -28,85 +29,6 @@ enum WeightTaskResult {
     CommitFailed(String),
     Revealed,
     RevealFailed(String),
-}
-
-struct PowItem {
-    miner_uid: u16,
-    validator_uid: u16,
-    verified: bool,
-    response_time: f64,
-    proof_size: u64,
-    previous_score: f64,
-    maximum_score: f64,
-    maximum_response_time: f64,
-    minimum_response_time: f64,
-    block_number: u64,
-}
-
-struct PowManager {
-    queue: VecDeque<PowItem>,
-}
-
-impl PowManager {
-    fn new() -> Self {
-        Self {
-            queue: VecDeque::new(),
-        }
-    }
-
-    fn push(&mut self, item: PowItem) {
-        self.queue.push_back(item);
-    }
-
-    fn should_batch(&self) -> bool {
-        self.queue.len() >= MAX_POW_QUEUE_SIZE
-    }
-
-    fn drain_batch(&mut self) -> Vec<PowItem> {
-        self.queue
-            .drain(..MAX_POW_QUEUE_SIZE.min(self.queue.len()))
-            .collect()
-    }
-
-    fn prepare_inputs(items: &[PowItem]) -> serde_json::Value {
-        let n = items.len();
-        let mut maximum_score = Vec::with_capacity(n);
-        let mut previous_score = Vec::with_capacity(n);
-        let mut verified = Vec::with_capacity(n);
-        let mut proof_size = Vec::with_capacity(n);
-        let mut response_time = Vec::with_capacity(n);
-        let mut maximum_response_time = Vec::with_capacity(n);
-        let mut minimum_response_time = Vec::with_capacity(n);
-        let mut block_number = Vec::with_capacity(n);
-        let mut validator_uid = Vec::with_capacity(n);
-        let mut miner_uid = Vec::with_capacity(n);
-
-        for item in items {
-            maximum_score.push(item.maximum_score);
-            previous_score.push(item.previous_score);
-            verified.push(if item.verified { 1u8 } else { 0u8 });
-            proof_size.push(item.proof_size);
-            response_time.push(item.response_time);
-            maximum_response_time.push(item.maximum_response_time);
-            minimum_response_time.push(item.minimum_response_time);
-            block_number.push(item.block_number);
-            validator_uid.push(item.validator_uid);
-            miner_uid.push(item.miner_uid);
-        }
-
-        serde_json::json!({
-            "maximum_score": maximum_score,
-            "previous_score": previous_score,
-            "verified": verified,
-            "proof_size": proof_size,
-            "response_time": response_time,
-            "maximum_response_time": maximum_response_time,
-            "minimum_response_time": minimum_response_time,
-            "block_number": block_number,
-            "validator_uid": validator_uid,
-            "miner_uid": miner_uid,
-        })
-    }
 }
 
 enum RetryPayload {
@@ -620,6 +542,9 @@ impl ValidatorLoop {
                     task_id = None;
                     tile_idx = None;
                     synapse_name = ProofOfWeightsDataModel::NAME;
+                    task_circuit = Some(pow_circ.clone());
+                    task_inputs = Some(inputs.clone());
+                    task_proof_system = Some(pow_circ.proof_system);
                     body = serde_json::json!({
                         "subnet_uid": self.config.netuid,
                         "verification_key_hash": pow_circ.id,
@@ -629,9 +554,6 @@ impl ValidatorLoop {
                         "public_signals": "",
                     });
                     guard_hash = Some(String::new());
-                    task_circuit = Some(pow_circ.clone());
-                    task_inputs = Some(inputs.clone());
-                    task_proof_system = Some(pow_circ.proof_system);
                     retry_payload = RetryPayload::None;
                 } else if let Some(rwr) = self.rwr_queue.pop_front() {
                     retry_payload = RetryPayload::Rwr(rwr.clone());
@@ -682,7 +604,12 @@ impl ValidatorLoop {
                         break;
                     }
                 } else if api_eligible.contains(&uid) && !self.api_dslice_queue.is_empty() {
-                    let dslice = self.api_dslice_queue.pop_front().unwrap();
+                    let Some(dslice) = self.api_dslice_queue.pop_front() else {
+                        warn!(
+                            "api_dslice_queue was empty despite earlier guard; skipping dispatch"
+                        );
+                        continue;
+                    };
                     retry_payload = RetryPayload::DSlice(Box::new(dslice.clone()));
                     request_type = RequestType::DSlice;
                     external_request_hash = None;
@@ -829,8 +756,6 @@ impl ValidatorLoop {
                             ip: ip.clone(),
                             port,
                             protocol,
-                            placeholder1: 0,
-                            placeholder2: 0,
                         };
                         let data: HashMap<String, serde_json::Value> =
                             serde_json::from_value(body).unwrap_or_default();
@@ -1095,7 +1020,7 @@ impl ValidatorLoop {
                     let reason = match verify_result {
                         Ok(false) => "verification failed".to_string(),
                         Err(e) => e.to_string(),
-                        _ => unreachable!(),
+                        Ok(true) => "unexpected verification state".to_string(),
                     };
                     Some(reason)
                 }
@@ -1605,8 +1530,6 @@ impl ValidatorLoop {
                 ip: n.axon_ip.clone(),
                 port: n.axon_port,
                 protocol: n.axon_protocol,
-                placeholder1: 0,
-                placeholder2: 0,
             })
             .collect();
 
@@ -1663,7 +1586,9 @@ impl ValidatorLoop {
             return Ok(());
         }
 
-        let reveal = self.pending_reveal.take().unwrap();
+        let Some(reveal) = self.pending_reveal.take() else {
+            return Ok(());
+        };
         let setter = self.weights_setter.clone();
         let client = self.config.chain_client.clone();
         let wallet = self.config.wallet.clone();
@@ -1800,27 +1725,97 @@ fn is_valid_ip(ip_str: &str) -> bool {
         Ok(a) => a,
         Err(_) => return false,
     };
-    let octets = addr.octets();
-    if octets[0] == 0 || octets[0] == 127 {
-        return false;
+    addr.is_global() && !addr.is_multicast()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_valid_ip_public() {
+        assert!(is_valid_ip("8.8.8.8"));
     }
-    if octets[0] == 10 {
-        return false;
+
+    #[test]
+    fn is_valid_ip_rejects_loopback() {
+        assert!(!is_valid_ip("127.0.0.1"));
     }
-    if octets[0] == 172 && (16..=31).contains(&octets[1]) {
-        return false;
+
+    #[test]
+    fn is_valid_ip_rejects_rfc1918_10() {
+        assert!(!is_valid_ip("10.0.0.1"));
     }
-    if octets[0] == 192 && octets[1] == 168 {
-        return false;
+
+    #[test]
+    fn is_valid_ip_rejects_rfc1918_172() {
+        assert!(!is_valid_ip("172.16.0.1"));
     }
-    if octets[0] == 169 && octets[1] == 254 {
-        return false;
+
+    #[test]
+    fn is_valid_ip_rejects_rfc1918_192() {
+        assert!(!is_valid_ip("192.168.1.1"));
     }
-    if addr == Ipv4Addr::BROADCAST {
-        return false;
+
+    #[test]
+    fn is_valid_ip_rejects_link_local() {
+        assert!(!is_valid_ip("169.254.0.1"));
     }
-    if octets[0] >= 224 && octets[0] <= 239 {
-        return false;
+
+    #[test]
+    fn is_valid_ip_rejects_multicast() {
+        assert!(!is_valid_ip("224.0.0.1"));
     }
-    true
+
+    #[test]
+    fn is_valid_ip_rejects_broadcast() {
+        assert!(!is_valid_ip("255.255.255.255"));
+    }
+
+    #[test]
+    fn is_valid_ip_rejects_zero_network() {
+        assert!(!is_valid_ip("0.0.0.0"));
+    }
+
+    #[test]
+    fn is_valid_ip_rejects_non_ipv4() {
+        assert!(!is_valid_ip("not_an_ip"));
+    }
+
+    #[test]
+    fn is_valid_ip_rejects_rfc1918_172_upper_bound() {
+        assert!(!is_valid_ip("172.31.255.255"));
+    }
+
+    #[test]
+    fn is_valid_ip_accepts_first_public_after_172_range() {
+        assert!(is_valid_ip("172.32.0.1"));
+    }
+
+    #[test]
+    fn is_valid_ip_accepts_last_public_before_multicast() {
+        assert!(is_valid_ip("223.255.255.255"));
+    }
+
+    #[test]
+    fn is_valid_ip_rejects_class_e_240() {
+        assert!(!is_valid_ip("240.0.0.1"));
+    }
+
+    #[test]
+    fn is_valid_ip_rejects_class_e_254() {
+        assert!(!is_valid_ip("254.0.0.1"));
+    }
+
+    #[test]
+    fn is_valid_ip_rejects_cgnat() {
+        assert!(!is_valid_ip("100.64.0.1"));
+        assert!(!is_valid_ip("100.127.255.255"));
+    }
+
+    #[test]
+    fn is_valid_ip_accepts_outside_cgnat() {
+        assert!(is_valid_ip("100.63.255.255"));
+        assert!(is_valid_ip("100.128.0.1"));
+    }
 }

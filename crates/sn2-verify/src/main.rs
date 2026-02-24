@@ -123,7 +123,7 @@ async fn handle_connection(
             ServiceRequest::Store(sr) => {
                 let key = sr.store_key.clone();
                 info!(store_key = %key, len = sr.data.len(), "processing store request");
-                store.insert(
+                let resp = match store.insert(
                     sr.store_key,
                     store::StoredTile {
                         data: sr.data,
@@ -131,8 +131,13 @@ async fn handle_connection(
                         height: sr.height,
                         width: sr.width,
                     },
-                );
-                let resp = protocol::StoreResponse::ok(String::new());
+                ) {
+                    Ok(()) => protocol::StoreResponse::ok(String::new()),
+                    Err(e) => {
+                        warn!(error = %e, "tile store insert failed");
+                        protocol::StoreResponse::error(String::new(), format!("{e:#}"))
+                    }
+                };
                 rmp_serde::to_vec_named(&resp)
             }
             ServiceRequest::Reconstruct(rr) => {
@@ -160,10 +165,18 @@ async fn handle_connection(
                 rmp_serde::to_vec_named(&resp)
             }
             ServiceRequest::Evict(er) => {
-                let evicted = store.evict(&er.keys);
-                let resp = EvictResponse {
-                    success: true,
-                    evicted,
+                let resp = match store.evict(&er.keys) {
+                    Ok(evicted) => EvictResponse {
+                        success: true,
+                        evicted,
+                    },
+                    Err(e) => {
+                        warn!(error = %e, "tile store evict failed");
+                        EvictResponse {
+                            success: false,
+                            evicted: 0,
+                        }
+                    }
                 };
                 rmp_serde::to_vec_named(&resp)
             }
@@ -289,30 +302,76 @@ async fn handle_query_verify_store(
 
     match verify_result {
         Ok(vr) => {
-            let stored = if let (Some(key), Some(shape)) = (req.store_key, req.output_shape) {
-                let [_, channels, height, width] = shape;
-                let expected_len = channels * height * width;
-                if vr.rescaled_outputs.len() == expected_len {
-                    store.insert(
-                        key,
-                        StoredTile {
-                            data: vr.rescaled_outputs,
-                            channels,
-                            height,
-                            width,
-                        },
-                    );
-                    true
-                } else {
-                    warn!(
-                        expected = expected_len,
-                        actual = vr.rescaled_outputs.len(),
-                        "output length mismatch, not storing tile"
-                    );
-                    false
+            let (stored, store_error): (bool, Option<String>) = match (
+                req.store_key,
+                req.output_shape,
+            ) {
+                (Some(_), None) | (None, Some(_)) => {
+                    warn!("partial store parameters: store_key and output_shape must both be present or both absent");
+                    (false, Some("partial store parameters".to_string()))
                 }
-            } else {
-                false
+                (None, None) => (false, None),
+                (Some(key), Some(shape)) => {
+                    let [batch, channels, height, width] = shape;
+                    if batch != 1 {
+                        return QueryVerifyStoreResponse {
+                            request_id: req.request_id,
+                            success: true,
+                            http_status,
+                            response_time_secs: http_elapsed,
+                            verification_result: true,
+                            proof_size: fields.proof_size,
+                            stored: false,
+                            is_incremental: fields.is_incremental,
+                            error: Some(format!("leading output dimension is {batch}, expected 1")),
+                        };
+                    }
+                    match channels
+                        .checked_mul(height)
+                        .and_then(|v| v.checked_mul(width))
+                    {
+                        None => (
+                            false,
+                            Some(format!(
+                                "output shape dimensions overflow: {}x{}x{}",
+                                channels, height, width
+                            )),
+                        ),
+                        Some(expected_len) => {
+                            if vr.rescaled_outputs.len() == expected_len {
+                                match store.insert(
+                                    key,
+                                    StoredTile {
+                                        data: vr.rescaled_outputs,
+                                        channels,
+                                        height,
+                                        width,
+                                    },
+                                ) {
+                                    Ok(()) => (true, None),
+                                    Err(e) => {
+                                        warn!(error = %e, "tile store insert failed during query_verify_store");
+                                        (false, Some(format!("{e:#}")))
+                                    }
+                                }
+                            } else {
+                                warn!(
+                                    expected = expected_len,
+                                    actual = vr.rescaled_outputs.len(),
+                                    "output length mismatch, not storing tile"
+                                );
+                                (
+                                    false,
+                                    Some(format!(
+                                        "output length {} != expected {}",
+                                        vr.rescaled_outputs.len(),
+                                        expected_len
+                                    )),
+                                )
+                            }
+                        }
+                    }
+                }
             };
 
             QueryVerifyStoreResponse {
@@ -324,7 +383,7 @@ async fn handle_query_verify_store(
                 proof_size: fields.proof_size,
                 stored,
                 is_incremental: fields.is_incremental,
-                error: None,
+                error: store_error,
             }
         }
         Err(e) => {

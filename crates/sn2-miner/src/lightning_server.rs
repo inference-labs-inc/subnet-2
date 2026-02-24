@@ -17,14 +17,12 @@ pub async fn run_lightning_server(
     port: u16,
     handlers: Arc<MinerHandlers>,
 ) -> Result<()> {
-    let mut server = LightningServer::new(miner_hotkey.to_string(), host.to_string(), port);
+    let mut server = LightningServer::new(miner_hotkey.to_string(), host.to_string(), port)?;
 
     // btlightning's from_wallet passes (path, hotkey_name) to Wallet::new in
     // swapped positions: path→hotkey slot, hotkey_name→path slot. Compensate
     // by swapping here so the correct values reach bittensor_wallet::Wallet::new.
-    server
-        .set_miner_wallet(wallet_name, hotkey_name, wallet_path)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    server.set_miner_wallet(wallet_name, hotkey_name, wallet_path)?;
 
     let h = handlers.clone();
     server
@@ -35,8 +33,7 @@ pub async fn run_lightning_server(
                 async move { h.handle_query_zk_proof(query).await }
             }),
         )
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .await?;
 
     let h = handlers.clone();
     server
@@ -47,8 +44,7 @@ pub async fn run_lightning_server(
                 async move { h.handle_dslice(query).await }
             }),
         )
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .await?;
 
     let h = handlers;
     server
@@ -59,16 +55,12 @@ pub async fn run_lightning_server(
                 async move { h.handle_competition(query).await }
             }),
         )
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .await?;
 
-    server.start().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    server.start().await?;
 
     info!(host = host, port = port, "QUIC Lightning server listening");
 
-    server
-        .serve_forever()
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    server.serve_forever().await?;
     Ok(())
 }

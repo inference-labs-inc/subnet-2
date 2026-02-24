@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sp_core::sr25519;
 use sp_core::Pair;
 
@@ -10,15 +10,16 @@ pub fn verify_request_signature(
     payload_hash: &str,
     signature_hex: &str,
 ) -> Result<bool> {
-    let message = format!("{nonce}:{validator_hotkey}:{payload_hash}");
+    let message = sn2_types::signing_message(nonce, validator_hotkey, payload_hash);
     let message_bytes = message.as_bytes();
 
     let sig_bytes = hex::decode(signature_hex).context("decoding signature hex")?;
     if sig_bytes.len() != 64 {
-        anyhow::bail!("signature must be 64 bytes, got {}", sig_bytes.len());
+        bail!("signature must be 64 bytes, got {}", sig_bytes.len());
     }
-
-    let sig = sr25519::Signature::from_raw(sig_bytes.try_into().unwrap());
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let sig = sr25519::Signature::from_raw(sig_arr);
     let pubkey = sr25519::Public::from_raw(
         hex::decode(validator_hotkey.trim_start_matches("0x"))
             .context("decoding hotkey hex")?
@@ -30,13 +31,19 @@ pub fn verify_request_signature(
         return Ok(false);
     }
 
-    let nonce_ts: u64 = nonce.parse().unwrap_or(0);
+    let nonce_ts: u128 = nonce.parse().context("nonce is not a valid timestamp")?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+        .map_err(|e| anyhow::anyhow!("system clock before UNIX epoch: {e}"))?
+        .as_nanos();
 
-    if now.saturating_sub(nonce_ts) > MAX_SIGNATURE_LIFESPAN {
+    const ALLOWED_SKEW_NANOS: u128 = 30 * 1_000_000_000;
+    if nonce_ts > now.saturating_add(ALLOWED_SKEW_NANOS) {
+        return Ok(false);
+    }
+
+    let lifespan_nanos = (MAX_SIGNATURE_LIFESPAN as u128) * 1_000_000_000;
+    if now.saturating_sub(nonce_ts) > lifespan_nanos {
         return Ok(false);
     }
 

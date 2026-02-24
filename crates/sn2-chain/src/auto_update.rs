@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 const API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -166,14 +166,20 @@ pub fn spawn_update_loop(binary_name: &'static str) -> tokio::task::JoinHandle<(
     }
 
     tokio::spawn(async move {
-        let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("building HTTP client");
         let mut interval = tokio::time::interval(CHECK_INTERVAL);
         interval.tick().await;
         loop {
             interval.tick().await;
+            let client = match reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(error = %e, "building HTTP client for auto-update, retrying next interval");
+                    continue;
+                }
+            };
             match check_and_update(&client, binary_name, suffix).await {
                 Ok(true) => std::process::exit(0),
                 Ok(false) => {}

@@ -38,9 +38,9 @@ tempfile = "3"
 zstd = "0.13"
 which = "7"
 sp-core = "31"
-bittensor_wallet = { git = "https://github.com/opentensor/btwallet", rev = "bff16fd6a823474e49ef53fa689249f9d9ddb745", default-features = false }
+bittensor_wallet = { version = "4.0.1", package = "btwallet", default-features = false }
 subxt = "0.37"
-btlightning = { git = "https://github.com/inference-labs-inc/lightning", rev = "9b85556ee83cbc822094f6cf1f2cc271e6ca7ce3", features = ["btwallet"] }
+btlightning = { version = "0.1.10", features = ["btwallet", "subtensor"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 aws-config = "1"
 aws-sdk-s3 = "1"

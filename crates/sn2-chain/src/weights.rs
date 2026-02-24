@@ -285,3 +285,47 @@ impl Signer<PolkadotConfig> for SubxtSr25519Signer {
         subxt::utils::MultiSignature::Sr25519(sig_arr)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_reveal_blocks_basic_calculation() {
+        let commit_block = 1000u64;
+        let (first, last) = WeightsSetter::get_reveal_blocks(2, 360, 1, commit_block);
+        assert_eq!(first, 1080);
+        assert_eq!(last, 1440);
+        assert!(
+            commit_block < first,
+            "commit block must precede reveal window"
+        );
+    }
+
+    #[test]
+    fn compute_commit_hash_deterministic() {
+        let account = subxt::utils::AccountId32::from([1u8; 32]);
+        let h1 = WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[42], 1);
+        let h2 = WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[42], 1);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn compute_commit_hash_varies_with_each_field() {
+        let account = subxt::utils::AccountId32::from([1u8; 32]);
+        let account2 = subxt::utils::AccountId32::from([2u8; 32]);
+        let base = WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[42], 1);
+
+        let cases: Vec<[u8; 32]> = vec![
+            WeightsSetter::compute_commit_hash(&account2, 2, &[1, 2], &[100, 200], &[42], 1),
+            WeightsSetter::compute_commit_hash(&account, 3, &[1, 2], &[100, 200], &[42], 1),
+            WeightsSetter::compute_commit_hash(&account, 2, &[1, 3], &[100, 200], &[42], 1),
+            WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 201], &[42], 1),
+            WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[99], 1),
+            WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[42], 2),
+        ];
+        for (i, h) in cases.iter().enumerate() {
+            assert_ne!(&base, h, "variation {i} should produce a different hash");
+        }
+    }
+}
