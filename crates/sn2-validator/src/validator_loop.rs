@@ -300,7 +300,7 @@ impl ValidatorLoop {
         }
 
         let slices_dir = circuit.paths.base_path.join("slices");
-        let input_tensor = match dsperse::utils::io::json_to_arrayd(&submission.inputs) {
+        let input_tensor = match crate::tensor_json::json_to_arrayd(&submission.inputs) {
             Ok(t) => t,
             Err(e) => {
                 warn!(error = %e, "failed to convert input to tensor");

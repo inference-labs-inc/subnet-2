@@ -33,3 +33,4 @@ subxt = { workspace = true }
 async-trait = { workspace = true }
 ndarray = { workspace = true }
 shellexpand = { workspace = true }
+rmp-serde = { workspace = true }

@@ -341,15 +341,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arbitrary"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
-dependencies = [
- "derive_arbitrary",
-]
-
-[[package]]
 name = "arith"
 version = "0.3.0"
 source = "git+https://github.com/inference-labs-inc/Expander?tag=v0.3.1#860b9f44d4dfd9c872caeb855da1609bbb37eed2"
@@ -2236,25 +2227,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bzip2"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49ecfb22d906f800d4fe833b6282cf4dc1c298f5057ca0b5445e5c209735ca47"
-dependencies = [
- "bzip2-sys",
-]
-
-[[package]]
-name = "bzip2-sys"
-version = "0.1.13+1.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "225bff33b2141874fe80d71e07d6eec4f85c5c216453dd96388240f96e1acc14"
-dependencies = [
- "cc",
- "pkg-config",
-]
-
-[[package]]
 name = "camino"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2422,7 +2394,7 @@ dependencies = [
 [[package]]
 name = "circuit-std-rs"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/ecc?tag=v0.3.3#cb5bee0235182e4f0888d86fc201f1564030846c"
+source = "git+https://github.com/inference-labs-inc/ecc?rev=f858279#f858279483c5dfd8fed31a57097b55ccbd417e61"
 dependencies = [
  "arith",
  "ark-bls12-381",
@@ -2640,12 +2612,6 @@ checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
 
 [[package]]
 name = "constant_time_eq"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
-
-[[package]]
-name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
@@ -2824,6 +2790,15 @@ dependencies = [
  "rand 0.9.2",
  "regex",
  "rustversion",
+]
+
+[[package]]
+name = "crc32c"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a47af21622d091a8f0fb295b88bc886ac74efcc613efc19f5d0b21de5c89e47"
+dependencies = [
+ "rustc_version 0.4.1",
 ]
 
 [[package]]
@@ -3472,12 +3447,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
-name = "deflate64"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26bf8fc351c5ed29b5c2f0cbbac1b209b74f60ecd62e675a998df72c49af5204"
-
-[[package]]
 name = "der"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3545,17 +3514,6 @@ name = "derive-where"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef941ded77d15ca19b40374869ac6000af1c9f2a4c0f3d4c70926287e6364a8f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "derive_arbitrary"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3743,25 +3701,23 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dsperse"
 version = "0.0.0"
-source = "git+https://github.com/inference-labs-inc/dsperse?branch=migrate/runtime-to-rust#5bd10f26dda2db2f9c5163a99386796f10fc6b8a"
+source = "git+https://github.com/inference-labs-inc/dsperse?rev=651353c#651353c30fea5f25ffab71ba4d44e91ebd44b65d"
 dependencies = [
  "clap",
- "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=deb1016)",
- "lru 0.16.3",
+ "jstprove_circuits",
  "ndarray",
  "prost 0.13.5",
  "prost-build",
  "rayon",
+ "rmp-serde",
+ "rmpv",
  "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber 0.3.22",
  "tract-onnx",
  "uuid",
- "walkdir",
- "zip",
 ]
 
 [[package]]
@@ -4171,7 +4127,7 @@ dependencies = [
 [[package]]
 name = "expander_compiler"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/ecc?tag=v0.3.3#cb5bee0235182e4f0888d86fc201f1564030846c"
+source = "git+https://github.com/inference-labs-inc/ecc?rev=f858279#f858279483c5dfd8fed31a57097b55ccbd417e61"
 dependencies = [
  "arith",
  "ark-std 0.4.0",
@@ -5228,11 +5184,6 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash 0.2.0",
-]
 
 [[package]]
 name = "headers"
@@ -6245,39 +6196,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "jstprove_circuits"
+name = "jstprove-io"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=deb1016#deb10167b1fb0f9f3e1656a78dc587bc8d385e01"
+source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=7e54b10#7e54b10fb2e5f8b4fa60a37d047a164e2627cbe7"
 dependencies = [
- "ark-std 0.4.0",
- "chrono",
- "circuit-std-rs",
- "clap",
- "ethnum",
- "expander_compiler",
- "halo2curves",
- "lazy_static",
- "ndarray",
- "once_cell",
- "openssl",
- "peakmem-alloc",
- "rand 0.8.5",
+ "anyhow",
+ "crc32c",
  "rmp-serde",
  "serde",
- "serde_bytes",
- "serde_json",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "thiserror 2.0.18",
- "tiny-keccak",
  "zstd 0.13.3",
+]
+
+[[package]]
+name = "jstprove-onnx"
+version = "0.1.0"
+source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=7e54b10#7e54b10fb2e5f8b4fa60a37d047a164e2627cbe7"
+dependencies = [
+ "anyhow",
+ "prost 0.13.5",
+ "prost-build",
+ "serde",
 ]
 
 [[package]]
 name = "jstprove_circuits"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=e1e9fe05cf5714b1da67bd89c8749d4ed83c2e1b#e1e9fe05cf5714b1da67bd89c8749d4ed83c2e1b"
+source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=7e54b10#7e54b10fb2e5f8b4fa60a37d047a164e2627cbe7"
 dependencies = [
+ "anyhow",
  "ark-std 0.4.0",
  "chrono",
  "circuit-std-rs",
@@ -6285,6 +6231,8 @@ dependencies = [
  "ethnum",
  "expander_compiler",
  "halo2curves",
+ "jstprove-io",
+ "jstprove-onnx",
  "lazy_static",
  "ndarray",
  "num-bigint",
@@ -6293,9 +6241,9 @@ dependencies = [
  "openssl",
  "rand 0.8.5",
  "rmp-serde",
+ "rmpv",
  "serde",
  "serde_bytes",
- "serde_json",
  "strum 0.27.2",
  "strum_macros 0.27.2",
  "thiserror 2.0.18",
@@ -6571,40 +6519,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "lru"
-version = "0.16.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1dc47f592c06f33f8e3aea9591776ec7c9f9e4124778ff8a3c3b87159f7e593"
-dependencies = [
- "hashbrown 0.16.1",
-]
-
-[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
-
-[[package]]
-name = "lzma-rs"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "297e814c836ae64db86b36cf2a557ba54368d03f6afcd7d947c266692f71115e"
-dependencies = [
- "byteorder",
- "crc",
-]
-
-[[package]]
-name = "lzma-sys"
-version = "0.1.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fda04ab3764e6cde78b9974eec4f779acaba7c4e84b36eca3cf77c581b85d27"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
-]
 
 [[package]]
 name = "mach"
@@ -6666,7 +6584,7 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/ecc?tag=v0.3.3#cb5bee0235182e4f0888d86fc201f1564030846c"
+source = "git+https://github.com/inference-labs-inc/ecc?rev=f858279#f858279483c5dfd8fed31a57097b55ccbd417e61"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9449,12 +9367,6 @@ dependencies = [
  "hmac 0.12.1",
  "password-hash 0.5.0",
 ]
-
-[[package]]
-name = "peakmem-alloc"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5eb7428a977a472465aced57d8d2335d6167c0ce9c05c283fd6faed3d8d948f6"
 
 [[package]]
 name = "pem"
@@ -12735,6 +12647,7 @@ dependencies = [
  "hex",
  "ndarray",
  "reqwest 0.12.28",
+ "rmp-serde",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -12796,7 +12709,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
- "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=e1e9fe05cf5714b1da67bd89c8749d4ed83c2e1b)",
+ "jstprove_circuits",
  "reqwest 0.12.28",
  "rmp-serde",
  "serde",
@@ -17038,15 +16951,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
-name = "xz2"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "388c44dc09d76f1536602ead6d325eb532f5c122f17782bd57fb47baeeb767e2"
-dependencies = [
- "lzma-sys",
-]
-
-[[package]]
 name = "yap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17179,52 +17083,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "zip"
-version = "2.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
-dependencies = [
- "aes",
- "arbitrary",
- "bzip2",
- "constant_time_eq 0.3.1",
- "crc32fast",
- "crossbeam-utils",
- "deflate64",
- "displaydoc",
- "flate2",
- "getrandom 0.3.4",
- "hmac 0.12.1",
- "indexmap 2.13.0",
- "lzma-rs",
- "memchr",
- "pbkdf2 0.12.2",
- "sha1",
- "thiserror 2.0.18",
- "time",
- "xz2",
- "zeroize",
- "zopfli",
- "zstd 0.13.3",
-]
-
-[[package]]
 name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[package]]
-name = "zopfli"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
-dependencies = [
- "bumpalo",
- "crc32fast",
- "log",
- "simd-adler32",
-]
 
 [[package]]
 name = "zstd"

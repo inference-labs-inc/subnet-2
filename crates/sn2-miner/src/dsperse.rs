@@ -1,11 +1,60 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use ndarray::{ArrayD, IxDyn};
 use tracing::info;
 
 pub struct DSperseClient {
     cache_dir: PathBuf,
+}
+
+fn flatten_json_to_f64(value: &serde_json::Value) -> Vec<f64> {
+    match value {
+        serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0)],
+        serde_json::Value::Array(arr) => arr.iter().flat_map(flatten_json_to_f64).collect(),
+        _ => vec![],
+    }
+}
+
+fn infer_json_shape(value: &serde_json::Value) -> Vec<usize> {
+    let mut shape = Vec::new();
+    let mut current = value;
+    loop {
+        match current {
+            serde_json::Value::Array(arr) => {
+                shape.push(arr.len());
+                if let Some(first) = arr.first() {
+                    current = first;
+                } else {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    shape
+}
+
+fn find_slice_onnx(slice_dir: &Path) -> Result<PathBuf> {
+    let payload_dir = slice_dir.join("payload");
+    if payload_dir.is_dir() {
+        for entry in std::fs::read_dir(&payload_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "onnx") {
+                return Ok(path);
+            }
+        }
+    }
+    anyhow::bail!("no .onnx file found in {}", payload_dir.display())
+}
+
+fn extract_input_json(inputs: &serde_json::Value) -> &serde_json::Value {
+    for key in &["input_data", "input", "data", "inputs"] {
+        if let Some(v) = inputs.get(*key) {
+            return v;
+        }
+    }
+    inputs
 }
 
 impl DSperseClient {
@@ -30,32 +79,10 @@ impl DSperseClient {
             .unwrap_or(slice_num)
             .parse()
             .context("parsing slice_num")?;
-        let slice_id = format!("slice_{slice_idx}");
-
-        dsperse::archive::extract_single_slice(&slices_dir, &slice_id, None)
-            .map_err(|e| anyhow::anyhow!("extracting {slice_id}: {e}"))?;
-
-        let dslice_file = slices_dir.join(format!("{slice_id}.dslice"));
-        let slice_meta = dsperse::archive::read_dslice_slice_metadata(&dslice_file)
-            .map_err(|e| anyhow::anyhow!("reading slice metadata: {e}"))?;
-
-        anyhow::ensure!(
-            slice_meta.compilation.jstprove.compiled,
-            "slice {slice_idx} not jstprove-compiled"
-        );
 
         let slice_dir = dsperse::utils::paths::slice_dir_path(&slices_dir, slice_idx);
-
-        let compiled = slice_meta
-            .compilation
-            .jstprove
-            .files
-            .compiled
-            .as_ref()
-            .with_context(|| format!("no compiled circuit for slice {slice_idx}"))?;
-        let circuit_path = slice_dir.join("jstprove").join(compiled);
-
-        let onnx_path = slice_dir.join(&slice_meta.path);
+        let circuit_path = slice_dir.join("jstprove").join("circuit.msgpack");
+        let onnx_path = find_slice_onnx(&slice_dir)?;
 
         anyhow::ensure!(
             circuit_path.exists(),
@@ -75,34 +102,42 @@ impl DSperseClient {
             "generating witness and proof"
         );
 
-        let input_data = dsperse::utils::io::extract_input_data(inputs)
-            .context("no recognized input key in inputs JSON")?
-            .clone();
+        let input_data = extract_input_json(inputs).clone();
 
         tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
-            let input_tensor = dsperse::utils::io::json_to_arrayd(&input_data)
-                .map_err(|e| anyhow::anyhow!("parsing input tensor: {e}"))?;
-            let input_flat: Vec<f64> = input_tensor.iter().copied().collect();
-            let input_shape: Vec<usize> = input_tensor.shape().to_vec();
+            let input_flat = flatten_json_to_f64(&input_data);
+            let input_shape = infer_json_shape(&input_data);
 
-            let (output_data, output_shape) =
+            let backend = dsperse::backend::jstprove::JstproveBackend::new();
+            let params = backend
+                .load_params(&circuit_path)
+                .map_err(|e| anyhow::anyhow!("loading circuit params: {e}"))?;
+            let is_wai = params.as_ref().is_some_and(|p| p.weights_as_inputs);
+
+            let (output_data, _output_shape) =
                 dsperse::backend::onnx::run_inference(&onnx_path, &input_flat, &input_shape)
                     .map_err(|e| anyhow::anyhow!("onnx inference: {e}"))?;
-            let output_tensor = ArrayD::from_shape_vec(IxDyn(&output_shape), output_data)
-                .context("reshaping onnx output")?;
 
-            let input_json_bytes = serde_json::to_vec(
-                &serde_json::json!({ "input_data": dsperse::utils::io::arrayd_to_json(&input_tensor) }),
-            )?;
-            let output_json_bytes = serde_json::to_vec(
-                &serde_json::json!({ "output_data": dsperse::utils::io::arrayd_to_json(&output_tensor) }),
-            )?;
-
-            let backend = dsperse::backend::JstproveBackend::new();
-
-            let witness_bytes = backend
-                .witness(&circuit_path, &input_json_bytes, &output_json_bytes)
-                .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?;
+            let witness_bytes = if is_wai {
+                let inits = dsperse::pipeline::extract_onnx_initializers(
+                    &onnx_path,
+                    params.as_ref().unwrap(),
+                )
+                .map_err(|e| anyhow::anyhow!("extracting initializers: {e}"))?;
+                backend
+                    .witness_f64(&circuit_path, &input_flat, &inits)
+                    .map_err(|e| anyhow::anyhow!("witness generation (WAI): {e}"))?
+            } else {
+                let input_msgpack = rmp_serde::to_vec_named(
+                    &serde_json::json!({ "input_data": &input_data }),
+                )?;
+                let output_msgpack = rmp_serde::to_vec_named(
+                    &serde_json::json!({ "output_data": output_data }),
+                )?;
+                backend
+                    .witness(&circuit_path, &input_msgpack, &output_msgpack)
+                    .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?
+            };
 
             let proof_bytes = backend
                 .prove(&circuit_path, &witness_bytes)
@@ -143,10 +178,11 @@ impl DSperseClient {
             "generating witness and proof"
         );
 
-        let inputs_bytes = serde_json::to_vec(inputs)?;
+        let inputs_clone = inputs.clone();
 
         tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
-            let backend = dsperse::backend::JstproveBackend::new();
+            let inputs_bytes = rmp_serde::to_vec_named(&inputs_clone)?;
+            let backend = dsperse::backend::jstprove::JstproveBackend::new();
 
             let witness_bytes = backend
                 .witness(&circuit_path, &inputs_bytes, &[])

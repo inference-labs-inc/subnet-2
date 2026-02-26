@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use dsperse::pipeline::{IncrementalRun, SliceExecutionResult, SliceWork};
 use dsperse::schema::execution::ExecutionInfo;
-use dsperse::utils::io::{arrayd_to_json, json_to_arrayd};
+use crate::tensor_json::{arrayd_to_json, json_to_arrayd};
 use sn2_types::{ProofSystem, RunSource};
 use tracing::{info, warn};
 

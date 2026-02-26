@@ -13,6 +13,7 @@ mod relay;
 mod request_pipeline;
 mod response_processor;
 mod scoring;
+mod tensor_json;
 mod validator_loop;
 
 use anyhow::{Context, Result};
