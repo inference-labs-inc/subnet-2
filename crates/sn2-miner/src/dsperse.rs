@@ -1,48 +1,30 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use sn2_types::json_tensor::{flatten_json_to_f64, infer_json_shape};
 use tracing::info;
 
 pub struct DSperseClient {
     cache_dir: PathBuf,
 }
 
-fn flatten_json_to_f64(value: &serde_json::Value) -> Vec<f64> {
-    match value {
-        serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0)],
-        serde_json::Value::Array(arr) => arr.iter().flat_map(flatten_json_to_f64).collect(),
-        _ => vec![],
-    }
-}
-
-fn infer_json_shape(value: &serde_json::Value) -> Vec<usize> {
-    let mut shape = Vec::new();
-    let mut current = value;
-    loop {
-        match current {
-            serde_json::Value::Array(arr) => {
-                shape.push(arr.len());
-                if let Some(first) = arr.first() {
-                    current = first;
-                } else {
-                    break;
-                }
-            }
-            _ => break,
-        }
-    }
-    shape
-}
-
 fn find_slice_onnx(slice_dir: &Path) -> Result<PathBuf> {
     let payload_dir = slice_dir.join("payload");
     if payload_dir.is_dir() {
-        for entry in std::fs::read_dir(&payload_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "onnx") {
-                return Ok(path);
-            }
+        let mut candidates: Vec<PathBuf> = std::fs::read_dir(&payload_dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "onnx"))
+            .collect();
+        candidates.sort();
+        match candidates.len() {
+            1 => return Ok(candidates.remove(0)),
+            n if n > 1 => anyhow::bail!(
+                "multiple .onnx files in {}: {:?}",
+                payload_dir.display(),
+                candidates,
+            ),
+            _ => {}
         }
     }
     anyhow::bail!("no .onnx file found in {}", payload_dir.display())
@@ -114,10 +96,6 @@ impl DSperseClient {
                 .map_err(|e| anyhow::anyhow!("loading circuit params: {e}"))?;
             let is_wai = params.as_ref().is_some_and(|p| p.weights_as_inputs);
 
-            let (output_data, _output_shape) =
-                dsperse::backend::onnx::run_inference(&onnx_path, &input_flat, &input_shape)
-                    .map_err(|e| anyhow::anyhow!("onnx inference: {e}"))?;
-
             let witness_bytes = if is_wai {
                 let inits = dsperse::pipeline::extract_onnx_initializers(
                     &onnx_path,
@@ -128,6 +106,9 @@ impl DSperseClient {
                     .witness_f64(&circuit_path, &input_flat, &inits)
                     .map_err(|e| anyhow::anyhow!("witness generation (WAI): {e}"))?
             } else {
+                let (output_data, _) =
+                    dsperse::backend::onnx::run_inference(&onnx_path, &input_flat, &input_shape)
+                        .map_err(|e| anyhow::anyhow!("onnx inference: {e}"))?;
                 let input_msgpack = rmp_serde::to_vec_named(
                     &serde_json::json!({ "input_data": &input_data }),
                 )?;

@@ -1,6 +1,7 @@
 mod circuit;
 mod constants;
 mod enums;
+pub mod json_tensor;
 mod miner_response;
 mod protocol;
 mod request;

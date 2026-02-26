@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use ndarray::{ArrayD, IxDyn};
+use sn2_types::json_tensor::{flatten_json_to_f64, infer_json_shape};
 
 pub fn json_to_arrayd(value: &serde_json::Value) -> Result<ArrayD<f64>> {
     let flat = flatten_json_to_f64(value);
@@ -36,31 +37,4 @@ fn build_nested(data: &[f64], shape: &[usize], dim: usize) -> serde_json::Value 
             .map(|i| build_nested(&data[i * stride..(i + 1) * stride], shape, dim + 1))
             .collect(),
     )
-}
-
-fn flatten_json_to_f64(value: &serde_json::Value) -> Vec<f64> {
-    match value {
-        serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0)],
-        serde_json::Value::Array(arr) => arr.iter().flat_map(flatten_json_to_f64).collect(),
-        _ => vec![],
-    }
-}
-
-fn infer_json_shape(value: &serde_json::Value) -> Vec<usize> {
-    let mut shape = Vec::new();
-    let mut current = value;
-    loop {
-        match current {
-            serde_json::Value::Array(arr) => {
-                shape.push(arr.len());
-                if let Some(first) = arr.first() {
-                    current = first;
-                } else {
-                    break;
-                }
-            }
-            _ => break,
-        }
-    }
-    shape
 }
