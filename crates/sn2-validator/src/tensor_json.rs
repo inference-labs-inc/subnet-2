@@ -11,7 +11,7 @@ pub fn json_to_arrayd(value: &serde_json::Value) -> Result<ArrayD<f64>> {
             "scalar expected but got {} values",
             flat.len()
         );
-        return ArrayD::from_shape_vec(IxDyn(&[1]), flat).context("building 1-d array");
+        return ArrayD::from_shape_vec(IxDyn(&[]), flat).context("building 0-d array");
     }
     let expected: usize = shape.iter().product();
     anyhow::ensure!(
@@ -26,10 +26,10 @@ pub fn arrayd_to_json(arr: &ArrayD<f64>) -> serde_json::Value {
     if arr.ndim() == 0 {
         return serde_json::json!(arr.first().copied().unwrap_or(0.0));
     }
-    let data = arr
-        .as_slice()
-        .map(|s| s.to_vec())
-        .unwrap_or_else(|| arr.to_owned().into_raw_vec_and_offset().0);
+    let data: Vec<f64> = match arr.as_slice() {
+        Some(s) => s.to_vec(),
+        None => arr.iter().copied().collect(),
+    };
     build_nested(&data, arr.shape(), 0)
 }
 
