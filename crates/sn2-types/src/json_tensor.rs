@@ -9,17 +9,11 @@ pub fn flatten_json_to_f64(value: &serde_json::Value) -> Vec<f64> {
 pub fn infer_json_shape(value: &serde_json::Value) -> Vec<usize> {
     let mut shape = Vec::new();
     let mut current = value;
-    loop {
-        match current {
-            serde_json::Value::Array(arr) => {
-                shape.push(arr.len());
-                if let Some(first) = arr.first() {
-                    current = first;
-                } else {
-                    break;
-                }
-            }
-            _ => break,
+    while let serde_json::Value::Array(arr) = current {
+        shape.push(arr.len());
+        match arr.first() {
+            Some(first) => current = first,
+            None => break,
         }
     }
     shape
