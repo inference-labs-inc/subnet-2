@@ -109,12 +109,10 @@ impl DSperseClient {
                 let (output_data, _) =
                     dsperse::backend::onnx::run_inference(&onnx_path, &input_flat, &input_shape)
                         .map_err(|e| anyhow::anyhow!("onnx inference: {e}"))?;
-                let input_msgpack = rmp_serde::to_vec_named(
-                    &serde_json::json!({ "input_data": &input_data }),
-                )?;
-                let output_msgpack = rmp_serde::to_vec_named(
-                    &serde_json::json!({ "output_data": output_data }),
-                )?;
+                let input_msgpack =
+                    rmp_serde::to_vec_named(&serde_json::json!({ "input_data": &input_data }))?;
+                let output_msgpack =
+                    rmp_serde::to_vec_named(&serde_json::json!({ "output_data": output_data }))?;
                 backend
                     .witness(&circuit_path, &input_msgpack, &output_msgpack)
                     .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?

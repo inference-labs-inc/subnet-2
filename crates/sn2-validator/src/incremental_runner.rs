@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use crate::tensor_json::{arrayd_to_json, json_to_arrayd};
 use dsperse::pipeline::{IncrementalRun, SliceExecutionResult, SliceWork};
 use dsperse::schema::execution::ExecutionInfo;
-use crate::tensor_json::{arrayd_to_json, json_to_arrayd};
 use sn2_types::{ProofSystem, RunSource};
 use tracing::{info, warn};
 
