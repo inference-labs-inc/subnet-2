@@ -60,10 +60,12 @@ def download_file(url: str, dest: Path) -> None:
     _require_https(url)
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        data = resp.read()
-    dest.write_bytes(data)
-    print(f"  {dest.name}: {len(data):,} bytes", file=sys.stderr)
+    total = 0
+    with urllib.request.urlopen(req, timeout=300) as resp, dest.open("wb") as fh:
+        while chunk := resp.read(65536):
+            fh.write(chunk)
+            total += len(chunk)
+    print(f"  {dest.name}: {total:,} bytes", file=sys.stderr)
 
 
 def main() -> None:
