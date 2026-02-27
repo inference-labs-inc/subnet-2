@@ -3,16 +3,16 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use subxt::{OnlineClient, PolkadotConfig};
-use tracing::error;
+use tracing::{error, info};
 
-use sn2_chain::{Metagraph, Wallet};
+use sn2_chain::{Metagraph, NeuronInfo, Wallet};
 
 use crate::cli::Cli;
 
 pub struct ValidatorConfig {
     pub netuid: u16,
-    pub wallet: Arc<Wallet>,
-    pub chain_client: OnlineClient<PolkadotConfig>,
+    pub wallet: Option<Arc<Wallet>>,
+    pub chain_client: Option<OnlineClient<PolkadotConfig>>,
     pub metagraph: Metagraph,
     pub user_uid: u16,
     pub relay_enabled: bool,
@@ -25,6 +25,8 @@ pub struct ValidatorConfig {
     pub is_testnet: bool,
     pub max_benchmark_concurrent: Option<usize>,
     pub target_uids: Option<HashSet<u16>>,
+    pub circuit_api_url: Option<String>,
+    pub loopback: bool,
 }
 
 impl ValidatorConfig {
@@ -80,8 +82,8 @@ impl ValidatorConfig {
 
         Ok(Self {
             netuid: cli.netuid,
-            wallet,
-            chain_client,
+            wallet: Some(wallet),
+            chain_client: Some(chain_client),
             metagraph,
             user_uid,
             relay_enabled: cli.relay_enabled,
@@ -98,6 +100,58 @@ impl ValidatorConfig {
             } else {
                 Some(cli.target_uid.iter().copied().collect())
             },
+            circuit_api_url: cli.circuit_api_url.clone(),
+            loopback: false,
         })
+    }
+
+    pub fn from_cli_loopback(cli: &Cli, miner_ip: &str, miner_port: u16) -> Self {
+        let miner_neuron = NeuronInfo {
+            uid: 0,
+            hotkey: "loopback_miner".to_string(),
+            coldkey: "loopback_coldkey".to_string(),
+            hotkey_bytes: [0u8; 32],
+            stake: 0,
+            rank: 0,
+            trust: 0,
+            consensus: 0,
+            incentive: 0,
+            dividends: 0,
+            emission: 0,
+            is_active: true,
+            last_update: 0,
+            axon_ip: miner_ip.to_string(),
+            axon_port: miner_port,
+            axon_protocol: 0,
+            validator_permit: false,
+        };
+
+        let metagraph = Metagraph::from_neurons(cli.netuid, vec![miner_neuron]);
+
+        info!(
+            miner_ip = miner_ip,
+            miner_port = miner_port,
+            "constructed loopback metagraph with synthetic miner neuron"
+        );
+
+        Self {
+            netuid: cli.netuid,
+            wallet: None,
+            chain_client: None,
+            metagraph,
+            user_uid: 1,
+            relay_enabled: false,
+            relay_url: String::new(),
+            max_concurrency: cli.max_concurrency,
+            api_miners_pct: 0,
+            disable_benchmark: cli.disable_benchmark,
+            metrics_port: cli.metrics_port,
+            proof_api_url: None,
+            is_testnet: true,
+            max_benchmark_concurrent: cli.max_benchmark_concurrent,
+            target_uids: Some([0].into_iter().collect()),
+            circuit_api_url: cli.circuit_api_url.clone(),
+            loopback: true,
+        }
     }
 }

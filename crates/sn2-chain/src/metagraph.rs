@@ -12,6 +12,12 @@ use tracing::{debug, info, warn};
 
 const METAGRAPH_SYNC_CONCURRENCY: usize = 32;
 
+type IndexMaps = (
+    HashMap<u16, usize>,
+    HashMap<String, u16>,
+    HashMap<String, Vec<u16>>,
+);
+
 #[derive(Decode)]
 struct AxonInfoRaw {
     _block: u64,
@@ -99,6 +105,35 @@ impl Metagraph {
         }
     }
 
+    fn build_index_maps(neurons: &[NeuronInfo]) -> IndexMaps {
+        let mut uid_to_idx = HashMap::new();
+        let mut hotkey_to_uid = HashMap::new();
+        let mut coldkey_to_uids: HashMap<String, Vec<u16>> = HashMap::new();
+        for (idx, neuron) in neurons.iter().enumerate() {
+            uid_to_idx.insert(neuron.uid, idx);
+            hotkey_to_uid.insert(neuron.hotkey.clone(), neuron.uid);
+            coldkey_to_uids
+                .entry(neuron.coldkey.clone())
+                .or_default()
+                .push(neuron.uid);
+        }
+        (uid_to_idx, hotkey_to_uid, coldkey_to_uids)
+    }
+
+    pub fn from_neurons(netuid: u16, neurons: Vec<NeuronInfo>) -> Self {
+        let n = neurons.len() as u16;
+        let (uid_to_idx, hotkey_to_uid, coldkey_to_uids) = Self::build_index_maps(&neurons);
+        Self {
+            netuid,
+            neurons,
+            n,
+            block: 0,
+            uid_to_idx,
+            hotkey_to_uid,
+            coldkey_to_uids,
+        }
+    }
+
     pub async fn sync(&mut self, client: &OnlineClient<PolkadotConfig>) -> Result<()> {
         let block_ref = client
             .blocks()
@@ -142,19 +177,10 @@ impl Metagraph {
             }
         };
 
-        self.uid_to_idx.clear();
-        self.hotkey_to_uid.clear();
-        self.coldkey_to_uids.clear();
-
-        for (idx, neuron) in neurons.iter().enumerate() {
-            self.uid_to_idx.insert(neuron.uid, idx);
-            self.hotkey_to_uid.insert(neuron.hotkey.clone(), neuron.uid);
-            self.coldkey_to_uids
-                .entry(neuron.coldkey.clone())
-                .or_default()
-                .push(neuron.uid);
-        }
-
+        let (uid_to_idx, hotkey_to_uid, coldkey_to_uids) = Self::build_index_maps(&neurons);
+        self.uid_to_idx = uid_to_idx;
+        self.hotkey_to_uid = hotkey_to_uid;
+        self.coldkey_to_uids = coldkey_to_uids;
         self.neurons = neurons;
         info!(
             netuid = self.netuid,

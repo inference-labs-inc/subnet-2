@@ -20,11 +20,11 @@ pub struct CircuitStore {
 }
 
 impl CircuitStore {
-    pub fn new() -> Self {
+    pub fn new(api_url_override: Option<&str>) -> Self {
         let cache_dir = shellexpand::tilde(CIRCUIT_CACHE_DIR).to_string();
         Self {
             circuits: HashMap::new(),
-            api_url: CIRCUIT_API_URL.to_string(),
+            api_url: api_url_override.unwrap_or(CIRCUIT_API_URL).to_string(),
             cache_dir: PathBuf::from(cache_dir),
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))

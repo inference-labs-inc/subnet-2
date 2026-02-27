@@ -54,4 +54,11 @@ pub struct Cli {
 
     #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(30..), help = "Metagraph sync interval in seconds")]
     pub metagraph_sync_interval: u64,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run without chain interaction for local integration testing"
+    )]
+    pub loopback: bool,
 }

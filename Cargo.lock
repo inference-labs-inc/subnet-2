@@ -3701,10 +3701,10 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dsperse"
 version = "0.0.0"
-source = "git+https://github.com/inference-labs-inc/dsperse?rev=75cd1c2#75cd1c2d763bb2549e34ff0aafdf3cf0e340fcc2"
+source = "git+https://github.com/inference-labs-inc/dsperse?rev=d2d6600#d2d6600fb5d0972c80b5bef2a426a0deeb10ef56"
 dependencies = [
  "clap",
- "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=7e54b10)",
+ "jstprove_circuits",
  "ndarray",
  "prost 0.13.5",
  "prost-build",
@@ -6198,19 +6198,7 @@ dependencies = [
 [[package]]
 name = "jstprove-io"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=7e54b10#7e54b10fb2e5f8b4fa60a37d047a164e2627cbe7"
-dependencies = [
- "anyhow",
- "crc32c",
- "rmp-serde",
- "serde",
- "zstd 0.13.3",
-]
-
-[[package]]
-name = "jstprove-io"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=9bf7bbb#9bf7bbb75e1f3895810e1a1c4619064c5d54f4d3"
+source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=7c639a6#7c639a6376470c7e191720223b6b8beb09630385"
 dependencies = [
  "anyhow",
  "crc32c",
@@ -6222,18 +6210,7 @@ dependencies = [
 [[package]]
 name = "jstprove-onnx"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=7e54b10#7e54b10fb2e5f8b4fa60a37d047a164e2627cbe7"
-dependencies = [
- "anyhow",
- "prost 0.13.5",
- "prost-build",
- "serde",
-]
-
-[[package]]
-name = "jstprove-onnx"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=9bf7bbb#9bf7bbb75e1f3895810e1a1c4619064c5d54f4d3"
+source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=7c639a6#7c639a6376470c7e191720223b6b8beb09630385"
 dependencies = [
  "anyhow",
  "prost 0.13.5",
@@ -6244,7 +6221,7 @@ dependencies = [
 [[package]]
 name = "jstprove_circuits"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=7e54b10#7e54b10fb2e5f8b4fa60a37d047a164e2627cbe7"
+source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=7c639a6#7c639a6376470c7e191720223b6b8beb09630385"
 dependencies = [
  "anyhow",
  "ark-std 0.4.0",
@@ -6254,41 +6231,8 @@ dependencies = [
  "ethnum",
  "expander_compiler",
  "halo2curves",
- "jstprove-io 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=7e54b10)",
- "jstprove-onnx 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=7e54b10)",
- "lazy_static",
- "ndarray",
- "num-bigint",
- "num-traits",
- "once_cell",
- "openssl",
- "rand 0.8.5",
- "rmp-serde",
- "rmpv",
- "serde",
- "serde_bytes",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "thiserror 2.0.18",
- "tiny-keccak",
- "zstd 0.13.3",
-]
-
-[[package]]
-name = "jstprove_circuits"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=9bf7bbb#9bf7bbb75e1f3895810e1a1c4619064c5d54f4d3"
-dependencies = [
- "anyhow",
- "ark-std 0.4.0",
- "chrono",
- "circuit-std-rs",
- "clap",
- "ethnum",
- "expander_compiler",
- "halo2curves",
- "jstprove-io 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=9bf7bbb)",
- "jstprove-onnx 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=9bf7bbb)",
+ "jstprove-io",
+ "jstprove-onnx",
  "lazy_static",
  "ndarray",
  "num-bigint",
@@ -12765,7 +12709,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
- "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=9bf7bbb)",
+ "jstprove_circuits",
  "reqwest 0.12.28",
  "rmp-serde",
  "serde",

@@ -22,6 +22,7 @@ struct AppState {
     miner_hotkey: String,
     metagraph: Arc<RwLock<Metagraph>>,
     disable_blacklist: bool,
+    loopback: bool,
 }
 
 pub async fn run_http_server(
@@ -31,12 +32,14 @@ pub async fn run_http_server(
     miner_hotkey: &str,
     metagraph: Arc<RwLock<Metagraph>>,
     disable_blacklist: bool,
+    loopback: bool,
 ) -> Result<()> {
     let state = Arc::new(AppState {
         handlers,
         miner_hotkey: miner_hotkey.to_string(),
         metagraph,
         disable_blacklist,
+        loopback,
     });
 
     let synapse_routes = Router::new()
@@ -78,6 +81,10 @@ async fn verify_signature_middleware(
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    if state.loopback {
+        return Ok(next.run(request).await);
+    }
+
     let validator_hotkey = headers
         .get("validator-hotkey")
         .and_then(|v| v.to_str().ok())

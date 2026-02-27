@@ -53,4 +53,21 @@ pub struct Cli {
 
     #[arg(long, value_delimiter = ',')]
     pub target_uid: Vec<u16>,
+
+    #[arg(long)]
+    pub circuit_api_url: Option<String>,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run without chain interaction for local integration testing"
+    )]
+    pub loopback: bool,
+
+    #[arg(
+        long,
+        default_value = "127.0.0.1:8091",
+        help = "Miner address (ip:port) for loopback mode"
+    )]
+    pub miner_address: String,
 }
