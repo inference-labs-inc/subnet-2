@@ -1,0 +1,230 @@
+name: Nightly loopback integration
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/subnet-2
+  CARGO_TERM_COLOR: always
+
+jobs:
+  loopback-e2e:
+    name: Loopback E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: testnet
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm pkg-config libssl-dev libudev-dev protobuf-compiler
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-nightly-
+
+      - name: Build release binaries
+        run: cargo build --workspace --release
+
+      - name: Get year-month for circuit cache key
+        run: echo "YEARMONTH=$(date +'%Y-%m')" >> $GITHUB_ENV
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bittensor/subnet-2/circuit_cache
+          key: circuit-${{ runner.os }}-${{ env.YEARMONTH }}
+          restore-keys: circuit-${{ runner.os }}-
+
+      - name: Seed test circuit
+        id: seed
+        run: |
+          CIRCUIT_ID=$(python tools/ci_loopback_seed.py)
+          echo "circuit_id=${CIRCUIT_ID}" >> $GITHUB_OUTPUT
+          echo "Seeded circuit: ${CIRCUIT_ID}"
+
+      - name: Start mock circuit API
+        run: python tools/mock_circuit_api.py 18080 &
+
+      - name: Wait for mock circuit API
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:18080/circuits > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:18080/circuits > /dev/null || \
+            (echo "Mock API failed to start" && exit 1)
+
+      - name: Activate test circuit
+        run: |
+          RESULT=$(curl -sf -X POST \
+            "http://localhost:18080/admin/activate/${{ steps.seed.outputs.circuit_id }}")
+          echo "Activate response: $RESULT"
+          echo "$RESULT" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'activated' in d else 1)"
+
+      - name: Start miner in loopback
+        run: |
+          ./target/release/sn2-miner \
+            --loopback \
+            --axon-port 8091 \
+            --log-level info \
+            2>&1 | tee /tmp/miner.log &
+          echo "MINER_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for miner
+        run: |
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:8091/health > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:8091/health || \
+            (echo "Miner failed to start" && tail -50 /tmp/miner.log && exit 1)
+
+      - name: Start validator in loopback
+        run: |
+          mkdir -p ~/.bittensor/subnet-2
+          ./target/release/sn2-validator \
+            --loopback \
+            --miner-address 127.0.0.1:8091 \
+            --circuit-api-url http://localhost:18080 \
+            --metrics-port 9090 \
+            --max-concurrency 4 \
+            --log-level info \
+            2>&1 | tee /tmp/validator.log &
+          echo "VALIDATOR_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for validator metrics endpoint
+        run: |
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:9090/metrics > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:9090/metrics > /dev/null || \
+            (echo "Validator metrics endpoint unavailable" && tail -50 /tmp/validator.log && exit 1)
+
+      - name: Run for 6 minutes
+        run: sleep 360
+
+      - name: Assert process liveness
+        run: |
+          kill -0 $MINER_PID 2>/dev/null || \
+            (echo "FAIL: Miner exited early" && tail -100 /tmp/miner.log && exit 1)
+          kill -0 $VALIDATOR_PID 2>/dev/null || \
+            (echo "FAIL: Validator exited early" && tail -100 /tmp/validator.log && exit 1)
+
+      - name: Assert metrics
+        run: |
+          METRICS=$(curl -sf http://localhost:9090/metrics)
+
+          SENT=$(echo "$METRICS" | awk '/^sn2_requests_sent_total/ {sum += $NF} END {print int(sum+0)}')
+          echo "Requests sent: ${SENT}"
+          [[ "${SENT:-0}" -ge 2 ]] || \
+            (echo "FAIL: Expected >= 2 requests sent, got ${SENT:-0}" && exit 1)
+
+          SUCCESSES=$(echo "$METRICS" | awk '/sn2_responses_total\{.*success/ {print int($NF+0)}')
+          FAILURES=$(echo "$METRICS"  | awk '/sn2_responses_total\{.*failure/ {print int($NF+0)}')
+          TOTAL=$(( ${SUCCESSES:-0} + ${FAILURES:-0} ))
+          echo "Responses: ${SUCCESSES:-0} success, ${FAILURES:-0} failure (${TOTAL} total)"
+
+          [[ "${TOTAL}" -ge 2 ]] || \
+            (echo "FAIL: Expected >= 2 total responses, got ${TOTAL}" && exit 1)
+
+          if [[ "$TOTAL" -gt 0 ]]; then
+            SUCCESS_PCT=$(( ${SUCCESSES:-0} * 100 / TOTAL ))
+            echo "Success rate: ${SUCCESS_PCT}%"
+            [[ "$SUCCESS_PCT" -ge 50 ]] || \
+              (echo "FAIL: Success rate ${SUCCESS_PCT}% < 50%" && exit 1)
+          fi
+
+      - name: Shutdown validator
+        run: |
+          kill -INT $VALIDATOR_PID
+          for i in $(seq 1 20); do
+            kill -0 $VALIDATOR_PID 2>/dev/null || break
+            sleep 1
+          done
+
+      - name: Assert scoring
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+          path = os.path.expanduser("~/.bittensor/subnet-2/scores.json")
+          try:
+              scores = json.loads(open(path).read())
+          except Exception as e:
+              print(f"FAIL: Cannot read scores.json: {e}", file=sys.stderr)
+              sys.exit(1)
+          score = float(scores.get("0", 0))
+          if score <= 0:
+              print(f"FAIL: UID 0 score {score:.8f} is not positive", file=sys.stderr)
+              sys.exit(1)
+          print(f"UID 0 score: {score:.8f}")
+          PYEOF
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo "=== VALIDATOR LOG (last 200 lines) ==="
+          tail -200 /tmp/validator.log || true
+          echo "=== MINER LOG (last 100 lines) ==="
+          tail -100 /tmp/miner.log || true
+          echo "=== SCORES ==="
+          cat ~/.bittensor/subnet-2/scores.json 2>/dev/null || echo "(not found)"
+          echo "=== PERFORMANCE TRACKER ==="
+          cat ~/.bittensor/subnet-2/performance_tracker.json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d, indent=2))" 2>/dev/null || echo "(not found)"
+          echo "=== METRICS ==="
+          curl -sf http://localhost:9090/metrics 2>/dev/null || echo "(unavailable)"
+
+  publish-nightly:
+    name: Publish testnet-nightly
+    needs: loopback-e2e
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: testnet
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push :testnet-nightly
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:testnet-nightly
+
+      - name: Attest provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
