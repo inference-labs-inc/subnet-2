@@ -84,7 +84,7 @@ jobs:
             --loopback \
             --axon-port 8091 \
             --log-level info \
-            2>&1 | tee /tmp/miner.log &
+            > /tmp/miner.log 2>&1 &
           echo "MINER_PID=$!" >> $GITHUB_ENV
 
       - name: Wait for miner
@@ -106,7 +106,7 @@ jobs:
             --metrics-port 9090 \
             --max-concurrency 4 \
             --log-level info \
-            2>&1 | tee /tmp/validator.log &
+            > /tmp/validator.log 2>&1 &
           echo "VALIDATOR_PID=$!" >> $GITHUB_ENV
 
       - name: Wait for validator metrics endpoint
@@ -137,8 +137,8 @@ jobs:
           [[ "${SENT:-0}" -ge 2 ]] || \
             (echo "FAIL: Expected >= 2 requests sent, got ${SENT:-0}" && exit 1)
 
-          SUCCESSES=$(echo "$METRICS" | awk '/sn2_responses_total\{.*success/ {print int($NF+0)}')
-          FAILURES=$(echo "$METRICS"  | awk '/sn2_responses_total\{.*failure/ {print int($NF+0)}')
+          SUCCESSES=$(echo "$METRICS" | awk '/sn2_responses_total\{.*success/ {sum += int($NF+0)} END {print int(sum+0)}')
+          FAILURES=$(echo "$METRICS"  | awk '/sn2_responses_total\{.*failure/ {sum += int($NF+0)} END {print int(sum+0)}')
           TOTAL=$(( ${SUCCESSES:-0} + ${FAILURES:-0} ))
           echo "Responses: ${SUCCESSES:-0} success, ${FAILURES:-0} failure (${TOTAL} total)"
 

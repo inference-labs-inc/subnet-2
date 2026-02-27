@@ -8,7 +8,7 @@ CACHE_DIR = os.path.expanduser("~/.bittensor/subnet-2/circuit_cache")
 
 all_circuits = {}
 
-for entry in os.listdir(CACHE_DIR):
+for entry in (os.listdir(CACHE_DIR) if os.path.exists(CACHE_DIR) else []):
     if not entry.startswith("model_") or len(entry) != 70:
         continue
     circuit_id = entry[6:]
@@ -109,15 +109,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8888
     print(f"Mock Circuit API on port {port}")
-    print(f"Available circuits:")
+    print("Available circuits:")
     for cid, meta in all_circuits.items():
         print(f"  {cid[:12]}... {meta['name']}")
-    print(f"\nEndpoints:")
-    print(f"  GET  /circuits              - active circuit list")
-    print(f"  GET  /admin/status          - all available + active")
-    print(f"  POST /admin/activate/{{id}}   - activate a circuit")
-    print(f"  POST /admin/deactivate/{{id}} - deactivate a circuit")
-    print(f"  POST /admin/activate-all    - activate all")
-    print(f"  POST /admin/deactivate-all  - deactivate all")
-    server = http.server.HTTPServer(("0.0.0.0", port), Handler)
+    print("\nEndpoints:")
+    print("  GET  /circuits              - active circuit list")
+    print("  GET  /admin/status          - all available + active")
+    print("  POST /admin/activate/{id}   - activate a circuit")
+    print("  POST /admin/deactivate/{id} - deactivate a circuit")
+    print("  POST /admin/activate-all    - activate all")
+    print("  POST /admin/deactivate-all  - deactivate all")
+    server = http.server.HTTPServer(("127.0.0.1", port), Handler)
     server.serve_forever()

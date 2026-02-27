@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -43,13 +44,20 @@ SKIP_DOWNLOAD = {"metadata.json", "full_model.onnx"}
 REQUIRED_FILES = {"model.compiled", "settings.json"}
 
 
+def _require_https(url: str) -> None:
+    if urllib.parse.urlparse(url).scheme != "https":
+        raise ValueError(f"refusing non-HTTPS URL: {url}")
+
+
 def fetch_json(url: str) -> dict:
+    _require_https(url)
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
 
 
 def download_file(url: str, dest: Path) -> None:
+    _require_https(url)
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url)
     with urllib.request.urlopen(req, timeout=300) as resp:
