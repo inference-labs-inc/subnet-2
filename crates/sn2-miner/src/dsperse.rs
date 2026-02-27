@@ -63,7 +63,7 @@ impl DSperseClient {
             .context("parsing slice_num")?;
 
         let slice_dir = dsperse::utils::paths::slice_dir_path(&slices_dir, slice_idx);
-        let circuit_path = slice_dir.join("jstprove").join("circuit.msgpack");
+        let circuit_path = slice_dir.join("jstprove").join("circuit.bundle");
         let onnx_path = find_slice_onnx(&slice_dir)?;
 
         anyhow::ensure!(
