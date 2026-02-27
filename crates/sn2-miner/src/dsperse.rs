@@ -67,8 +67,8 @@ impl DSperseClient {
         let onnx_path = find_slice_onnx(&slice_dir)?;
 
         anyhow::ensure!(
-            circuit_path.exists(),
-            "circuit not found at {}",
+            circuit_path.is_dir(),
+            "bundle directory not found at {}",
             circuit_path.display()
         );
         anyhow::ensure!(
