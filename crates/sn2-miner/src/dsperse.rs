@@ -88,6 +88,10 @@ impl DSperseClient {
 
         tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
             let input_flat = flatten_json_to_f64(&input_data);
+            anyhow::ensure!(
+                !input_flat.is_empty(),
+                "invalid input tensor: flattened input is empty"
+            );
 
             let backend = dsperse::backend::jstprove::JstproveBackend::new();
             let params = backend
