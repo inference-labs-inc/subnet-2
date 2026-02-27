@@ -30,6 +30,10 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    if cli.loopback {
+        return run_loopback(cli).await;
+    }
+
     if !cli.no_auto_update && option_env!("SN2_RELEASE_CHANNEL") == Some("mainnet") {
         let _update_handle = sn2_chain::auto_update::spawn_update_loop("sn2-miner");
     }
@@ -201,6 +205,47 @@ async fn main() -> Result<()> {
                 Ok(()) => warn!("metagraph sync loop exited unexpectedly"),
                 Err(e) => error!(error = %e, "metagraph sync task panicked"),
             }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("shutting down miner");
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_loopback(cli: Cli) -> Result<()> {
+    info!(
+        port = cli.axon_port,
+        "starting miner in loopback mode (no chain interaction)"
+    );
+
+    let dsperse = dsperse::DSperseClient::new();
+    let circuit_mgr = std::sync::Arc::new(circuit_manager::CircuitManager::new(
+        &cli.circuit_dir,
+        cli.storage_bucket.as_deref(),
+    ));
+
+    let handlers = handlers::MinerHandlers::new(dsperse, circuit_mgr);
+    let handlers = std::sync::Arc::new(handlers);
+
+    let metagraph = Arc::new(RwLock::new(sn2_chain::Metagraph::new(cli.netuid)));
+
+    let http_handle = {
+        let handlers = handlers.clone();
+        let axon_host = cli.axon_host.clone();
+        let port = cli.axon_port;
+        let meta = metagraph.clone();
+        tokio::spawn(async move {
+            http_server::run_http_server(&axon_host, port, handlers, "loopback", meta, true).await
+        })
+    };
+
+    info!(port = cli.axon_port, "miner loopback running");
+
+    tokio::select! {
+        r = http_handle => {
+            r?.context("HTTP server")?;
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");

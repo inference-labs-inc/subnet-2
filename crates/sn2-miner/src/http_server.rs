@@ -78,6 +78,10 @@ async fn verify_signature_middleware(
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    if state.disable_blacklist {
+        return Ok(next.run(request).await);
+    }
+
     let validator_hotkey = headers
         .get("validator-hotkey")
         .and_then(|v| v.to_str().ok())
@@ -124,36 +128,34 @@ async fn verify_signature_middleware(
         }
     }
 
-    if !state.disable_blacklist {
-        let meta = state.metagraph.read().await;
-        match meta.get_uid_by_hotkey(validator_hotkey) {
-            Some(uid) => {
-                let neuron = meta.get_neuron(uid);
-                let has_permit = neuron.map(|n| n.validator_permit).unwrap_or(false);
-                let stake = neuron.map(|n| n.stake).unwrap_or(0);
-                debug!(
-                    validator = validator_hotkey,
-                    uid = uid,
-                    stake = stake,
-                    permit = has_permit,
-                    "request from validator"
-                );
-                if !has_permit {
-                    warn!(
-                        validator = validator_hotkey,
-                        uid = uid,
-                        "no validator permit"
-                    );
-                    return Err(StatusCode::FORBIDDEN);
-                }
-            }
-            None => {
+    let meta = state.metagraph.read().await;
+    match meta.get_uid_by_hotkey(validator_hotkey) {
+        Some(uid) => {
+            let neuron = meta.get_neuron(uid);
+            let has_permit = neuron.map(|n| n.validator_permit).unwrap_or(false);
+            let stake = neuron.map(|n| n.stake).unwrap_or(0);
+            debug!(
+                validator = validator_hotkey,
+                uid = uid,
+                stake = stake,
+                permit = has_permit,
+                "request from validator"
+            );
+            if !has_permit {
                 warn!(
                     validator = validator_hotkey,
-                    "hotkey not registered in metagraph"
+                    uid = uid,
+                    "no validator permit"
                 );
                 return Err(StatusCode::FORBIDDEN);
             }
+        }
+        None => {
+            warn!(
+                validator = validator_hotkey,
+                "hotkey not registered in metagraph"
+            );
+            return Err(StatusCode::FORBIDDEN);
         }
     }
 

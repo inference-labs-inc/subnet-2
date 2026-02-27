@@ -99,6 +99,30 @@ impl Metagraph {
         }
     }
 
+    pub fn from_neurons(netuid: u16, neurons: Vec<NeuronInfo>) -> Self {
+        let n = neurons.len() as u16;
+        let mut uid_to_idx = HashMap::new();
+        let mut hotkey_to_uid = HashMap::new();
+        let mut coldkey_to_uids: HashMap<String, Vec<u16>> = HashMap::new();
+        for (idx, neuron) in neurons.iter().enumerate() {
+            uid_to_idx.insert(neuron.uid, idx);
+            hotkey_to_uid.insert(neuron.hotkey.clone(), neuron.uid);
+            coldkey_to_uids
+                .entry(neuron.coldkey.clone())
+                .or_default()
+                .push(neuron.uid);
+        }
+        Self {
+            netuid,
+            neurons,
+            n,
+            block: 0,
+            uid_to_idx,
+            hotkey_to_uid,
+            coldkey_to_uids,
+        }
+    }
+
     pub async fn sync(&mut self, client: &OnlineClient<PolkadotConfig>) -> Result<()> {
         let block_ref = client
             .blocks()

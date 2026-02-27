@@ -34,6 +34,9 @@ pub struct ActiveRun {
 pub struct NextSliceInfo {
     pub slice_id: String,
     pub inputs_json: serde_json::Value,
+    pub use_circuit: bool,
+    pub onnx_path: Option<String>,
+    pub input_tensor: ndarray::ArrayD<f64>,
 }
 
 #[derive(Default)]
@@ -109,6 +112,9 @@ impl IncrementalRunManager {
         Ok(Some(NextSliceInfo {
             slice_id: work.slice_id,
             inputs_json,
+            use_circuit: work.use_circuit,
+            onnx_path: work.onnx_path,
+            input_tensor: work.input,
         }))
     }
 

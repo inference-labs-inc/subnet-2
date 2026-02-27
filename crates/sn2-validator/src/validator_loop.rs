@@ -65,7 +65,7 @@ pub struct ValidatorLoop {
     performance_tracker: PerformanceTracker,
     weights_setter: WeightsSetter,
     miner_client: Arc<RwLock<MinerQueryClient>>,
-    relay: RelayManager,
+    relay: Option<RelayManager>,
     pipeline: RequestPipeline,
     response_processor: ResponseProcessor,
     circuit_store: CircuitStore,
@@ -89,7 +89,7 @@ pub struct ValidatorLoop {
     last_gc: Instant,
     task_meta: HashMap<tokio::task::Id, (u16, Option<String>, bool)>,
     run_manager: IncrementalRunManager,
-    proof_uploader: Arc<ProofUploader>,
+    proof_uploader: Option<Arc<ProofUploader>>,
     benchmark_in_flight: usize,
     upload_tasks: JoinSet<()>,
     pending_reveal: Option<PendingReveal>,
@@ -116,27 +116,33 @@ impl ValidatorLoop {
         let performance_tracker = PerformanceTracker::new_with_persistence(perf_path);
         let weights_setter = WeightsSetter::new(config.netuid);
 
-        let miner_client = Arc::new(RwLock::new(MinerQueryClient::new(config.wallet.clone())?));
-
         let (dsperse_tx, dsperse_rx) = tokio::sync::mpsc::channel::<DsperseSubmission>(256);
         let (rwr_tx, rwr_rx) = tokio::sync::mpsc::channel::<RwrSubmission>(256);
 
-        let relay = RelayManager::new(
-            config.relay_url.clone(),
-            config.wallet.clone(),
-            config.relay_enabled,
-            dsperse_tx,
-            rwr_tx,
-        );
+        let (miner_client, relay, proof_uploader) = if config.loopback {
+            let client = MinerQueryClient::new_unsigned()?;
+            (Arc::new(RwLock::new(client)), None, None)
+        } else {
+            let wallet = config.wallet.clone().expect("wallet required in production mode");
+            let client = MinerQueryClient::new(wallet.clone())?;
+            let relay = RelayManager::new(
+                config.relay_url.clone(),
+                wallet.clone(),
+                config.relay_enabled,
+                dsperse_tx.clone(),
+                rwr_tx.clone(),
+            );
+            let uploader = Arc::new(ProofUploader::new(
+                wallet,
+                config.proof_api_url.clone(),
+            ));
+            (Arc::new(RwLock::new(client)), Some(relay), Some(uploader))
+        };
 
         let pipeline = RequestPipeline::new();
         let response_processor = ResponseProcessor::new();
-        let circuit_store = CircuitStore::new();
+        let circuit_store = CircuitStore::new(config.circuit_api_url.as_deref());
         let run_manager = IncrementalRunManager::new();
-        let proof_uploader = Arc::new(ProofUploader::new(
-            config.wallet.clone(),
-            config.proof_api_url.clone(),
-        ));
 
         let now = Instant::now();
 
@@ -181,9 +187,11 @@ impl ValidatorLoop {
 
     pub async fn run(&mut self) -> Result<()> {
         self.circuit_store.load_circuits().await?;
-        self.relay.start().await?;
+        if let Some(relay) = &mut self.relay {
+            relay.start().await?;
+        }
 
-        {
+        if !self.config.loopback {
             let mut client = self.miner_client.write().await;
             if let Err(e) = client.init_quic().await {
                 warn!(error = %e, "QUIC endpoint init failed, QUIC queries will be unavailable");
@@ -265,6 +273,36 @@ impl ValidatorLoop {
         Ok(())
     }
 
+    async fn relay_send_response(&self, request_id: &str, result: serde_json::Value) {
+        if let Some(relay) = &self.relay {
+            relay.send_response(request_id, result).await;
+        }
+    }
+
+    async fn relay_send_notification(&self, method: &str, params: serde_json::Value) {
+        if let Some(relay) = &self.relay {
+            relay.send_notification(method, params).await;
+        }
+    }
+
+    async fn relay_register_pending(&self, hash: &str) {
+        if let Some(relay) = &self.relay {
+            relay.register_pending(hash).await;
+        }
+    }
+
+    async fn relay_remove_pending(&self, hash: &str) {
+        if let Some(relay) = &self.relay {
+            relay.remove_pending(hash).await;
+        }
+    }
+
+    async fn relay_set_request_result(&self, request_hash: &str, result: serde_json::Value) {
+        if let Some(relay) = &self.relay {
+            relay.set_request_result(request_hash, result).await;
+        }
+    }
+
     async fn handle_dsperse_submission(&mut self, submission: DsperseSubmission) {
         let circuit = match self
             .circuit_store
@@ -275,12 +313,11 @@ impl ValidatorLoop {
             Err(e) => {
                 warn!(circuit = %submission.circuit_id, error = %e, "unknown circuit in dsperse submission");
                 if let Some(req_id) = &submission.request_id {
-                    self.relay
-                        .send_response(
-                            req_id,
-                            serde_json::json!({"error": format!("unknown circuit: {e}")}),
-                        )
-                        .await;
+                    self.relay_send_response(
+                        req_id,
+                        serde_json::json!({"error": format!("unknown circuit: {e}")}),
+                    )
+                    .await;
                 }
                 return;
             }
@@ -289,12 +326,11 @@ impl ValidatorLoop {
         if let Err(msg) = circuit.validate_inputs(&submission.inputs) {
             warn!(circuit = %circuit.id, error = %msg, "invalid inputs for dsperse submission");
             if let Some(req_id) = &submission.request_id {
-                self.relay
-                    .send_response(
-                        req_id,
-                        serde_json::json!({"error": format!("invalid input shape: {msg}")}),
-                    )
-                    .await;
+                self.relay_send_response(
+                    req_id,
+                    serde_json::json!({"error": format!("invalid input shape: {msg}")}),
+                )
+                .await;
             }
             return;
         }
@@ -305,8 +341,7 @@ impl ValidatorLoop {
             Err(e) => {
                 warn!(error = %e, "failed to convert input to tensor");
                 if let Some(req_id) = &submission.request_id {
-                    self.relay
-                        .send_response(req_id, serde_json::json!({"error": e.to_string()}))
+                    self.relay_send_response(req_id, serde_json::json!({"error": e.to_string()}))
                         .await;
                 }
                 return;
@@ -318,8 +353,7 @@ impl ValidatorLoop {
             Err(e) => {
                 warn!(error = %e, circuit = %circuit.id, "failed to create IncrementalRun");
                 if let Some(req_id) = &submission.request_id {
-                    self.relay
-                        .send_response(req_id, serde_json::json!({"error": e.to_string()}))
+                    self.relay_send_response(req_id, serde_json::json!({"error": e.to_string()}))
                         .await;
                 }
                 return;
@@ -338,58 +372,110 @@ impl ValidatorLoop {
             Some(incremental),
         );
 
-        self.relay.register_pending(&run_uid).await;
+        self.relay_register_pending(&run_uid).await;
 
         if let Some(req_id) = &submission.request_id {
-            self.relay
-                .send_response(
-                    req_id,
-                    serde_json::json!({"run_uid": run_uid, "status": "started"}),
-                )
-                .await;
+            self.relay_send_response(
+                req_id,
+                serde_json::json!({"run_uid": run_uid, "status": "started"}),
+            )
+            .await;
         }
 
         self.enqueue_next_dslice(&run_uid, &circuit).await;
     }
 
     async fn enqueue_next_dslice(&mut self, run_uid: &str, circuit: &Circuit) {
-        let slice_info = match self.run_manager.next_slice(run_uid) {
-            Ok(Some(info)) => info,
-            Ok(None) => {
-                warn!(run_uid = %run_uid, "no next slice available");
-                return;
-            }
-            Err(e) => {
-                warn!(run_uid = %run_uid, error = %e, "next_slice failed");
-                return;
-            }
-        };
+        loop {
+            let slice_info = match self.run_manager.next_slice(run_uid) {
+                Ok(Some(info)) => info,
+                Ok(None) => {
+                    warn!(run_uid = %run_uid, "no next slice available");
+                    return;
+                }
+                Err(e) => {
+                    warn!(run_uid = %run_uid, error = %e, "next_slice failed");
+                    return;
+                }
+            };
 
-        let run_source = self
-            .run_manager
-            .get_run_source(run_uid)
-            .unwrap_or(RunSource::Benchmark);
+            if !slice_info.use_circuit {
+                if let Some(ref onnx_path) = slice_info.onnx_path {
+                    let input_flat: Vec<f64> = slice_info.input_tensor.iter().copied().collect();
+                    let input_shape: Vec<usize> = slice_info.input_tensor.shape().to_vec();
+                    match dsperse::backend::onnx::run_inference(
+                        std::path::Path::new(onnx_path),
+                        &input_flat,
+                        &input_shape,
+                    ) {
+                        Ok((output_data, output_shape)) => {
+                            let output_tensor =
+                                ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&output_shape), output_data)
+                                    .expect("output shape mismatch from ONNX inference");
+                            info!(
+                                run_uid = %run_uid,
+                                slice = %slice_info.slice_id,
+                                output_shape = ?output_shape,
+                                "ran ONNX inference for non-circuit slice"
+                            );
+                            match self.run_manager.apply_result(
+                                run_uid,
+                                &slice_info.slice_id,
+                                &crate::tensor_json::arrayd_to_json(&output_tensor),
+                            ) {
+                                Ok(true) => {
+                                    info!(run_uid = %run_uid, "incremental run complete after ONNX slice");
+                                    self.run_manager.remove_run(run_uid);
+                                    return;
+                                }
+                                Ok(false) => continue,
+                                Err(e) => {
+                                    warn!(run_uid = %run_uid, error = %e, "apply_result failed for ONNX slice");
+                                    self.run_manager.remove_run(run_uid);
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference failed");
+                            self.run_manager.remove_run(run_uid);
+                            return;
+                        }
+                    }
+                } else {
+                    warn!(run_uid = %run_uid, slice = %slice_info.slice_id, "non-circuit slice has no onnx_path");
+                    self.run_manager.remove_run(run_uid);
+                    return;
+                }
+            }
 
-        let request = DSliceRequest {
-            circuit: circuit.clone(),
-            inputs: slice_info.inputs_json,
-            request_type: RequestType::DSlice,
-            proof_system: circuit.proof_system,
-            slice_num: slice_info.slice_id.clone(),
-            run_uid: run_uid.to_string(),
-            outputs: None,
-            is_tile: false,
-            tile_idx: None,
-            task_id: None,
-            run_source,
-            retry_count: 0,
-            inputs_path: None,
-            outputs_path: None,
-        };
-        match request.run_source {
-            RunSource::Api => self.api_dslice_queue.push_back(request),
-            RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
-        };
+            let run_source = self
+                .run_manager
+                .get_run_source(run_uid)
+                .unwrap_or(RunSource::Benchmark);
+
+            let request = DSliceRequest {
+                circuit: circuit.clone(),
+                inputs: slice_info.inputs_json,
+                request_type: RequestType::DSlice,
+                proof_system: circuit.proof_system,
+                slice_num: slice_info.slice_id.clone(),
+                run_uid: run_uid.to_string(),
+                outputs: None,
+                is_tile: false,
+                tile_idx: None,
+                task_id: None,
+                run_source,
+                retry_count: 0,
+                inputs_path: None,
+                outputs_path: None,
+            };
+            match request.run_source {
+                RunSource::Api => self.api_dslice_queue.push_back(request),
+                RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
+            };
+            return;
+        }
     }
 
     async fn replenish_dslice_queues(&mut self) {
@@ -562,10 +648,10 @@ impl ValidatorLoop {
                         Err(e) => {
                             warn!(circuit = %rwr.circuit_id, error = %e, "unknown circuit for RWR");
                             if let Some(req_id) = &rwr.request_id {
-                                self.relay.send_response(
-                                req_id,
-                                serde_json::json!({"success": false, "error": format!("unknown circuit: {e}")}),
-                            ).await;
+                                self.relay_send_response(
+                                    req_id,
+                                    serde_json::json!({"success": false, "error": format!("unknown circuit: {e}")}),
+                                ).await;
                             }
                             break;
                         }
@@ -573,12 +659,11 @@ impl ValidatorLoop {
                     if let Err(msg) = circuit.validate_inputs(&rwr.inputs) {
                         warn!(circuit = %rwr.circuit_id, error = %msg, "invalid inputs for RWR");
                         if let Some(req_id) = &rwr.request_id {
-                            self.relay
-                                .send_response(
-                                    req_id,
-                                    serde_json::json!({"success": false, "error": format!("invalid input shape: {msg}")}),
-                                )
-                                .await;
+                            self.relay_send_response(
+                                req_id,
+                                serde_json::json!({"success": false, "error": format!("invalid input shape: {msg}")}),
+                            )
+                            .await;
                         }
                         break;
                     }
@@ -1003,16 +1088,15 @@ impl ValidatorLoop {
                         }
 
                         if let Some(req_id) = &external_request_hash {
-                            self.relay
-                                .send_response(
-                                    req_id,
-                                    serde_json::json!({
-                                        "success": true,
-                                        "proof": response.proof_content,
-                                        "public_signals": response.public_json,
-                                    }),
-                                )
-                                .await;
+                            self.relay_send_response(
+                                req_id,
+                                serde_json::json!({
+                                    "success": true,
+                                    "proof": response.proof_content,
+                                    "public_signals": response.public_json,
+                                }),
+                            )
+                            .await;
                         }
                         None
                     }
@@ -1172,31 +1256,33 @@ impl ValidatorLoop {
                     let active_run = self.run_manager.remove_run(&run_uid);
 
                     if !artifacts.is_empty() {
-                        let uploader = Arc::clone(&self.proof_uploader);
-                        let uid_clone = run_uid.clone();
-                        let circuit_id = active_run
-                            .as_ref()
-                            .map(|r| r.circuit_id.clone())
-                            .unwrap_or_default();
-                        let circuit_name = active_run
-                            .as_ref()
-                            .map(|r| r.circuit_name.clone())
-                            .unwrap_or_default();
+                        if let Some(uploader) = &self.proof_uploader {
+                            let uploader = Arc::clone(uploader);
+                            let uid_clone = run_uid.clone();
+                            let circuit_id = active_run
+                                .as_ref()
+                                .map(|r| r.circuit_id.clone())
+                                .unwrap_or_default();
+                            let circuit_name = active_run
+                                .as_ref()
+                                .map(|r| r.circuit_name.clone())
+                                .unwrap_or_default();
 
-                        self.upload_tasks.spawn(async move {
-                            if let Err(e) = uploader
-                                .upload_run_artifacts(
-                                    &uid_clone,
-                                    &circuit_id,
-                                    &circuit_name,
-                                    artifacts,
-                                    final_output,
-                                )
-                                .await
-                            {
-                                warn!(run_uid = %uid_clone, error = %e, "proof upload failed");
-                            }
-                        });
+                            self.upload_tasks.spawn(async move {
+                                if let Err(e) = uploader
+                                    .upload_run_artifacts(
+                                        &uid_clone,
+                                        &circuit_id,
+                                        &circuit_name,
+                                        artifacts,
+                                        final_output,
+                                    )
+                                    .await
+                                {
+                                    warn!(run_uid = %uid_clone, error = %e, "proof upload failed");
+                                }
+                            });
+                        }
                     }
 
                     let notify_circuit_id = active_run
@@ -1205,22 +1291,20 @@ impl ValidatorLoop {
                         .unwrap_or_default()
                         .to_string();
 
-                    self.relay
-                        .set_request_result(
-                            &run_uid,
-                            serde_json::json!({"run_uid": run_uid, "status": "complete"}),
-                        )
-                        .await;
-                    self.relay
-                        .send_notification(
-                            "subnet-2.batch_completed",
-                            serde_json::json!({
-                                "run_uid": run_uid,
-                                "circuit_id": notify_circuit_id,
-                                "status": "completed",
-                            }),
-                        )
-                        .await;
+                    self.relay_set_request_result(
+                        &run_uid,
+                        serde_json::json!({"run_uid": run_uid, "status": "complete"}),
+                    )
+                    .await;
+                    self.relay_send_notification(
+                        "subnet-2.batch_completed",
+                        serde_json::json!({
+                            "run_uid": run_uid,
+                            "circuit_id": notify_circuit_id,
+                            "status": "completed",
+                        }),
+                    )
+                    .await;
                 } else {
                     self.enqueue_next_dslice_from_run(&run_uid).await;
                 }
@@ -1312,77 +1396,78 @@ impl ValidatorLoop {
             if let Some(run_uid) = run_uid {
                 warn!(run_uid = %run_uid, "dslice max retries exceeded, removing run");
                 self.run_manager.remove_run(run_uid);
-                self.relay.remove_pending(run_uid).await;
+                self.relay_remove_pending(run_uid).await;
             }
         }
 
         if let Some(req_id) = external_request_hash {
-            self.relay
-                .send_response(
-                    req_id,
-                    serde_json::json!({
-                        "success": false,
-                        "error": "max retries exceeded",
-                    }),
-                )
-                .await;
+            self.relay_send_response(
+                req_id,
+                serde_json::json!({
+                    "success": false,
+                    "error": "max retries exceeded",
+                }),
+            )
+            .await;
         }
     }
 
     async fn run_periodic_tasks(&mut self) -> Result<()> {
         let now = Instant::now();
 
-        while let Some(result) = self.weight_tasks.try_join_next() {
-            match result {
-                Ok(WeightTaskResult::Committed(pending)) => {
-                    info!(
-                        commit_block = pending.commit_block,
-                        "weight commit submitted, awaiting reveal window"
-                    );
-                    self.pending_reveal = Some(pending);
-                }
-                Ok(WeightTaskResult::CommitFailed(e)) => {
-                    warn!(error = %e, "weight commit failed");
-                }
-                Ok(WeightTaskResult::Revealed) => {
-                    self.performance_tracker.save();
-                    metrics::record_weight_update();
-                    info!("weights revealed on chain");
-                }
-                Ok(WeightTaskResult::RevealFailed(e)) => {
-                    warn!(error = %e, "weight reveal failed");
-                }
-                Err(e) => {
-                    warn!(error = %e, "weight task panicked");
-                }
-            }
-        }
-
-        if now.duration_since(self.last_metagraph_sync) > Duration::from_secs(3600) {
-            self.sync_metagraph().await?;
-            self.last_metagraph_sync = now;
-        }
-
-        let weight_op_in_flight = !self.weight_tasks.is_empty();
-
-        if self.pending_reveal.is_some() && !weight_op_in_flight {
-            if let Err(e) = self.try_reveal_weights().await {
-                warn!(error = ?e, "weight reveal failed, will retry next cycle");
-            }
-        }
-
-        if now.duration_since(self.last_weight_update)
-            > Duration::from_secs(WEIGHT_UPDATE_POLL_SECS)
-        {
-            if self.pending_reveal.is_none() && !weight_op_in_flight {
-                match self.update_weights().await {
-                    Ok(()) => {}
+        if !self.config.loopback {
+            while let Some(result) = self.weight_tasks.try_join_next() {
+                match result {
+                    Ok(WeightTaskResult::Committed(pending)) => {
+                        info!(
+                            commit_block = pending.commit_block,
+                            "weight commit submitted, awaiting reveal window"
+                        );
+                        self.pending_reveal = Some(pending);
+                    }
+                    Ok(WeightTaskResult::CommitFailed(e)) => {
+                        warn!(error = %e, "weight commit failed");
+                    }
+                    Ok(WeightTaskResult::Revealed) => {
+                        self.performance_tracker.save();
+                        metrics::record_weight_update();
+                        info!("weights revealed on chain");
+                    }
+                    Ok(WeightTaskResult::RevealFailed(e)) => {
+                        warn!(error = %e, "weight reveal failed");
+                    }
                     Err(e) => {
-                        warn!(error = ?e, "weight update failed, will retry next cycle");
+                        warn!(error = %e, "weight task panicked");
                     }
                 }
             }
-            self.last_weight_update = now;
+
+            if now.duration_since(self.last_metagraph_sync) > Duration::from_secs(3600) {
+                self.sync_metagraph().await?;
+                self.last_metagraph_sync = now;
+            }
+
+            let weight_op_in_flight = !self.weight_tasks.is_empty();
+
+            if self.pending_reveal.is_some() && !weight_op_in_flight {
+                if let Err(e) = self.try_reveal_weights().await {
+                    warn!(error = ?e, "weight reveal failed, will retry next cycle");
+                }
+            }
+
+            if now.duration_since(self.last_weight_update)
+                > Duration::from_secs(WEIGHT_UPDATE_POLL_SECS)
+            {
+                if self.pending_reveal.is_none() && !weight_op_in_flight {
+                    match self.update_weights().await {
+                        Ok(()) => {}
+                        Err(e) => {
+                            warn!(error = ?e, "weight update failed, will retry next cycle");
+                        }
+                    }
+                }
+                self.last_weight_update = now;
+            }
         }
 
         if now.duration_since(self.last_score_save) > Duration::from_secs(300) {
@@ -1417,7 +1502,7 @@ impl ValidatorLoop {
         if now.duration_since(self.last_gc) > Duration::from_secs(120) {
             let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
             for uid in &evicted {
-                self.relay.remove_pending(uid).await;
+                self.relay_remove_pending(uid).await;
             }
             self.last_gc = now;
         }
@@ -1452,9 +1537,11 @@ impl ValidatorLoop {
     }
 
     async fn sync_metagraph(&mut self) -> Result<()> {
+        let chain_client = self.config.chain_client.as_ref()
+            .context("sync_metagraph requires chain_client")?;
         self.config
             .metagraph
-            .sync(&self.config.chain_client)
+            .sync(chain_client)
             .await
             .context("metagraph sync")?;
 
@@ -1553,11 +1640,13 @@ impl ValidatorLoop {
             None => return Ok(()),
         };
 
+        let chain_client = self.config.chain_client.as_ref()
+            .context("try_reveal_weights requires chain_client")?;
+
         let (tempo, reveal_period, current_block) = tokio::join!(
-            self.weights_setter.query_tempo(&self.config.chain_client),
-            self.weights_setter
-                .query_reveal_period(&self.config.chain_client),
-            self.weights_setter.current_block(&self.config.chain_client),
+            self.weights_setter.query_tempo(chain_client),
+            self.weights_setter.query_reveal_period(chain_client),
+            self.weights_setter.current_block(chain_client),
         );
         let tempo = tempo?;
         let reveal_period = reveal_period?;
@@ -1590,8 +1679,10 @@ impl ValidatorLoop {
             return Ok(());
         };
         let setter = self.weights_setter.clone();
-        let client = self.config.chain_client.clone();
-        let wallet = self.config.wallet.clone();
+        let client = self.config.chain_client.clone()
+            .context("try_reveal_weights requires chain_client")?;
+        let wallet = self.config.wallet.clone()
+            .context("try_reveal_weights requires wallet")?;
 
         self.weight_tasks.spawn(async move {
             match setter
@@ -1614,9 +1705,14 @@ impl ValidatorLoop {
     }
 
     async fn update_weights(&mut self) -> Result<()> {
+        let chain_client = self.config.chain_client.as_ref()
+            .context("update_weights requires chain_client")?;
+        let wallet = self.config.wallet.as_ref()
+            .context("update_weights requires wallet")?;
+
         let blocks_since = self
             .weights_setter
-            .blocks_since_last_update(&self.config.chain_client, self.config.user_uid)
+            .blocks_since_last_update(chain_client, self.config.user_uid)
             .await?;
 
         if blocks_since < WEIGHT_RATE_LIMIT_BLOCKS {
@@ -1649,7 +1745,7 @@ impl ValidatorLoop {
         let owner_uid = match self
             .config
             .metagraph
-            .query_subnet_owner(&self.config.chain_client)
+            .query_subnet_owner(chain_client)
             .await
         {
             Ok(uid) => uid,
@@ -1672,7 +1768,7 @@ impl ValidatorLoop {
             .collect();
         let version_key = WEIGHTS_VERSION as u64;
 
-        let hotkey_account = self.config.wallet.hotkey_account_id()?;
+        let hotkey_account = wallet.hotkey_account_id()?;
         let hash = WeightsSetter::compute_commit_hash(
             &hotkey_account,
             self.config.netuid,
@@ -1683,8 +1779,10 @@ impl ValidatorLoop {
         );
 
         let setter = self.weights_setter.clone();
-        let client = self.config.chain_client.clone();
-        let wallet = self.config.wallet.clone();
+        let client = self.config.chain_client.clone()
+            .context("update_weights requires chain_client")?;
+        let wallet = self.config.wallet.clone()
+            .context("update_weights requires wallet")?;
 
         self.weight_tasks.spawn(async move {
             match setter.commit_weights(&client, &wallet, &hash).await {

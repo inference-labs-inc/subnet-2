@@ -41,18 +41,37 @@ async fn main() -> Result<()> {
         let _update_handle = sn2_chain::auto_update::spawn_update_loop("sn2-validator");
     }
 
-    info!(
-        netuid = cli.netuid,
-        network = %cli.network,
-        "starting sn2-validator"
-    );
+    let config = if cli.loopback {
+        info!(
+            netuid = cli.netuid,
+            miner_address = %cli.miner_address,
+            "starting sn2-validator in loopback mode (no chain interaction)"
+        );
 
-    let config = config::ValidatorConfig::from_cli(&cli)
-        .await
-        .context("building validator config")?;
+        let (ip, port) = parse_miner_address(&cli.miner_address)?;
+        config::ValidatorConfig::from_cli_loopback(&cli, &ip, port)
+    } else {
+        info!(
+            netuid = cli.netuid,
+            network = %cli.network,
+            "starting sn2-validator"
+        );
+
+        config::ValidatorConfig::from_cli(&cli)
+            .await
+            .context("building validator config")?
+    };
 
     let mut validator = validator_loop::ValidatorLoop::new(config)
         .await
         .context("building validator loop")?;
     validator.run().await
+}
+
+fn parse_miner_address(addr: &str) -> Result<(String, u16)> {
+    let parts: Vec<&str> = addr.rsplitn(2, ':').collect();
+    anyhow::ensure!(parts.len() == 2, "miner-address must be ip:port, got: {addr}");
+    let port: u16 = parts[0].parse().context("parsing miner port")?;
+    let ip = parts[1].to_string();
+    Ok((ip, port))
 }
