@@ -110,13 +110,14 @@ impl DSperseClient {
                 .prove(&circuit_path, &witness_bytes)
                 .map_err(|e| anyhow::anyhow!("proof generation: {e}"))?;
 
-            let num_model_inputs = params
-                .as_ref()
-                .map(|p| p.effective_input_dims())
-                .unwrap_or(0);
-            let computed_outputs = backend
-                .extract_outputs(&witness_bytes, num_model_inputs)
-                .map_err(|e| anyhow::anyhow!("extracting outputs: {e}"))?;
+            let computed_outputs = if let Some(ref p) = params {
+                let num_model_inputs = p.effective_input_dims();
+                backend
+                    .extract_outputs(&witness_bytes, num_model_inputs)
+                    .map_err(|e| anyhow::anyhow!("extracting outputs: {e}"))?
+            } else {
+                Vec::new()
+            };
 
             info!(
                 witness_size = witness_bytes.len(),
@@ -161,6 +162,10 @@ impl DSperseClient {
             let inputs_bytes = rmp_serde::to_vec_named(&inputs_clone)?;
             let backend = dsperse::backend::jstprove::JstproveBackend::new();
 
+            let params = backend
+                .load_params(&circuit_path)
+                .map_err(|e| anyhow::anyhow!("loading circuit params: {e}"))?;
+
             let witness_bytes = backend
                 .witness(&circuit_path, &inputs_bytes, &[])
                 .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?;
@@ -169,9 +174,19 @@ impl DSperseClient {
                 .prove(&circuit_path, &witness_bytes)
                 .map_err(|e| anyhow::anyhow!("proof generation: {e}"))?;
 
+            let computed_outputs = if let Some(ref p) = params {
+                let num_model_inputs = p.effective_input_dims();
+                backend
+                    .extract_outputs(&witness_bytes, num_model_inputs)
+                    .map_err(|e| anyhow::anyhow!("extracting outputs: {e}"))?
+            } else {
+                Vec::new()
+            };
+
             Ok(serde_json::json!({
                 "proof": hex::encode(&proof_bytes),
                 "witness": hex::encode(&witness_bytes),
+                "computed_outputs": computed_outputs,
             }))
         })
         .await

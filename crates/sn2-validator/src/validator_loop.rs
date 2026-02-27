@@ -452,7 +452,26 @@ impl ValidatorLoop {
                 ) {
                     Ok(true) => {
                         info!(run_uid = %run_uid, "incremental run complete after ONNX slice");
-                        self.run_manager.remove_run(run_uid);
+                        let active_run = self.run_manager.remove_run(run_uid);
+                        let notify_circuit_id = active_run
+                            .as_ref()
+                            .map(|r| r.circuit_id.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        self.relay_set_request_result(
+                            run_uid,
+                            serde_json::json!({"run_uid": run_uid, "status": "complete"}),
+                        )
+                        .await;
+                        self.relay_send_notification(
+                            "subnet-2.batch_completed",
+                            serde_json::json!({
+                                "run_uid": run_uid,
+                                "circuit_id": notify_circuit_id,
+                                "status": "completed",
+                            }),
+                        )
+                        .await;
                         return;
                     }
                     Ok(false) => continue,

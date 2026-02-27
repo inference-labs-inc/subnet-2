@@ -227,6 +227,8 @@ async fn run_loopback(cli: Cli) -> Result<()> {
         cli.storage_bucket.as_deref(),
     ));
 
+    let circuit_monitor = circuit_mgr.clone().start_monitor();
+
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_mgr);
     let handlers = std::sync::Arc::new(handlers);
 
@@ -248,6 +250,9 @@ async fn run_loopback(cli: Cli) -> Result<()> {
     tokio::select! {
         r = http_handle => {
             r?.context("HTTP server")?;
+        }
+        r = circuit_monitor => {
+            r.context("circuit monitor")?;
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");
