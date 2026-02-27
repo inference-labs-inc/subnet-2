@@ -31,6 +31,8 @@ impl MinerHandlers {
 
         Ok(json!({
             "query_output": result.get("proof").and_then(|v| v.as_str()).unwrap_or(""),
+            "witness": result.get("witness").and_then(|v| v.as_str()).unwrap_or(""),
+            "computed_outputs": result.get("computed_outputs").cloned().unwrap_or(json!([])),
         }))
     }
 

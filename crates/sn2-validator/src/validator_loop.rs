@@ -141,7 +141,8 @@ impl ValidatorLoop {
 
         let pipeline = RequestPipeline::new();
         let response_processor = ResponseProcessor::new();
-        let circuit_store = CircuitStore::new(config.circuit_api_url.as_deref(), config.loopback);
+        let circuit_store_loopback = config.loopback && config.circuit_api_url.is_none();
+        let circuit_store = CircuitStore::new(config.circuit_api_url.as_deref(), circuit_store_loopback);
         let run_manager = IncrementalRunManager::new();
 
         let now = Instant::now();
