@@ -18,11 +18,13 @@ pub struct CircuitStore {
     cache_dir: PathBuf,
     http: reqwest::Client,
     loopback: bool,
+    api_url_overridden: bool,
 }
 
 impl CircuitStore {
     pub fn new(api_url_override: Option<&str>, loopback: bool) -> Self {
         let cache_dir = shellexpand::tilde(CIRCUIT_CACHE_DIR).to_string();
+        let api_url_overridden = api_url_override.is_some();
         Self {
             circuits: HashMap::new(),
             api_url: api_url_override.unwrap_or(CIRCUIT_API_URL).to_string(),
@@ -32,11 +34,12 @@ impl CircuitStore {
                 .build()
                 .unwrap_or_default(),
             loopback,
+            api_url_overridden,
         }
     }
 
     pub async fn load_circuits(&mut self) -> Result<()> {
-        if self.loopback {
+        if self.loopback && !self.api_url_overridden {
             info!("loopback mode: loading all circuits from local cache");
             self.load_from_cache(&std::collections::HashSet::new());
             info!(count = self.circuits.len(), "circuits loaded");
@@ -114,7 +117,7 @@ impl CircuitStore {
         Ok(circuit)
     }
 
-    pub async fn refresh_circuits(&mut self) -> Result<()> {
+    pub async fn refresh_circuits(&mut self) -> Result<Vec<String>> {
         let api_circuits = self.fetch_circuits_from_api().await?;
         let active_ids: std::collections::HashSet<String> = api_circuits
             .iter()
@@ -138,6 +141,11 @@ impl CircuitStore {
             }
         }
 
+        if active_ids.is_empty() {
+            warn!("circuit API returned empty active set, skipping removal");
+            return Ok(Vec::new());
+        }
+
         let removed: Vec<String> = self
             .circuits
             .keys()
@@ -150,7 +158,7 @@ impl CircuitStore {
             self.circuits.remove(id);
         }
 
-        Ok(())
+        Ok(removed)
     }
 
     pub fn get_benchmark_circuits(&self) -> Vec<Circuit> {

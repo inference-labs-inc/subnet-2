@@ -1241,6 +1241,11 @@ impl ValidatorLoop {
 
         let proof_str = response.proof_content.as_ref().and_then(|v| v.as_str());
 
+        if self.run_manager.is_evicted(&run_uid) {
+            warn!(run_uid = %run_uid, "dropping late dslice response for evicted run");
+            return;
+        }
+
         if !self.run_manager.has_run(&run_uid) {
             let (cid, cname) = response
                 .circuit
@@ -1514,8 +1519,30 @@ impl ValidatorLoop {
         if now.duration_since(self.last_circuit_refresh)
             > Duration::from_secs(CircuitStore::REFRESH_INTERVAL)
         {
-            if let Err(e) = self.circuit_store.refresh_circuits().await {
-                warn!(error = %e, "refreshing circuits");
+            match self.circuit_store.refresh_circuits().await {
+                Ok(removed) => {
+                    for circuit_id in &removed {
+                        let evicted = self.run_manager.evict_by_circuit(circuit_id);
+                        if !evicted.is_empty() {
+                            info!(circuit = %circuit_id, runs = ?evicted, "evicted in-flight runs for deactivated circuit");
+                            for run_id in &evicted {
+                                self.relay_remove_pending(run_id).await;
+                            }
+                        }
+                        let before = self.api_dslice_queue.len() + self.stacked_dslice_queue.len();
+                        self.api_dslice_queue
+                            .retain(|r| r.circuit.id != *circuit_id);
+                        self.stacked_dslice_queue
+                            .retain(|r| r.circuit.id != *circuit_id);
+                        let after = self.api_dslice_queue.len() + self.stacked_dslice_queue.len();
+                        if before != after {
+                            info!(circuit = %circuit_id, drained = before - after, "drained queued dslice requests for deactivated circuit");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "refreshing circuits");
+                }
             }
             self.last_circuit_refresh = now;
         }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::tensor_json::{arrayd_to_json, json_to_arrayd};
@@ -42,6 +42,7 @@ pub struct NextSliceInfo {
 #[derive(Default)]
 pub struct IncrementalRunManager {
     runs: HashMap<String, ActiveRun>,
+    evicted: HashSet<String>,
 }
 
 impl IncrementalRunManager {
@@ -83,6 +84,10 @@ impl IncrementalRunManager {
 
     pub fn has_run(&self, run_uid: &str) -> bool {
         self.runs.contains_key(run_uid)
+    }
+
+    pub fn is_evicted(&self, run_uid: &str) -> bool {
+        self.evicted.contains(run_uid)
     }
 
     pub fn get_circuit_id(&self, run_uid: &str) -> Option<&str> {
@@ -186,6 +191,20 @@ impl IncrementalRunManager {
             .any(|r| r.run_source == RunSource::Benchmark)
     }
 
+    pub fn evict_by_circuit(&mut self, circuit_id: &str) -> Vec<String> {
+        let to_remove: Vec<String> = self
+            .runs
+            .iter()
+            .filter(|(_, run)| run.circuit_id == circuit_id)
+            .map(|(uid, _)| uid.clone())
+            .collect();
+        for uid in &to_remove {
+            self.runs.remove(uid);
+            self.evicted.insert(uid.clone());
+        }
+        to_remove
+    }
+
     pub fn gc_stale(&mut self, max_age: Duration) -> Vec<String> {
         let now = Instant::now();
         let stale: Vec<String> = self
@@ -200,6 +219,7 @@ impl IncrementalRunManager {
         for uid in &stale {
             self.runs.remove(uid);
         }
+        self.evicted.clear();
         stale
     }
 }
