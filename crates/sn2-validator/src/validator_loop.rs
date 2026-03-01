@@ -1411,10 +1411,7 @@ impl ValidatorLoop {
         }
     }
 
-    async fn report_dsperse_completion(
-        &self,
-        run: &crate::incremental_runner::ActiveRun,
-    ) {
+    async fn report_dsperse_completion(&self, run: &crate::incremental_runner::ActiveRun) {
         let reporter = match &self.stats_reporter {
             Some(r) => r,
             None => return,

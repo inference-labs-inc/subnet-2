@@ -72,13 +72,8 @@ impl StatsReporter {
         Ok(base64::engine::general_purpose::STANDARD.encode(&sig_bytes))
     }
 
-    pub fn record_response(
-        &mut self,
-        response: MinerResponse,
-        uid_hotkeys: &HashMap<u16, String>,
-    ) {
-        self.recent_responses
-            .push((response, uid_hotkeys.clone()));
+    pub fn record_response(&mut self, response: MinerResponse, uid_hotkeys: &HashMap<u16, String>) {
+        self.recent_responses.push((response, uid_hotkeys.clone()));
     }
 
     pub fn sample_health(&mut self, active_tasks: usize, queue_size: usize) {
@@ -98,7 +93,8 @@ impl StatsReporter {
     ) {
         let now = Instant::now();
 
-        if now.duration_since(self.last_response_log) >= std::time::Duration::from_secs(LOG_INTERVAL_SECS)
+        if now.duration_since(self.last_response_log)
+            >= std::time::Duration::from_secs(LOG_INTERVAL_SECS)
             && !self.recent_responses.is_empty()
         {
             let responses = std::mem::take(&mut self.recent_responses);
@@ -124,9 +120,7 @@ impl StatsReporter {
                         .proof_system
                         .map(|ps| ps.to_string())
                         .unwrap_or_else(|| "Unknown".to_string());
-                    let request_type = r
-                        .request_type
-                        .map(|rt| rt.to_string());
+                    let request_type = r.request_type.map(|rt| rt.to_string());
                     serde_json::json!({
                         "miner_key": miner_key,
                         "miner_uid": r.uid,
@@ -176,14 +170,8 @@ impl StatsReporter {
             let count = samples.len() as f64;
 
             let avg_rss_mb = samples.iter().map(|s| s.rss_mb).sum::<f64>() / count;
-            let min_rss_mb = samples
-                .iter()
-                .map(|s| s.rss_mb)
-                .fold(f64::MAX, f64::min);
-            let max_rss_mb = samples
-                .iter()
-                .map(|s| s.rss_mb)
-                .fold(0.0f64, f64::max);
+            let min_rss_mb = samples.iter().map(|s| s.rss_mb).fold(f64::MAX, f64::min);
+            let max_rss_mb = samples.iter().map(|s| s.rss_mb).fold(0.0f64, f64::max);
             let avg_active_tasks = samples.iter().map(|s| s.active_tasks).sum::<f64>() / count;
             let avg_queue_size = samples.iter().map(|s| s.queue_size).sum::<f64>() / count;
 
@@ -226,10 +214,7 @@ impl StatsReporter {
             .collect();
 
         let circuit_slices = report.slices.iter().filter(|s| s.success).count();
-        let onnx_slices = report
-            .total_slices
-            .saturating_sub(circuit_slices)
-            .max(0);
+        let onnx_slices = report.total_slices.saturating_sub(circuit_slices).max(0);
 
         let body = serde_json::json!({
             "run_uid": report.run_uid,
@@ -276,7 +261,6 @@ impl StatsReporter {
         }
         Ok(())
     }
-
 }
 
 fn get_rss_mb() -> f64 {
