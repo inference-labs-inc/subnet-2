@@ -86,6 +86,25 @@ impl IncrementalRunManager {
         self.runs.contains_key(run_uid)
     }
 
+    pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize) {
+        let run = match self.runs.get(run_uid) {
+            Some(r) => r,
+            None => return (0, 0),
+        };
+        let inc = match run.incremental.as_ref() {
+            Some(i) => i,
+            None => return (0, 0),
+        };
+        let meta = inc.model_meta();
+        let total_slices = meta.slices.len();
+        let total_tiles: usize = meta
+            .slices
+            .iter()
+            .map(|s| s.tiling.as_ref().map(|t| t.num_tiles).unwrap_or(1))
+            .sum();
+        (total_slices, total_tiles)
+    }
+
     pub fn is_evicted(&self, run_uid: &str) -> bool {
         self.evicted.contains(run_uid)
     }

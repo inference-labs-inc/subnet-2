@@ -22,6 +22,7 @@ use crate::relay::{DsperseSubmission, RelayManager, RwrSubmission};
 use crate::request_pipeline::RequestPipeline;
 use crate::response_processor::ResponseProcessor;
 use crate::scoring::ScoreManager;
+use crate::stats_reporter::{DsperseRunReport, DsperseSliceReport, StatsReporter};
 use crate::{metrics_server, metrics_server as metrics};
 
 enum WeightTaskResult {
@@ -95,6 +96,7 @@ pub struct ValidatorLoop {
     pending_reveal: Option<PendingReveal>,
     weight_tasks: JoinSet<WeightTaskResult>,
     dsperse_benchmark_backoff_until: Instant,
+    stats_reporter: Option<StatsReporter>,
 }
 
 impl ValidatorLoop {
@@ -119,9 +121,9 @@ impl ValidatorLoop {
         let (dsperse_tx, dsperse_rx) = tokio::sync::mpsc::channel::<DsperseSubmission>(256);
         let (rwr_tx, rwr_rx) = tokio::sync::mpsc::channel::<RwrSubmission>(256);
 
-        let (miner_client, relay, proof_uploader) = if config.loopback {
+        let (miner_client, relay, proof_uploader, stats_reporter) = if config.loopback {
             let client = MinerQueryClient::new_unsigned()?;
-            (Arc::new(RwLock::new(client)), None, None)
+            (Arc::new(RwLock::new(client)), None, None, None)
         } else {
             let wallet = config
                 .wallet
@@ -135,8 +137,25 @@ impl ValidatorLoop {
                 dsperse_tx.clone(),
                 rwr_tx.clone(),
             );
-            let uploader = Arc::new(ProofUploader::new(wallet, config.proof_api_url.clone()));
-            (Arc::new(RwLock::new(client)), Some(relay), Some(uploader))
+            let uploader = Arc::new(ProofUploader::new(
+                wallet.clone(),
+                config.proof_api_url.clone(),
+            ));
+            let reporter = if config.disable_metric_logging {
+                None
+            } else {
+                Some(StatsReporter::new(
+                    wallet,
+                    config.proof_api_url.clone(),
+                    config.user_uid,
+                ))
+            };
+            (
+                Arc::new(RwLock::new(client)),
+                Some(relay),
+                Some(uploader),
+                reporter,
+            )
         };
 
         let pipeline = RequestPipeline::new();
@@ -184,6 +203,7 @@ impl ValidatorLoop {
             pending_reveal: None,
             weight_tasks: JoinSet::new(),
             dsperse_benchmark_backoff_until: now,
+            stats_reporter,
         })
     }
 
@@ -374,12 +394,19 @@ impl ValidatorLoop {
             Some(incremental),
         );
 
+        let (total_slices, total_tiles) = self.run_manager.slice_tile_counts(&run_uid);
+
         self.relay_register_pending(&run_uid).await;
 
         if let Some(req_id) = &submission.request_id {
             self.relay_send_response(
                 req_id,
-                serde_json::json!({"run_uid": run_uid, "status": "started"}),
+                serde_json::json!({
+                    "run_uid": run_uid,
+                    "status": "started",
+                    "total_slices": total_slices,
+                    "total_tiles": total_tiles,
+                }),
             )
             .await;
         }
@@ -455,6 +482,9 @@ impl ValidatorLoop {
                     Ok(true) => {
                         info!(run_uid = %run_uid, "incremental run complete after ONNX slice");
                         let active_run = self.run_manager.remove_run(run_uid);
+                        if let Some(ref run) = active_run {
+                            self.report_dsperse_completion(run).await;
+                        }
                         let notify_circuit_id = active_run
                             .as_ref()
                             .map(|r| r.circuit_id.as_str())
@@ -1148,6 +1178,12 @@ impl ValidatorLoop {
             TaskOutcome::Failure(ref e) => Some(e.clone()),
         };
 
+        if let TaskOutcome::Success(ref response) = result.outcome {
+            if let Some(reporter) = &mut self.stats_reporter {
+                reporter.record_response(response.as_ref().clone(), &self.uid_hotkeys);
+            }
+        }
+
         if let Some(reason) = failed {
             self.handle_failure(
                 uid,
@@ -1296,6 +1332,10 @@ impl ValidatorLoop {
                     let artifacts = self.run_manager.take_artifacts(&run_uid);
                     let active_run = self.run_manager.remove_run(&run_uid);
 
+                    if let Some(ref run) = active_run {
+                        self.report_dsperse_completion(run).await;
+                    }
+
                     if !artifacts.is_empty() {
                         if let Some(uploader) = &self.proof_uploader {
                             let uploader = Arc::clone(uploader);
@@ -1369,6 +1409,54 @@ impl ValidatorLoop {
                 self.enqueue_next_dslice(run_uid, &circuit).await;
             }
         }
+    }
+
+    async fn report_dsperse_completion(
+        &self,
+        run: &crate::incremental_runner::ActiveRun,
+    ) {
+        let reporter = match &self.stats_reporter {
+            Some(r) => r,
+            None => return,
+        };
+
+        let total_run_time_sec = run.started_at.elapsed().as_secs_f64();
+        let mut failed_count = 0usize;
+        let slice_reports: Vec<DsperseSliceReport> = run
+            .artifacts
+            .iter()
+            .map(|a| {
+                let success = a.proof_hex.is_some();
+                if !success {
+                    failed_count += 1;
+                }
+                DsperseSliceReport {
+                    slice_num: a.slice_num.clone(),
+                    proof_system: a
+                        .proof_system
+                        .map(|ps| ps.to_string())
+                        .unwrap_or_else(|| "JSTPROVE".to_string()),
+                    response_time_sec: a.response_time,
+                    verification_time_sec: a.verification_time,
+                    success,
+                }
+            })
+            .collect();
+
+        let all_successful = failed_count == 0 && !slice_reports.is_empty();
+
+        reporter
+            .report_dsperse_run(DsperseRunReport {
+                run_uid: run.run_uid.clone(),
+                circuit_id: run.circuit_id.clone(),
+                circuit_name: run.circuit_name.clone(),
+                total_slices: slice_reports.len(),
+                total_run_time_sec,
+                all_successful,
+                failed_slice_count: failed_count,
+                slices: slice_reports,
+            })
+            .await;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1577,11 +1665,15 @@ impl ValidatorLoop {
         }
 
         if now.duration_since(self.last_health_log) > Duration::from_secs(15) {
+            let active_tasks = self.tasks.len();
+            let queue_size = self.rwr_queue.len()
+                + self.api_dslice_queue.len()
+                + self.stacked_dslice_queue.len();
             let queryable_count = self.get_queryable_neurons().len();
             let benchmark_count = self.circuit_store.get_benchmark_circuits().len();
             let dsperse_count = self.circuit_store.get_dsperse_circuits().len();
             info!(
-                active_tasks = self.tasks.len(),
+                active_tasks = active_tasks,
                 rwr_queue = self.rwr_queue.len(),
                 api_dslice_queue = self.api_dslice_queue.len(),
                 stacked_dslice_queue = self.stacked_dslice_queue.len(),
@@ -1593,7 +1685,20 @@ impl ValidatorLoop {
                 benchmark_in_flight = self.benchmark_in_flight,
                 "health"
             );
+            if let Some(reporter) = &mut self.stats_reporter {
+                reporter.sample_health(active_tasks, queue_size);
+            }
             self.last_health_log = now;
+        }
+
+        if let Some(reporter) = &mut self.stats_reporter {
+            reporter
+                .flush_if_ready(
+                    self.config.metagraph.block,
+                    self.config.metagraph.n,
+                    self.score_manager.scores_snapshot(),
+                )
+                .await;
         }
 
         Ok(())

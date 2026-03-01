@@ -57,6 +57,9 @@ pub struct Cli {
     #[arg(long)]
     pub circuit_api_url: Option<String>,
 
+    #[arg(long, default_value_t = false)]
+    pub disable_metric_logging: bool,
+
     #[arg(
         long,
         default_value_t = false,

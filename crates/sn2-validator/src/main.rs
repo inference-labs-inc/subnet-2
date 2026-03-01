@@ -13,6 +13,7 @@ mod relay;
 mod request_pipeline;
 mod response_processor;
 mod scoring;
+mod stats_reporter;
 mod tensor_json;
 mod validator_loop;
 

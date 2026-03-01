@@ -26,6 +26,7 @@ pub struct ValidatorConfig {
     pub max_benchmark_concurrent: Option<usize>,
     pub target_uids: Option<HashSet<u16>>,
     pub circuit_api_url: Option<String>,
+    pub disable_metric_logging: bool,
     pub loopback: bool,
 }
 
@@ -101,6 +102,7 @@ impl ValidatorConfig {
                 Some(cli.target_uid.iter().copied().collect())
             },
             circuit_api_url: cli.circuit_api_url.clone(),
+            disable_metric_logging: cli.disable_metric_logging,
             loopback: false,
         })
     }
@@ -151,6 +153,7 @@ impl ValidatorConfig {
             max_benchmark_concurrent: cli.max_benchmark_concurrent,
             target_uids: Some([0].into_iter().collect()),
             circuit_api_url: cli.circuit_api_url.clone(),
+            disable_metric_logging: true,
             loopback: true,
         }
     }

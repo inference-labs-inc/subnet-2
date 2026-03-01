@@ -107,6 +107,10 @@ impl ScoreManager {
         }
     }
 
+    pub fn scores_snapshot(&self) -> &HashMap<u16, f64> {
+        &self.scores
+    }
+
     pub fn save(&self) -> Result<()> {
         let json = serde_json::to_string_pretty(&self.scores)?;
         std::fs::write(&self.persistence_path, json)

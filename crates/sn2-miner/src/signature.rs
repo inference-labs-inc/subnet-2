@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use sp_core::crypto::Ss58Codec;
 use sp_core::sr25519;
 use sp_core::Pair;
 
@@ -13,19 +14,16 @@ pub fn verify_request_signature(
     let message = sn2_types::signing_message(nonce, validator_hotkey, payload_hash);
     let message_bytes = message.as_bytes();
 
-    let sig_bytes = hex::decode(signature_hex).context("decoding signature hex")?;
+    let sig_hex = signature_hex.trim_start_matches("0x");
+    let sig_bytes = hex::decode(sig_hex).context("decoding signature hex")?;
     if sig_bytes.len() != 64 {
         bail!("signature must be 64 bytes, got {}", sig_bytes.len());
     }
     let mut sig_arr = [0u8; 64];
     sig_arr.copy_from_slice(&sig_bytes);
     let sig = sr25519::Signature::from_raw(sig_arr);
-    let pubkey = sr25519::Public::from_raw(
-        hex::decode(validator_hotkey.trim_start_matches("0x"))
-            .context("decoding hotkey hex")?
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("hotkey must be 32 bytes"))?,
-    );
+    let pubkey = sr25519::Public::from_ss58check(validator_hotkey)
+        .map_err(|e| anyhow::anyhow!("invalid SS58 hotkey address: {e:?}"))?;
 
     if !sr25519::Pair::verify(&sig, message_bytes, &pubkey) {
         return Ok(false);
