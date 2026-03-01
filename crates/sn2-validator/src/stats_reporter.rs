@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::Result;
 use base64::Engine;
 use sn2_chain::Wallet;
 use sn2_types::MinerResponse;
@@ -67,11 +66,6 @@ impl StatsReporter {
         }
     }
 
-    fn sign_body(&self, body: &[u8]) -> Result<String> {
-        let sig_bytes = self.wallet.sign_hotkey(body)?;
-        Ok(base64::engine::general_purpose::STANDARD.encode(&sig_bytes))
-    }
-
     pub fn record_response(
         &mut self,
         response: &MinerResponse,
@@ -112,12 +106,7 @@ impl StatsReporter {
         });
     }
 
-    pub async fn flush_if_ready(
-        &mut self,
-        block: u64,
-        _metagraph_n: u16,
-        scores: &HashMap<u16, f64>,
-    ) {
+    pub fn flush_if_ready(&mut self, block: u64, _metagraph_n: u16, scores: &HashMap<u16, f64>) {
         let now = Instant::now();
 
         if now.duration_since(self.last_response_log)
@@ -145,11 +134,11 @@ impl StatsReporter {
                 "scores": scores_map,
             });
 
-            if let Err(e) = self.post("/statistics/log/", &body).await {
-                warn!(error = %e, "responses log POST failed");
-            } else {
-                info!(count, "submitted response stats");
-            }
+            self.spawn_post("/statistics/log/", body, move |ok| {
+                if ok {
+                    info!(count, "submitted response stats");
+                }
+            });
         }
 
         if now.duration_since(self.last_health_flush)
@@ -180,13 +169,11 @@ impl StatsReporter {
                 "avg_queue_size": avg_queue_size,
             });
 
-            if let Err(e) = self.post("/statistics/health/log/", &body).await {
-                warn!(error = %e, "health metrics POST failed");
-            }
+            self.spawn_post("/statistics/health/log/", body, |_| {});
         }
     }
 
-    pub async fn report_dsperse_run(&self, report: DsperseRunReport) {
+    pub fn report_dsperse_run(&self, report: DsperseRunReport) {
         let slices: Vec<serde_json::Value> = report
             .slices
             .iter()
@@ -204,9 +191,10 @@ impl StatsReporter {
             })
             .collect();
 
-        let circuit_slices = report.slices.iter().filter(|s| s.success).count();
+        let circuit_slices = report.slices.len();
         let onnx_slices = report.total_slices.saturating_sub(circuit_slices);
 
+        let run_uid = report.run_uid.clone();
         let body = serde_json::json!({
             "run_uid": report.run_uid,
             "validator_key": self.wallet.hotkey_ss58(),
@@ -225,32 +213,62 @@ impl StatsReporter {
             "slices": slices,
         });
 
-        if let Err(e) = self.post("/statistics/dsperse/log/", &body).await {
-            warn!(run_uid = %report.run_uid, error = %e, "dsperse run log POST failed");
-        } else {
-            info!(run_uid = %report.run_uid, "submitted dsperse run stats");
-        }
+        self.spawn_post("/statistics/dsperse/log/", body, move |ok| {
+            if ok {
+                info!(run_uid = %run_uid, "submitted dsperse run stats");
+            }
+        });
     }
 
-    async fn post(&self, path: &str, body: &serde_json::Value) -> Result<()> {
-        let body_bytes = serde_json::to_vec(body)?;
-        let sig = self.sign_body(&body_bytes)?;
+    fn spawn_post(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        on_done: impl FnOnce(bool) + Send + 'static,
+    ) {
+        let http = self.http.clone();
+        let wallet = Arc::clone(&self.wallet);
+        let url = format!("{}{}", self.api_base_url, path);
+        let path_owned = path.to_string();
 
-        let resp = self
-            .http
-            .post(format!("{}{}", self.api_base_url, path))
-            .header("Content-Type", "application/json")
-            .header("X-Request-Signature", sig)
-            .body(body_bytes)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("{path} returned {status}: {text}");
-        }
-        Ok(())
+        tokio::spawn(async move {
+            let body_bytes = match serde_json::to_vec(&body) {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!(error = %e, path = %path_owned, "stats serialization failed");
+                    on_done(false);
+                    return;
+                }
+            };
+            let sig = match wallet.sign_hotkey(&body_bytes) {
+                Ok(s) => base64::engine::general_purpose::STANDARD.encode(&s),
+                Err(e) => {
+                    warn!(error = %e, path = %path_owned, "stats signing failed");
+                    on_done(false);
+                    return;
+                }
+            };
+            match http
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("X-Request-Signature", &sig)
+                .body(body_bytes)
+                .send()
+                .await
+            {
+                Ok(resp) if !resp.status().is_success() => {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    warn!(path = %path_owned, %status, "stats POST rejected: {text}");
+                    on_done(false);
+                }
+                Err(e) => {
+                    warn!(error = %e, path = %path_owned, "stats POST failed");
+                    on_done(false);
+                }
+                Ok(_) => on_done(true),
+            }
+        });
     }
 }
 

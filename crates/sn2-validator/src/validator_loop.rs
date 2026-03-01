@@ -483,7 +483,7 @@ impl ValidatorLoop {
                         info!(run_uid = %run_uid, "incremental run complete after ONNX slice");
                         let active_run = self.run_manager.remove_run(run_uid);
                         if let Some(ref run) = active_run {
-                            self.report_dsperse_completion(run).await;
+                            self.report_dsperse_completion(run);
                         }
                         let notify_circuit_id = active_run
                             .as_ref()
@@ -1333,7 +1333,7 @@ impl ValidatorLoop {
                     let active_run = self.run_manager.remove_run(&run_uid);
 
                     if let Some(ref run) = active_run {
-                        self.report_dsperse_completion(run).await;
+                        self.report_dsperse_completion(run);
                     }
 
                     if !artifacts.is_empty() {
@@ -1411,7 +1411,7 @@ impl ValidatorLoop {
         }
     }
 
-    async fn report_dsperse_completion(&self, run: &crate::incremental_runner::ActiveRun) {
+    fn report_dsperse_completion(&self, run: &crate::incremental_runner::ActiveRun) {
         let reporter = match &self.stats_reporter {
             Some(r) => r,
             None => return,
@@ -1442,18 +1442,22 @@ impl ValidatorLoop {
 
         let all_successful = failed_count == 0 && !slice_reports.is_empty();
 
-        reporter
-            .report_dsperse_run(DsperseRunReport {
-                run_uid: run.run_uid.clone(),
-                circuit_id: run.circuit_id.clone(),
-                circuit_name: run.circuit_name.clone(),
-                total_slices: slice_reports.len(),
-                total_run_time_sec,
-                all_successful,
-                failed_slice_count: failed_count,
-                slices: slice_reports,
-            })
-            .await;
+        let total_slices = run
+            .incremental
+            .as_ref()
+            .map(|i| i.model_meta().slices.len())
+            .unwrap_or(slice_reports.len());
+
+        reporter.report_dsperse_run(DsperseRunReport {
+            run_uid: run.run_uid.clone(),
+            circuit_id: run.circuit_id.clone(),
+            circuit_name: run.circuit_name.clone(),
+            total_slices,
+            total_run_time_sec,
+            all_successful,
+            failed_slice_count: failed_count,
+            slices: slice_reports,
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1689,13 +1693,11 @@ impl ValidatorLoop {
         }
 
         if let Some(reporter) = &mut self.stats_reporter {
-            reporter
-                .flush_if_ready(
-                    self.config.metagraph.block,
-                    self.config.metagraph.n,
-                    self.score_manager.scores_snapshot(),
-                )
-                .await;
+            reporter.flush_if_ready(
+                self.config.metagraph.block,
+                self.config.metagraph.n,
+                self.score_manager.scores_snapshot(),
+            );
         }
 
         Ok(())
