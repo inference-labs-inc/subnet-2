@@ -189,13 +189,6 @@ impl IncrementalRunManager {
         }
     }
 
-    pub fn take_artifacts(&mut self, run_uid: &str) -> Vec<SliceArtifact> {
-        self.runs
-            .get_mut(run_uid)
-            .map(|r| std::mem::take(&mut r.artifacts))
-            .unwrap_or_default()
-    }
-
     pub fn remove_run(&mut self, run_uid: &str) -> Option<ActiveRun> {
         self.runs.remove(run_uid)
     }

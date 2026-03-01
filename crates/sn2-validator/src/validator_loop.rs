@@ -1329,12 +1329,16 @@ impl ValidatorLoop {
                     info!(run_uid = %run_uid, "incremental run complete");
 
                     let final_output = self.run_manager.final_output_json(&run_uid);
-                    let artifacts = self.run_manager.take_artifacts(&run_uid);
-                    let active_run = self.run_manager.remove_run(&run_uid);
+                    let mut active_run = self.run_manager.remove_run(&run_uid);
 
                     if let Some(ref run) = active_run {
                         self.report_dsperse_completion(run);
                     }
+
+                    let artifacts = active_run
+                        .as_mut()
+                        .map(|r| std::mem::take(&mut r.artifacts))
+                        .unwrap_or_default();
 
                     if !artifacts.is_empty() {
                         if let Some(uploader) = &self.proof_uploader {
