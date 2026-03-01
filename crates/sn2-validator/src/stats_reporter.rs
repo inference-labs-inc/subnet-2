@@ -17,7 +17,7 @@ pub struct StatsReporter {
     http: reqwest::Client,
     wallet: Arc<Wallet>,
     api_base_url: String,
-    recent_responses: Vec<(MinerResponse, HashMap<u16, String>)>,
+    recent_responses: Vec<serde_json::Value>,
     last_response_log: Instant,
     health_samples: Vec<HealthSample>,
     last_health_flush: Instant,
@@ -72,8 +72,35 @@ impl StatsReporter {
         Ok(base64::engine::general_purpose::STANDARD.encode(&sig_bytes))
     }
 
-    pub fn record_response(&mut self, response: MinerResponse, uid_hotkeys: &HashMap<u16, String>) {
-        self.recent_responses.push((response, uid_hotkeys.clone()));
+    pub fn record_response(
+        &mut self,
+        response: &MinerResponse,
+        uid_hotkeys: &HashMap<u16, String>,
+    ) {
+        let miner_key = uid_hotkeys.get(&response.uid).cloned().unwrap_or_default();
+        let proof_model = response
+            .circuit
+            .as_ref()
+            .map(|c| c.metadata.name.as_str())
+            .unwrap_or("Unknown");
+        let proof_system = response
+            .proof_system
+            .map(|ps| ps.to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+        let request_type = response.request_type.map(|rt| rt.to_string());
+        self.recent_responses.push(serde_json::json!({
+            "miner_key": miner_key,
+            "miner_uid": response.uid,
+            "proof_model": proof_model,
+            "proof_system": proof_system,
+            "proof_size": response.proof_size,
+            "response_duration": response.response_time,
+            "is_verified": response.verification_result,
+            "external_request_hash": response.external_request_hash,
+            "request_type": request_type,
+            "error": response.error,
+            "save": response.save,
+        }));
     }
 
     pub fn sample_health(&mut self, active_tasks: usize, queue_size: usize) {
@@ -97,45 +124,10 @@ impl StatsReporter {
             >= std::time::Duration::from_secs(LOG_INTERVAL_SECS)
             && !self.recent_responses.is_empty()
         {
-            let responses = std::mem::take(&mut self.recent_responses);
+            let response_logs = std::mem::take(&mut self.recent_responses);
             self.last_response_log = now;
 
             let overhead_duration = LOG_INTERVAL_SECS as f64;
-
-            let hotkey_map: HashMap<u16, String> = responses
-                .first()
-                .map(|(_, m)| m.clone())
-                .unwrap_or_default();
-
-            let response_logs: Vec<serde_json::Value> = responses
-                .iter()
-                .map(|(r, uid_map)| {
-                    let miner_key = uid_map.get(&r.uid).cloned().unwrap_or_default();
-                    let proof_model = r
-                        .circuit
-                        .as_ref()
-                        .map(|c| c.metadata.name.as_str())
-                        .unwrap_or("Unknown");
-                    let proof_system = r
-                        .proof_system
-                        .map(|ps| ps.to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let request_type = r.request_type.map(|rt| rt.to_string());
-                    serde_json::json!({
-                        "miner_key": miner_key,
-                        "miner_uid": r.uid,
-                        "proof_model": proof_model,
-                        "proof_system": proof_system,
-                        "proof_size": r.proof_size,
-                        "response_duration": r.response_time,
-                        "is_verified": r.verification_result,
-                        "external_request_hash": r.external_request_hash,
-                        "request_type": request_type,
-                        "error": r.error,
-                        "save": r.save,
-                    })
-                })
-                .collect();
 
             let scores_map: serde_json::Map<String, serde_json::Value> = scores
                 .iter()
@@ -143,6 +135,7 @@ impl StatsReporter {
                 .map(|(&uid, &v)| (uid.to_string(), serde_json::Value::from(v)))
                 .collect();
 
+            let count = response_logs.len();
             let body = serde_json::json!({
                 "validator_key": self.wallet.hotkey_ss58(),
                 "validator_uid": self.validator_uid,
@@ -155,10 +148,8 @@ impl StatsReporter {
             if let Err(e) = self.post("/statistics/log/", &body).await {
                 warn!(error = %e, "responses log POST failed");
             } else {
-                info!(count = response_logs.len(), "submitted response stats");
+                info!(count, "submitted response stats");
             }
-
-            drop(hotkey_map);
         }
 
         if now.duration_since(self.last_health_flush)
@@ -214,7 +205,7 @@ impl StatsReporter {
             .collect();
 
         let circuit_slices = report.slices.iter().filter(|s| s.success).count();
-        let onnx_slices = report.total_slices.saturating_sub(circuit_slices).max(0);
+        let onnx_slices = report.total_slices.saturating_sub(circuit_slices);
 
         let body = serde_json::json!({
             "run_uid": report.run_uid,
@@ -283,17 +274,54 @@ fn get_rss_mb() -> f64 {
     }
     #[cfg(target_os = "macos")]
     {
-        use std::process::Command;
-        let pid = std::process::id();
-        if let Ok(output) = Command::new("ps")
-            .args(["-o", "rss=", "-p", &pid.to_string()])
-            .output()
-        {
-            let kb: f64 = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .parse()
-                .unwrap_or(0.0);
-            return kb / 1024.0;
+        #[repr(C)]
+        struct ProcTaskInfo {
+            pti_virtual_size: u64,
+            pti_resident_size: u64,
+            _pti_total_user: u64,
+            _pti_total_system: u64,
+            _pti_threads_user: u64,
+            _pti_threads_system: u64,
+            _pti_policy: i32,
+            _pti_faults: i32,
+            _pti_pageins: i32,
+            _pti_cow_faults: i32,
+            _pti_messages_sent: i32,
+            _pti_messages_received: i32,
+            _pti_syscalls_mach: i32,
+            _pti_syscalls_unix: i32,
+            _pti_csw: i32,
+            _pti_threadnum: i32,
+            _pti_numrunning: i32,
+            _pti_priority: i32,
+        }
+
+        extern "C" {
+            fn proc_pidinfo(
+                pid: i32,
+                flavor: i32,
+                arg: u64,
+                buffer: *mut std::ffi::c_void,
+                buffersize: i32,
+            ) -> i32;
+        }
+
+        const PROC_PIDTASKINFO: i32 = 4;
+
+        unsafe {
+            let mut info = std::mem::MaybeUninit::<ProcTaskInfo>::zeroed();
+            let size = std::mem::size_of::<ProcTaskInfo>() as i32;
+            let ret = proc_pidinfo(
+                std::process::id() as i32,
+                PROC_PIDTASKINFO,
+                0,
+                info.as_mut_ptr() as *mut std::ffi::c_void,
+                size,
+            );
+            if ret == size {
+                let info = info.assume_init();
+                return info.pti_resident_size as f64 / (1024.0 * 1024.0);
+            }
         }
         0.0
     }

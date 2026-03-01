@@ -1180,7 +1180,7 @@ impl ValidatorLoop {
 
         if let TaskOutcome::Success(ref response) = result.outcome {
             if let Some(reporter) = &mut self.stats_reporter {
-                reporter.record_response(response.as_ref().clone(), &self.uid_hotkeys);
+                reporter.record_response(response.as_ref(), &self.uid_hotkeys);
             }
         }
 

@@ -14,7 +14,10 @@ pub fn verify_request_signature(
     let message = sn2_types::signing_message(nonce, validator_hotkey, payload_hash);
     let message_bytes = message.as_bytes();
 
-    let sig_hex = signature_hex.trim_start_matches("0x");
+    let sig_hex = signature_hex
+        .strip_prefix("0x")
+        .or_else(|| signature_hex.strip_prefix("0X"))
+        .unwrap_or(signature_hex);
     let sig_bytes = hex::decode(sig_hex).context("decoding signature hex")?;
     if sig_bytes.len() != 64 {
         bail!("signature must be 64 bytes, got {}", sig_bytes.len());
