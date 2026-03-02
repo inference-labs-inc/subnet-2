@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 if command -v cargo >/dev/null 2>&1; then
-    if ! cargo fmt --check 2>&1; then
-        echo "cargo fmt check failed. Run 'cargo fmt' and re-commit."
+    if ! cargo fmt --all -- --check 2>&1; then
+        echo "cargo fmt check failed. Run 'cargo fmt --all' and re-commit."
         exit 1
     fi
 fi
