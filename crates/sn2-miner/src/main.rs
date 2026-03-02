@@ -148,6 +148,7 @@ async fn main() -> Result<()> {
         })
     };
 
+    let handler_timeout = cli.handler_timeout;
     let quic_handle = {
         let handlers = handlers.clone();
         let hotkey = wallet.hotkey_ss58().to_string();
@@ -156,7 +157,14 @@ async fn main() -> Result<()> {
         let w_hotkey = wallet.hotkey_name.clone();
         tokio::spawn(async move {
             lightning_server::run_lightning_server(
-                &hotkey, &w_name, &w_path, &w_hotkey, "0.0.0.0", quic_port, handlers,
+                &hotkey,
+                &w_name,
+                &w_path,
+                &w_hotkey,
+                "0.0.0.0",
+                quic_port,
+                handler_timeout,
+                handlers,
             )
             .await
         })

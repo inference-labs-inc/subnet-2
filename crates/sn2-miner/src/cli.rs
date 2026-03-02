@@ -64,4 +64,7 @@ pub struct Cli {
 
     #[arg(long, value_delimiter = ',')]
     pub additional_circuits: Vec<String>,
+
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
+    pub handler_timeout: u64,
 }

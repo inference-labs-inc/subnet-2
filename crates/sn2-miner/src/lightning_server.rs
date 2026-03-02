@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use btlightning::{typed_async_handler, LightningServer};
+use btlightning::{typed_async_handler, LightningServer, LightningServerConfig};
 use tracing::info;
 
 use sn2_types::*;
@@ -15,9 +15,16 @@ pub async fn run_lightning_server(
     hotkey_name: &str,
     host: &str,
     port: u16,
+    handler_timeout_secs: u64,
     handlers: Arc<MinerHandlers>,
 ) -> Result<()> {
-    let mut server = LightningServer::new(miner_hotkey.to_string(), host.to_string(), port)?;
+    let idle_timeout = handler_timeout_secs.saturating_mul(2).max(150);
+    let config = LightningServerConfig::builder()
+        .handler_timeout_secs(handler_timeout_secs)
+        .idle_timeout_secs(idle_timeout)
+        .build()?;
+    let mut server =
+        LightningServer::with_config(miner_hotkey.to_string(), host.to_string(), port, config)?;
 
     // btlightning's from_wallet passes (path, hotkey_name) to Wallet::new in
     // swapped positions: path→hotkey slot, hotkey_name→path slot. Compensate

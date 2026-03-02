@@ -42,7 +42,7 @@ which = "7"
 sp-core = "31"
 bittensor_wallet = { version = "4.0.1", package = "btwallet", default-features = false }
 subxt = "0.37"
-btlightning = { version = "0.1.10", features = ["btwallet", "subtensor"] }
+btlightning = { git = "https://github.com/inference-labs-inc/btlightning.git", rev = "9dc8d68", features = ["btwallet", "subtensor"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 aws-config = "1"
 aws-sdk-s3 = "1"
