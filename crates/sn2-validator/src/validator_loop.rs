@@ -689,14 +689,15 @@ impl ValidatorLoop {
         let shape: Vec<usize> = match schema
             .get("shape")
             .and_then(|v| v.as_array())
-            .map(|dims| {
+            .and_then(|dims| {
                 dims.iter()
-                    .filter_map(|d| d.as_u64())
-                    .map(|d| d as usize)
-                    .collect::<Vec<_>>()
-            }) {
-            Some(s) if !s.is_empty() && s.iter().all(|&d| d > 0) => s,
-            _ => {
+                    .map(|d| d.as_u64().map(|v| v as usize))
+                    .collect::<Option<Vec<_>>>()
+            })
+            .filter(|s| !s.is_empty() && s.iter().all(|&d| d > 0))
+        {
+            Some(s) => s,
+            None => {
                 warn!(circuit = %circuit.id, "cannot derive tensor shape from input_schema");
                 return;
             }
