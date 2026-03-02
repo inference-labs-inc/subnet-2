@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use sn2_types::{
@@ -19,7 +20,8 @@ pub struct CircuitStore {
     http: reqwest::Client,
     loopback: bool,
     api_url_overridden: bool,
-    pinned_ids: std::collections::HashSet<String>,
+    pinned_ids: HashSet<String>,
+    inflight_downloads: Arc<Mutex<HashSet<String>>>,
 }
 
 impl CircuitStore {
@@ -45,6 +47,7 @@ impl CircuitStore {
                 .map(|s| s.trim().to_owned())
                 .filter(|s| !s.is_empty())
                 .collect(),
+            inflight_downloads: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -61,7 +64,7 @@ impl CircuitStore {
             Vec::new()
         });
 
-        let mut active_ids: std::collections::HashSet<String> = api_circuits
+        let mut active_ids: HashSet<String> = api_circuits
             .iter()
             .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
             .collect();
@@ -164,7 +167,7 @@ impl CircuitStore {
 
     pub async fn refresh_circuits(&mut self) -> Result<Vec<String>> {
         let api_circuits = self.fetch_circuits_from_api().await?;
-        let active_ids: std::collections::HashSet<String> = api_circuits
+        let active_ids: HashSet<String> = api_circuits
             .iter()
             .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
             .collect();
@@ -285,7 +288,8 @@ impl CircuitStore {
         if let Some(files) = data.get("files").and_then(|v| v.as_object()) {
             if is_dsperse {
                 let slices_dir = cache_path.join("slices");
-                std::fs::create_dir_all(&slices_dir).ok();
+                std::fs::create_dir_all(&slices_dir)
+                    .with_context(|| format!("creating slices dir {}", slices_dir.display()))?;
             }
 
             let mut deferred_downloads: Vec<(String, PathBuf)> = Vec::new();
@@ -331,41 +335,52 @@ impl CircuitStore {
             }
 
             if !deferred_downloads.is_empty() {
-                let count = deferred_downloads.len();
-                let http = self.http.clone();
-                info!(circuit = %circuit_id, files = count, "spawning background dslice downloads");
-                tokio::spawn(async move {
-                    let mut downloaded = 0usize;
-                    for (url, dest) in &deferred_downloads {
-                        if dest.exists() {
-                            downloaded += 1;
-                            continue;
-                        }
-                        let partial = dest.with_extension("dslice.partial");
-                        match download_file_static(&http, url, &partial).await {
-                            Ok(()) => {
-                                if let Err(e) = std::fs::rename(&partial, dest) {
-                                    warn!(
-                                        file = %dest.display(),
-                                        error = %e,
-                                        "failed to rename partial dslice download"
-                                    );
-                                    std::fs::remove_file(&partial).ok();
-                                    continue;
-                                }
+                let already_inflight = {
+                    let mut guard = self.inflight_downloads.lock().unwrap();
+                    !guard.insert(circuit_id.to_string())
+                };
+                if already_inflight {
+                    info!(circuit = %circuit_id, "skipping duplicate background dslice download");
+                } else {
+                    let count = deferred_downloads.len();
+                    let http = self.http.clone();
+                    let inflight = Arc::clone(&self.inflight_downloads);
+                    let cid = circuit_id.to_string();
+                    info!(circuit = %circuit_id, files = count, "spawning background dslice downloads");
+                    tokio::spawn(async move {
+                        let mut downloaded = 0usize;
+                        for (url, dest) in &deferred_downloads {
+                            if dest.exists() {
                                 downloaded += 1;
-                                if downloaded % 20 == 0 || downloaded == count {
-                                    info!(progress = %format!("{downloaded}/{count}"), "dslice download progress");
+                                continue;
+                            }
+                            let partial = dest.with_extension("dslice.partial");
+                            match download_file_static(&http, url, &partial).await {
+                                Ok(()) => {
+                                    if let Err(e) = std::fs::rename(&partial, dest) {
+                                        warn!(
+                                            file = %dest.display(),
+                                            error = %e,
+                                            "failed to rename partial dslice download"
+                                        );
+                                        std::fs::remove_file(&partial).ok();
+                                        continue;
+                                    }
+                                    downloaded += 1;
+                                    if downloaded % 20 == 0 || downloaded == count {
+                                        info!(progress = %format!("{downloaded}/{count}"), "dslice download progress");
+                                    }
+                                }
+                                Err(e) => {
+                                    std::fs::remove_file(&partial).ok();
+                                    warn!(file = %dest.display(), error = %e, "failed to download dslice file");
                                 }
                             }
-                            Err(e) => {
-                                std::fs::remove_file(&partial).ok();
-                                warn!(file = %dest.display(), error = %e, "failed to download dslice file");
-                            }
                         }
-                    }
-                    info!(count = downloaded, "dslice background downloads complete");
-                });
+                        inflight.lock().unwrap().remove(&cid);
+                        info!(count = downloaded, "dslice background downloads complete");
+                    });
+                }
             }
         }
 
@@ -385,7 +400,7 @@ impl CircuitStore {
         })
     }
 
-    fn load_from_cache(&mut self, active_ids: &std::collections::HashSet<String>) {
+    fn load_from_cache(&mut self, active_ids: &HashSet<String>) {
         let cache_dir = &self.cache_dir;
         let entries = match std::fs::read_dir(cache_dir) {
             Ok(e) => e,
