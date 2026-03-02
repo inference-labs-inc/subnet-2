@@ -191,9 +191,93 @@ jobs:
           echo "=== METRICS ==="
           curl -sf http://localhost:9090/metrics 2>/dev/null || echo "(unavailable)"
 
+  build-linux:
+    name: Build Linux x86_64
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: testnet
+
+      - name: Install system dependencies
+        run: |
+          dnf install -y clang llvm-devel pkg-config openssl-devel libudev-devel protobuf-compiler python3.12-devel perl-core
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: linux-x86_64-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-x86_64-registry-
+
+      - name: Build release binaries
+        run: |
+          source "$HOME/.cargo/env"
+          cargo build --release --locked --bin sn2-validator --bin sn2-miner
+        env:
+          PYO3_PYTHON: /usr/bin/python3.12
+
+      - name: Rename binaries
+        run: |
+          cp target/release/sn2-validator sn2-validator-linux-x86_64
+          cp target/release/sn2-miner sn2-miner-linux-x86_64
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binaries-linux-x86_64
+          path: |
+            sn2-validator-linux-x86_64
+            sn2-miner-linux-x86_64
+
+  build-macos:
+    name: Build macOS aarch64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: testnet
+
+      - uses: actions/setup-python@v5
+        id: setup-python
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: brew install protobuf
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: macos-aarch64-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macos-aarch64-registry-
+
+      - name: Build release binaries
+        run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+
+      - name: Rename binaries
+        run: |
+          cp target/release/sn2-validator sn2-validator-macos-aarch64
+          cp target/release/sn2-miner sn2-miner-macos-aarch64
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binaries-macos-aarch64
+          path: |
+            sn2-validator-macos-aarch64
+            sn2-miner-macos-aarch64
+
   publish-nightly:
     name: Publish testnet-nightly
-    needs: loopback-e2e
+    needs: [loopback-e2e, build-linux, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -228,3 +312,46 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+  release-nightly:
+    name: Nightly GitHub Release
+    needs: [loopback-e2e, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Remove previous nightly release
+        run: gh release delete testnet-nightly --cleanup-tag --yes || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          find . -type f -name 'sn2-*' -exec cp {} ../ \;
+          cd ..
+          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
+
+      - name: Create Nightly Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: testnet-nightly
+          name: Testnet Nightly
+          body: |
+            E2E-validated nightly build from `testnet` at ${{ github.sha }}.
+            Built: ${{ github.event.repository.updated_at || github.event.head_commit.timestamp }}
+          prerelease: true
+          make_latest: false
+          target_commitish: testnet
+          files: |
+            sn2-validator-linux-x86_64
+            sn2-miner-linux-x86_64
+            sn2-validator-macos-aarch64
+            sn2-miner-macos-aarch64
+            SHA256SUMS
