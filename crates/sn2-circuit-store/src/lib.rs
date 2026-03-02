@@ -93,11 +93,15 @@ impl CircuitStore {
             }
         }
 
-        let mut load_ids = active_ids.clone();
-        for id in &self.pinned_ids {
-            load_ids.insert(id.clone());
+        if active_ids.is_empty() {
+            self.load_from_cache(&active_ids);
+        } else {
+            let mut load_ids = active_ids.clone();
+            for id in &self.pinned_ids {
+                load_ids.insert(id.clone());
+            }
+            self.load_from_cache(&load_ids);
         }
-        self.load_from_cache(&load_ids);
 
         for circuit_data in &api_circuits {
             if let Some(id) = circuit_data.get("id").and_then(|v| v.as_str()) {

@@ -109,8 +109,13 @@ async fn main() -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    let circuit_store =
+    let mut circuit_store =
         sn2_circuit_store::CircuitStore::new(None, false, cli.additional_circuits.clone());
+    for id in &cli.additional_circuits {
+        if let Err(e) = circuit_store.ensure_circuit(id).await {
+            warn!(id = %id, error = %e, "failed to preload pinned circuit");
+        }
+    }
 
     let circuit_mgr = std::sync::Arc::new(circuit_manager::CircuitManager::new(
         &cli.circuit_dir,
@@ -227,8 +232,13 @@ async fn run_loopback(cli: Cli) -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    let circuit_store =
+    let mut circuit_store =
         sn2_circuit_store::CircuitStore::new(None, true, cli.additional_circuits.clone());
+    for id in &cli.additional_circuits {
+        if let Err(e) = circuit_store.ensure_circuit(id).await {
+            warn!(id = %id, error = %e, "failed to preload pinned circuit");
+        }
+    }
 
     let circuit_mgr = std::sync::Arc::new(circuit_manager::CircuitManager::new(
         &cli.circuit_dir,
