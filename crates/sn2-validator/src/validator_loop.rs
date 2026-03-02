@@ -11,7 +11,6 @@ use tokio::sync::{Notify, RwLock};
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
-use sn2_circuit_store::CircuitStore;
 use crate::config::ValidatorConfig;
 use crate::incremental_runner::{IncrementalRunManager, SliceArtifact};
 use crate::miner_client::MinerQueryClient;
@@ -24,6 +23,7 @@ use crate::response_processor::ResponseProcessor;
 use crate::scoring::ScoreManager;
 use crate::stats_reporter::{DsperseRunReport, DsperseSliceReport, StatsReporter};
 use crate::{metrics_server, metrics_server as metrics};
+use sn2_circuit_store::CircuitStore;
 
 enum WeightTaskResult {
     Committed(PendingReveal),

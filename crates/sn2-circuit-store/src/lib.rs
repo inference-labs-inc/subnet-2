@@ -69,15 +69,17 @@ impl CircuitStore {
             info!(id = %pinned_id, "fetching pinned circuit from API");
             let url = format!("{}/circuits/{}", self.api_url, pinned_id);
             match self.http.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
-                    Ok(data) => {
-                        active_ids.insert(pinned_id.clone());
-                        api_circuits.push(data);
+                Ok(resp) if resp.status().is_success() => {
+                    match resp.json::<serde_json::Value>().await {
+                        Ok(data) => {
+                            active_ids.insert(pinned_id.clone());
+                            api_circuits.push(data);
+                        }
+                        Err(e) => {
+                            warn!(id = %pinned_id, error = %e, "failed to parse pinned circuit response");
+                        }
                     }
-                    Err(e) => {
-                        warn!(id = %pinned_id, error = %e, "failed to parse pinned circuit response");
-                    }
-                },
+                }
                 Ok(resp) => {
                     warn!(id = %pinned_id, status = %resp.status(), "failed to fetch pinned circuit");
                 }

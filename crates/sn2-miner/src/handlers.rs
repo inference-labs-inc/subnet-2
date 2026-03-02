@@ -33,7 +33,11 @@ impl MinerHandlers {
         info!(model_id = model_id, "handling QueryZkProof");
 
         if !model_id.is_empty() {
-            self.circuit_store.lock().await.ensure_circuit(model_id).await?;
+            self.circuit_store
+                .lock()
+                .await
+                .ensure_circuit(model_id)
+                .await?;
         }
 
         let result = self
@@ -106,7 +110,11 @@ impl MinerHandlers {
         info!(circuit = circuit_id, slice = slice_num, "handling DSlice");
 
         if !circuit_id.is_empty() {
-            self.circuit_store.lock().await.ensure_circuit(circuit_id).await?;
+            self.circuit_store
+                .lock()
+                .await
+                .ensure_circuit(circuit_id)
+                .await?;
         }
 
         let result = self
