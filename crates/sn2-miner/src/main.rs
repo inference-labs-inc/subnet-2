@@ -310,12 +310,6 @@ async fn fetch_additional_circuits(circuit_ids: &[String]) -> Result<()> {
             .with_context(|| format!("parsing circuit {circuit_id}"))?;
 
         std::fs::create_dir_all(&model_dir)?;
-        if let Some(metadata) = data.get("metadata") {
-            std::fs::write(
-                model_dir.join("circuit_metadata.json"),
-                serde_json::to_string_pretty(metadata)?,
-            )?;
-        }
 
         if let Some(files) = data.get("files").and_then(|v| v.as_object()) {
             for (filename, url_val) in files {
@@ -324,7 +318,10 @@ async fn fetch_additional_circuits(circuit_ids: &[String]) -> Result<()> {
                 }
                 let dest = if filename.ends_with(".dslice") {
                     let slices_dir = model_dir.join("slices");
-                    std::fs::create_dir_all(&slices_dir)?;
+                    if let Err(e) = std::fs::create_dir_all(&slices_dir) {
+                        warn!(id = %circuit_id, file = %filename, error = %e, "failed to create slices dir");
+                        continue;
+                    }
                     slices_dir.join(filename)
                 } else {
                     model_dir.join(filename)
@@ -333,15 +330,60 @@ async fn fetch_additional_circuits(circuit_ids: &[String]) -> Result<()> {
                     continue;
                 }
                 if let Some(url) = url_val.as_str() {
-                    let resp = http
+                    let tmp = dest.with_extension("tmp");
+                    let resp = match http
                         .get(url)
                         .timeout(std::time::Duration::from_secs(300))
                         .send()
-                        .await?;
-                    if resp.status().is_success() {
-                        let bytes = resp.bytes().await?;
-                        std::fs::write(&dest, &bytes)?;
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            warn!(id = %circuit_id, file = %filename, error = %e, "download request failed");
+                            continue;
+                        }
+                    };
+                    if !resp.status().is_success() {
+                        warn!(id = %circuit_id, file = %filename, status = %resp.status(), "download returned error");
+                        continue;
                     }
+                    let bytes = match resp.bytes().await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            warn!(id = %circuit_id, file = %filename, error = %e, "failed to read download body");
+                            continue;
+                        }
+                    };
+                    if let Err(e) = std::fs::write(&tmp, &bytes) {
+                        warn!(id = %circuit_id, file = %filename, error = %e, "failed to write temp file");
+                        std::fs::remove_file(&tmp).ok();
+                        continue;
+                    }
+                    if let Err(e) = std::fs::rename(&tmp, &dest) {
+                        warn!(id = %circuit_id, file = %filename, error = %e, "failed to rename temp file");
+                        std::fs::remove_file(&tmp).ok();
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if let Some(metadata) = data.get("metadata") {
+            let marker_tmp = model_dir.join("circuit_metadata.json.tmp");
+            let marker = model_dir.join("circuit_metadata.json");
+            match serde_json::to_string_pretty(metadata) {
+                Ok(json) => {
+                    if let Err(e) = std::fs::write(&marker_tmp, json)
+                        .and_then(|()| std::fs::rename(&marker_tmp, &marker))
+                    {
+                        warn!(id = %circuit_id, error = %e, "failed to write metadata marker");
+                        std::fs::remove_file(&marker_tmp).ok();
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    warn!(id = %circuit_id, error = %e, "failed to serialize metadata");
+                    continue;
                 }
             }
         }
