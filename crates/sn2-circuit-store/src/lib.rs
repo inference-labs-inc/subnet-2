@@ -506,11 +506,16 @@ fn migrate_dslice_layout(model_dir: &Path) {
     info!(dir = %model_dir.display(), "migrated dslice files to slices/ subdirectory");
 }
 
-pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
+fn validate_slice_id(slice_id: &str) -> Result<()> {
     anyhow::ensure!(
         !slice_id.contains('/') && !slice_id.contains('\\') && !slice_id.contains(".."),
         "invalid slice_id: {slice_id}"
     );
+    Ok(())
+}
+
+pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
+    validate_slice_id(slice_id)?;
     let extract_dir = slices_dir.join(slice_id);
     if extract_dir.exists() {
         return Ok(());
@@ -554,6 +559,10 @@ pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
 }
 
 pub fn cleanup_extracted_slice(slices_dir: &Path, slice_id: &str) {
+    if let Err(e) = validate_slice_id(slice_id) {
+        tracing::warn!(slice_id, error = %e, "refusing to clean up slice with invalid id");
+        return;
+    }
     let extract_dir = slices_dir.join(slice_id);
     if extract_dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(&extract_dir) {
