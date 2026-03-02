@@ -507,6 +507,10 @@ fn migrate_dslice_layout(model_dir: &Path) {
 }
 
 pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
+    anyhow::ensure!(
+        !slice_id.contains('/') && !slice_id.contains('\\') && !slice_id.contains(".."),
+        "invalid slice_id: {slice_id}"
+    );
     let extract_dir = slices_dir.join(slice_id);
     if extract_dir.exists() {
         return Ok(());

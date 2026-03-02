@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 rust:1-bookworm AS builder
+FROM --platform=linux/amd64 rust:1.85.0-bookworm AS builder
 
 RUN apt-get update && apt-get install -y \
     clang \
@@ -16,7 +16,7 @@ COPY crates crates
 
 RUN cargo build --release --bin sn2-validator --bin sn2-miner
 
-FROM --platform=linux/amd64 debian:bookworm-slim
+FROM --platform=linux/amd64 debian:bookworm-20250224-slim
 
 RUN apt-get update && apt-get install -y \
     jq \
@@ -63,7 +63,8 @@ esac
 
 if [ -n "$PUID" ]; then
     if [ "$PUID" = "0" ]; then
-        exec "$@"
+        echo "PUID=0 (root) is not permitted; running as subnet2" >&2
+        exec gosu subnet2 "$@"
     else
         usermod -u "$PUID" subnet2
         exec gosu subnet2 "$@"
