@@ -350,6 +350,10 @@ jobs:
           cd ..
           sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
 
+      - name: Set build timestamp
+        id: ts
+        run: echo "timestamp=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+
       - name: Create Nightly Release
         uses: softprops/action-gh-release@v2
         with:
@@ -357,7 +361,7 @@ jobs:
           name: Testnet Nightly
           body: |
             E2E-validated nightly build from `testnet` at ${{ github.sha }}.
-            Built: ${{ github.event.repository.updated_at || github.event.head_commit.timestamp }}
+            Built: ${{ steps.ts.outputs.timestamp }}
           prerelease: true
           make_latest: false
           target_commitish: testnet
