@@ -520,6 +520,86 @@ impl ValidatorLoop {
                 .get_run_source(run_uid)
                 .unwrap_or(RunSource::Benchmark);
 
+            if let Some(ref tiling) = slice_info.tiling {
+                let input_4d = match slice_info
+                    .input_tensor
+                    .into_dimensionality::<ndarray::Ix4>()
+                {
+                    Ok(arr) => arr,
+                    Err(e) => {
+                        warn!(
+                            run_uid = %run_uid,
+                            slice = %slice_info.slice_id,
+                            error = %e,
+                            "tiled slice requires 4D input"
+                        );
+                        self.run_manager.remove_run(run_uid);
+                        return;
+                    }
+                };
+                let tiles = match dsperse::pipeline::split_into_tiles(&input_4d, tiling) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        warn!(
+                            run_uid = %run_uid,
+                            slice = %slice_info.slice_id,
+                            error = %e,
+                            "split_into_tiles failed"
+                        );
+                        self.run_manager.remove_run(run_uid);
+                        return;
+                    }
+                };
+
+                info!(
+                    run_uid = %run_uid,
+                    slice = %slice_info.slice_id,
+                    num_tiles = tiles.len(),
+                    "dispatching spatial tiles"
+                );
+
+                if let Err(e) =
+                    self.run_manager
+                        .init_tile_buffer(run_uid, &slice_info.slice_id, tiling.clone())
+                {
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %slice_info.slice_id,
+                        error = %e,
+                        "init_tile_buffer failed"
+                    );
+                    self.run_manager.remove_run(run_uid);
+                    return;
+                }
+
+                for (idx, tile) in tiles.into_iter().enumerate() {
+                    let tile_json = serde_json::json!({
+                        "input_data": crate::tensor_json::arrayd_to_json(&tile.into_dyn())
+                    });
+                    let request = DSliceRequest {
+                        circuit: circuit.clone(),
+                        inputs: tile_json,
+                        request_type: RequestType::DSlice,
+                        proof_system: circuit.proof_system,
+                        slice_num: slice_info.slice_id.clone(),
+                        run_uid: run_uid.to_string(),
+                        outputs: None,
+                        is_tile: true,
+                        tile_idx: Some(idx as u32),
+                        task_id: None,
+                        run_source,
+                        retry_count: 0,
+                        inputs_path: None,
+                        outputs_path: None,
+                    };
+                    match run_source {
+                        RunSource::Api => self.api_dslice_queue.push_back(request),
+                        RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
+                    };
+                }
+                return;
+            }
+
             let request = DSliceRequest {
                 circuit: circuit.clone(),
                 inputs: slice_info.inputs_json,
@@ -1262,7 +1342,7 @@ impl ValidatorLoop {
         &mut self,
         run_uid: &Option<String>,
         slice_num: &Option<String>,
-        _is_tile: bool,
+        is_tile: bool,
         _task_id: Option<&str>,
         tile_idx: Option<u32>,
         response: &MinerResponse,
@@ -1314,22 +1394,84 @@ impl ValidatorLoop {
             },
         );
 
+        if is_tile {
+            let tile_idx = match tile_idx {
+                Some(idx) => idx,
+                None => {
+                    warn!(run_uid = %run_uid, slice = %slice_num, "tile response missing tile_idx, removing run");
+                    self.run_manager.remove_run(&run_uid);
+                    return;
+                }
+            };
+
+            let computed = response
+                .computed_outputs
+                .as_ref()
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            let tile_output = match crate::tensor_json::json_to_arrayd(&computed) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %slice_num,
+                        tile_idx = tile_idx,
+                        error = %e,
+                        "tile output tensor conversion failed, removing run"
+                    );
+                    self.run_manager.remove_run(&run_uid);
+                    return;
+                }
+            };
+
+            use crate::incremental_runner::TileBufferOutcome;
+            match self
+                .run_manager
+                .buffer_tile_result(&run_uid, &slice_num, tile_idx, tile_output)
+            {
+                TileBufferOutcome::Waiting => return,
+                TileBufferOutcome::Ready(full_output) => {
+                    let full_json = crate::tensor_json::arrayd_to_json(&full_output);
+                    self.apply_dslice_result(&run_uid, &slice_num, &full_json)
+                        .await;
+                }
+                TileBufferOutcome::Failed(reason) => {
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %slice_num,
+                        error = %reason,
+                        "tile buffering failed, removing run"
+                    );
+                    self.run_manager.remove_run(&run_uid);
+                }
+            }
+            return;
+        }
+
         let computed = response
             .computed_outputs
             .as_ref()
             .cloned()
             .unwrap_or(serde_json::Value::Null);
 
-        match self
-            .run_manager
-            .apply_result(&run_uid, &slice_num, &computed)
-        {
+        self.apply_dslice_result(&run_uid, &slice_num, &computed)
+            .await;
+    }
+
+    async fn apply_dslice_result(
+        &mut self,
+        run_uid: &str,
+        slice_num: &str,
+        computed: &serde_json::Value,
+    ) {
+        match self.run_manager.apply_result(run_uid, slice_num, computed) {
             Ok(is_complete) => {
                 if is_complete {
                     info!(run_uid = %run_uid, "incremental run complete");
 
-                    let final_output = self.run_manager.final_output_json(&run_uid);
-                    let mut active_run = self.run_manager.remove_run(&run_uid);
+                    let final_output = self.run_manager.final_output_json(run_uid);
+                    let mut active_run = self.run_manager.remove_run(run_uid);
 
                     if let Some(ref run) = active_run {
                         self.report_dsperse_completion(run);
@@ -1343,7 +1485,7 @@ impl ValidatorLoop {
                     if !artifacts.is_empty() {
                         if let Some(uploader) = &self.proof_uploader {
                             let uploader = Arc::clone(uploader);
-                            let uid_clone = run_uid.clone();
+                            let uid_clone = run_uid.to_string();
                             let circuit_id = active_run
                                 .as_ref()
                                 .map(|r| r.circuit_id.clone())
@@ -1377,7 +1519,7 @@ impl ValidatorLoop {
                         .to_string();
 
                     self.relay_set_request_result(
-                        &run_uid,
+                        run_uid,
                         serde_json::json!({"run_uid": run_uid, "status": "complete"}),
                     )
                     .await;
@@ -1391,11 +1533,12 @@ impl ValidatorLoop {
                     )
                     .await;
                 } else {
-                    self.enqueue_next_dslice_from_run(&run_uid).await;
+                    self.enqueue_next_dslice_from_run(run_uid).await;
                 }
             }
             Err(e) => {
-                warn!(run_uid = %run_uid, error = %e, "failed to apply slice result");
+                warn!(run_uid = %run_uid, error = %e, "failed to apply slice result, removing run");
+                self.run_manager.remove_run(run_uid);
             }
         }
     }
