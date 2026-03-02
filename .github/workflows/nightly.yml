@@ -5,6 +5,10 @@ on:
     - cron: '0 5 * * *'
   workflow_dispatch: {}
 
+concurrency:
+  group: nightly-publish
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/subnet-2
@@ -236,11 +240,19 @@ jobs:
 
   build-macos:
     name: Build macOS aarch64
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
         with:
           ref: testnet
+
+      - name: Assert aarch64 runner
+        run: |
+          ARCH=$(uname -m)
+          if [ "$ARCH" != "arm64" ]; then
+            echo "FAIL: Expected arm64 runner, got $ARCH" >&2
+            exit 1
+          fi
 
       - uses: actions/setup-python@v5
         id: setup-python
