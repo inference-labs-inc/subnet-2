@@ -314,7 +314,10 @@ async fn fetch_additional_circuits(circuit_ids: &[String]) -> Result<()> {
             }
         };
 
-        std::fs::create_dir_all(&model_dir)?;
+        if let Err(e) = std::fs::create_dir_all(&model_dir) {
+            warn!(id = %circuit_id, dir = %model_dir.display(), error = %e, "failed to create circuit cache dir");
+            continue;
+        }
 
         let mut any_failed = false;
         if let Some(files) = data.get("files").and_then(|v| v.as_object()) {
@@ -351,46 +354,52 @@ async fn fetch_additional_circuits(circuit_ids: &[String]) -> Result<()> {
                 if dest.exists() {
                     continue;
                 }
-                if let Some(url) = url_val.as_str() {
-                    let tmp = dest.with_extension("tmp");
-                    let resp = match http
-                        .get(url)
-                        .timeout(std::time::Duration::from_secs(300))
-                        .send()
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => {
-                            warn!(id = %circuit_id, file = %filename, error = %e, "download request failed");
-                            any_failed = true;
-                            continue;
-                        }
-                    };
-                    if !resp.status().is_success() {
-                        warn!(id = %circuit_id, file = %filename, status = %resp.status(), "download returned error");
+                let url = match url_val.as_str() {
+                    Some(u) => u,
+                    None => {
+                        warn!(id = %circuit_id, file = %filename, "file URL is not a string");
                         any_failed = true;
                         continue;
                     }
-                    let bytes = match resp.bytes().await {
-                        Ok(b) => b,
-                        Err(e) => {
-                            warn!(id = %circuit_id, file = %filename, error = %e, "failed to read download body");
-                            any_failed = true;
-                            continue;
-                        }
-                    };
-                    if let Err(e) = std::fs::write(&tmp, &bytes) {
-                        warn!(id = %circuit_id, file = %filename, error = %e, "failed to write temp file");
-                        std::fs::remove_file(&tmp).ok();
+                };
+                let tmp = dest.with_extension("tmp");
+                let resp = match http
+                    .get(url)
+                    .timeout(std::time::Duration::from_secs(300))
+                    .send()
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(id = %circuit_id, file = %filename, error = %e, "download request failed");
                         any_failed = true;
                         continue;
                     }
-                    if let Err(e) = std::fs::rename(&tmp, &dest) {
-                        warn!(id = %circuit_id, file = %filename, error = %e, "failed to rename temp file");
-                        std::fs::remove_file(&tmp).ok();
+                };
+                if !resp.status().is_success() {
+                    warn!(id = %circuit_id, file = %filename, status = %resp.status(), "download returned error");
+                    any_failed = true;
+                    continue;
+                }
+                let bytes = match resp.bytes().await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!(id = %circuit_id, file = %filename, error = %e, "failed to read download body");
                         any_failed = true;
                         continue;
                     }
+                };
+                if let Err(e) = std::fs::write(&tmp, &bytes) {
+                    warn!(id = %circuit_id, file = %filename, error = %e, "failed to write temp file");
+                    std::fs::remove_file(&tmp).ok();
+                    any_failed = true;
+                    continue;
+                }
+                if let Err(e) = std::fs::rename(&tmp, &dest) {
+                    warn!(id = %circuit_id, file = %filename, error = %e, "failed to rename temp file");
+                    std::fs::remove_file(&tmp).ok();
+                    any_failed = true;
+                    continue;
                 }
             }
         }
