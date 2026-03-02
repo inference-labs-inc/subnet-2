@@ -241,7 +241,7 @@ impl CircuitStore {
                 std::fs::create_dir_all(&slices_dir).ok();
             }
 
-            let mut deferred_downloads: Vec<(String, PathBuf)> = Vec::new();
+            let mut deferred_downloads: Vec<(String, PathBuf, PathBuf)> = Vec::new();
 
             for (filename, url_val) in files {
                 let skip = if is_dsperse {
@@ -252,8 +252,22 @@ impl CircuitStore {
                 if skip {
                     continue;
                 }
+
+                if is_dsperse && filename.ends_with(".dslice") {
+                    let stem = filename.trim_end_matches(".dslice");
+                    let extract_dir = cache_path.join("slices").join(stem);
+                    if extract_dir.exists() {
+                        continue;
+                    }
+                    if let Some(url) = url_val.as_str() {
+                        let archive_dest = cache_path.join("slices").join(filename);
+                        deferred_downloads.push((url.to_string(), archive_dest, extract_dir));
+                    }
+                    continue;
+                }
+
                 let dest = if is_dsperse
-                    && (filename.ends_with(".dslice") || filename == "metadata.json")
+                    && (filename == "metadata.json" || filename == "metadata.msgpack")
                 {
                     cache_path.join("slices").join(filename)
                 } else {
@@ -263,9 +277,7 @@ impl CircuitStore {
                     continue;
                 }
                 if let Some(url) = url_val.as_str() {
-                    if is_dsperse && filename.ends_with(".dslice") {
-                        deferred_downloads.push((url.to_string(), dest));
-                    } else if let Err(e) = self.download_file(url, &dest).await {
+                    if let Err(e) = self.download_file(url, &dest).await {
                         warn!(file = %filename, error = %e, "failed to download circuit file");
                     }
                 }
@@ -277,24 +289,32 @@ impl CircuitStore {
                 info!(circuit = %circuit_id, files = count, "spawning background dslice downloads");
                 tokio::spawn(async move {
                     let mut downloaded = 0usize;
-                    for (url, dest) in &deferred_downloads {
-                        if dest.exists() {
+                    for (url, archive_dest, extract_dir) in &deferred_downloads {
+                        if extract_dir.exists() {
                             downloaded += 1;
                             continue;
                         }
-                        match download_file_static(&http, url, dest).await {
+                        match download_file_static(&http, url, archive_dest).await {
                             Ok(()) => {
-                                downloaded += 1;
-                                if downloaded % 20 == 0 || downloaded == count {
-                                    info!(progress = %format!("{downloaded}/{count}"), "dslice download progress");
+                                match extract_dslice(archive_dest, extract_dir) {
+                                    Ok(()) => {
+                                        let _ = std::fs::remove_file(archive_dest);
+                                        downloaded += 1;
+                                        if downloaded % 20 == 0 || downloaded == count {
+                                            info!(progress = %format!("{downloaded}/{count}"), "dslice extraction progress");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(file = %archive_dest.display(), error = %e, "failed to extract dslice");
+                                    }
                                 }
                             }
                             Err(e) => {
-                                warn!(file = %dest.display(), error = %e, "failed to download dslice file");
+                                warn!(file = %archive_dest.display(), error = %e, "failed to download dslice file");
                             }
                         }
                     }
-                    info!(count = downloaded, "dslice background downloads complete");
+                    info!(count = downloaded, "dslice downloads and extractions complete");
                 });
             }
         }
@@ -434,6 +454,23 @@ fn migrate_dslice_layout(model_dir: &Path) {
         }
     }
     info!(dir = %model_dir.display(), "migrated dslice files to slices/ subdirectory");
+}
+
+fn extract_dslice(archive: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
+    let file = std::fs::File::open(archive)
+        .with_context(|| format!("opening {}", archive.display()))?;
+    let mut zip =
+        zip::ZipArchive::new(file).with_context(|| format!("reading zip {}", archive.display()))?;
+    std::fs::create_dir_all(dest_dir)
+        .with_context(|| format!("creating {}", dest_dir.display()))?;
+    zip.extract(dest_dir).with_context(|| {
+        format!(
+            "extracting {} to {}",
+            archive.display(),
+            dest_dir.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn parse_proof_system(s: &str) -> ProofSystem {

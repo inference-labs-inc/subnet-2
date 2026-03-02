@@ -59,3 +59,4 @@ openssl = { version = "0.10", features = ["vendored"] }
 dsperse = { git = "https://github.com/inference-labs-inc/dsperse", rev = "61ba62b" }
 jstprove_circuits = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "904d9cc" }
 ndarray = { version = "0.16", features = ["serde"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
