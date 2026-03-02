@@ -73,4 +73,7 @@ pub struct Cli {
         help = "Miner address (ip:port) for loopback mode"
     )]
     pub miner_address: String,
+
+    #[arg(long, value_delimiter = ',')]
+    pub additional_circuits: Vec<String>,
 }

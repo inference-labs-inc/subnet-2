@@ -19,10 +19,15 @@ pub struct CircuitStore {
     http: reqwest::Client,
     loopback: bool,
     api_url_overridden: bool,
+    pinned_ids: std::collections::HashSet<String>,
 }
 
 impl CircuitStore {
-    pub fn new(api_url_override: Option<&str>, loopback: bool) -> Self {
+    pub fn new(
+        api_url_override: Option<&str>,
+        loopback: bool,
+        additional_circuits: Vec<String>,
+    ) -> Self {
         let cache_dir = shellexpand::tilde(CIRCUIT_CACHE_DIR).to_string();
         let api_url_overridden = api_url_override.is_some();
         Self {
@@ -35,6 +40,7 @@ impl CircuitStore {
                 .unwrap_or_default(),
             loopback,
             api_url_overridden,
+            pinned_ids: additional_circuits.into_iter().collect(),
         }
     }
 
@@ -86,6 +92,19 @@ impl CircuitStore {
 
         info!(count = self.circuits.len(), "circuits loaded");
         Ok(())
+    }
+
+    pub async fn load_pinned_circuits(&mut self) {
+        for id in self.pinned_ids.clone() {
+            match self.ensure_circuit(&id).await {
+                Ok(circuit) => {
+                    info!(id = %id, name = %circuit.metadata.name, "loaded pinned circuit");
+                }
+                Err(e) => {
+                    warn!(id = %id, error = %e, "failed to load pinned circuit");
+                }
+            }
+        }
     }
 
     pub async fn ensure_circuit(&mut self, circuit_id: &str) -> Result<Circuit> {
@@ -149,7 +168,9 @@ impl CircuitStore {
         let removed: Vec<String> = self
             .circuits
             .keys()
-            .filter(|id| !active_ids.contains(id.as_str()))
+            .filter(|id| {
+                !active_ids.contains(id.as_str()) && !self.pinned_ids.contains(id.as_str())
+            })
             .cloned()
             .collect();
 

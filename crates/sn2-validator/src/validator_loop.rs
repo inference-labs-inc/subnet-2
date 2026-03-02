@@ -161,8 +161,11 @@ impl ValidatorLoop {
         let pipeline = RequestPipeline::new();
         let response_processor = ResponseProcessor::new();
         let circuit_store_loopback = config.loopback && config.circuit_api_url.is_none();
-        let circuit_store =
-            CircuitStore::new(config.circuit_api_url.as_deref(), circuit_store_loopback);
+        let circuit_store = CircuitStore::new(
+            config.circuit_api_url.as_deref(),
+            circuit_store_loopback,
+            config.additional_circuits.clone(),
+        );
         let run_manager = IncrementalRunManager::new();
 
         let now = Instant::now();
@@ -209,6 +212,7 @@ impl ValidatorLoop {
 
     pub async fn run(&mut self) -> Result<()> {
         self.circuit_store.load_circuits().await?;
+        self.circuit_store.load_pinned_circuits().await;
         if let Some(relay) = &mut self.relay {
             relay.start().await?;
         }

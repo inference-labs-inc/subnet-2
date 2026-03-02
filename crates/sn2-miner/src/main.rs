@@ -6,6 +6,7 @@ mod http_server;
 mod lightning_server;
 mod signature;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -108,6 +109,13 @@ async fn main() -> Result<()> {
     let quic_port = cli.quic_port;
 
     let dsperse = dsperse::DSperseClient::new();
+
+    if !cli.additional_circuits.is_empty() {
+        if let Err(e) = fetch_additional_circuits(&cli.additional_circuits).await {
+            warn!(error = %e, "failed to fetch some additional circuits");
+        }
+    }
+
     let circuit_mgr = std::sync::Arc::new(circuit_manager::CircuitManager::new(
         &cli.circuit_dir,
         cli.storage_bucket.as_deref(),
@@ -222,6 +230,13 @@ async fn run_loopback(cli: Cli) -> Result<()> {
     );
 
     let dsperse = dsperse::DSperseClient::new();
+
+    if !cli.additional_circuits.is_empty() {
+        if let Err(e) = fetch_additional_circuits(&cli.additional_circuits).await {
+            warn!(error = %e, "failed to fetch some additional circuits");
+        }
+    }
+
     let circuit_mgr = std::sync::Arc::new(circuit_manager::CircuitManager::new(
         &cli.circuit_dir,
         cli.storage_bucket.as_deref(),
@@ -259,5 +274,79 @@ async fn run_loopback(cli: Cli) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn fetch_additional_circuits(circuit_ids: &[String]) -> Result<()> {
+    let cache_dir = PathBuf::from(shellexpand::tilde(sn2_types::CIRCUIT_CACHE_DIR).to_string());
+    let api_url = sn2_types::CIRCUIT_API_URL;
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    for circuit_id in circuit_ids {
+        let model_dir = cache_dir.join(format!("model_{circuit_id}"));
+        if model_dir.join("circuit_metadata.json").exists() {
+            info!(id = %circuit_id, "additional circuit already cached");
+            continue;
+        }
+
+        info!(id = %circuit_id, "fetching additional circuit from API");
+        let url = format!("{api_url}/circuits/{circuit_id}");
+        let resp = http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("fetching circuit {circuit_id}"))?;
+
+        if !resp.status().is_success() {
+            warn!(id = %circuit_id, status = %resp.status(), "failed to fetch additional circuit");
+            continue;
+        }
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .with_context(|| format!("parsing circuit {circuit_id}"))?;
+
+        std::fs::create_dir_all(&model_dir)?;
+        if let Some(metadata) = data.get("metadata") {
+            std::fs::write(
+                model_dir.join("circuit_metadata.json"),
+                serde_json::to_string_pretty(metadata)?,
+            )?;
+        }
+
+        if let Some(files) = data.get("files").and_then(|v| v.as_object()) {
+            for (filename, url_val) in files {
+                if filename == "full_model.onnx" || filename == "metadata.json" {
+                    continue;
+                }
+                let dest = if filename.ends_with(".dslice") {
+                    let slices_dir = model_dir.join("slices");
+                    std::fs::create_dir_all(&slices_dir)?;
+                    slices_dir.join(filename)
+                } else {
+                    model_dir.join(filename)
+                };
+                if dest.exists() {
+                    continue;
+                }
+                if let Some(url) = url_val.as_str() {
+                    let resp = http
+                        .get(url)
+                        .timeout(std::time::Duration::from_secs(300))
+                        .send()
+                        .await?;
+                    if resp.status().is_success() {
+                        let bytes = resp.bytes().await?;
+                        std::fs::write(&dest, &bytes)?;
+                    }
+                }
+            }
+        }
+
+        info!(id = %circuit_id, "additional circuit cached");
+    }
     Ok(())
 }

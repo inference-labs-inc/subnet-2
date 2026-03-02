@@ -28,6 +28,7 @@ pub struct ValidatorConfig {
     pub circuit_api_url: Option<String>,
     pub disable_metric_logging: bool,
     pub loopback: bool,
+    pub additional_circuits: Vec<String>,
 }
 
 impl ValidatorConfig {
@@ -104,6 +105,7 @@ impl ValidatorConfig {
             circuit_api_url: cli.circuit_api_url.clone(),
             disable_metric_logging: cli.disable_metric_logging,
             loopback: false,
+            additional_circuits: cli.additional_circuits.clone(),
         })
     }
 
@@ -155,6 +157,7 @@ impl ValidatorConfig {
             circuit_api_url: cli.circuit_api_url.clone(),
             disable_metric_logging: true,
             loopback: true,
+            additional_circuits: cli.additional_circuits.clone(),
         }
     }
 }

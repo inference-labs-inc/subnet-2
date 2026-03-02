@@ -61,4 +61,7 @@ pub struct Cli {
         help = "Run without chain interaction for local integration testing"
     )]
     pub loopback: bool,
+
+    #[arg(long, value_delimiter = ',')]
+    pub additional_circuits: Vec<String>,
 }
