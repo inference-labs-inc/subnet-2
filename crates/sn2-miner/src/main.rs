@@ -293,33 +293,55 @@ async fn fetch_additional_circuits(circuit_ids: &[String]) -> Result<()> {
 
         info!(id = %circuit_id, "fetching additional circuit from API");
         let url = format!("{api_url}/circuits/{circuit_id}");
-        let resp = http
-            .get(&url)
-            .send()
-            .await
-            .with_context(|| format!("fetching circuit {circuit_id}"))?;
+        let resp = match http.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(id = %circuit_id, error = %e, "failed to fetch additional circuit");
+                continue;
+            }
+        };
 
         if !resp.status().is_success() {
             warn!(id = %circuit_id, status = %resp.status(), "failed to fetch additional circuit");
             continue;
         }
 
-        let data: serde_json::Value = resp
-            .json()
-            .await
-            .with_context(|| format!("parsing circuit {circuit_id}"))?;
+        let data: serde_json::Value = match resp.json().await {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(id = %circuit_id, error = %e, "failed to parse circuit API response");
+                continue;
+            }
+        };
 
         std::fs::create_dir_all(&model_dir)?;
 
+        let mut any_failed = false;
         if let Some(files) = data.get("files").and_then(|v| v.as_object()) {
             for (filename, url_val) in files {
                 if filename == "full_model.onnx" || filename == "metadata.json" {
+                    continue;
+                }
+                let fname = std::path::Path::new(filename.as_str());
+                if fname.components().any(|c| {
+                    matches!(
+                        c,
+                        std::path::Component::ParentDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )
+                }) || filename.contains('/')
+                    || filename.contains('\\')
+                {
+                    warn!(id = %circuit_id, file = %filename, "rejected filename with path components");
+                    any_failed = true;
                     continue;
                 }
                 let dest = if filename.ends_with(".dslice") {
                     let slices_dir = model_dir.join("slices");
                     if let Err(e) = std::fs::create_dir_all(&slices_dir) {
                         warn!(id = %circuit_id, file = %filename, error = %e, "failed to create slices dir");
+                        any_failed = true;
                         continue;
                     }
                     slices_dir.join(filename)
@@ -340,32 +362,42 @@ async fn fetch_additional_circuits(circuit_ids: &[String]) -> Result<()> {
                         Ok(r) => r,
                         Err(e) => {
                             warn!(id = %circuit_id, file = %filename, error = %e, "download request failed");
+                            any_failed = true;
                             continue;
                         }
                     };
                     if !resp.status().is_success() {
                         warn!(id = %circuit_id, file = %filename, status = %resp.status(), "download returned error");
+                        any_failed = true;
                         continue;
                     }
                     let bytes = match resp.bytes().await {
                         Ok(b) => b,
                         Err(e) => {
                             warn!(id = %circuit_id, file = %filename, error = %e, "failed to read download body");
+                            any_failed = true;
                             continue;
                         }
                     };
                     if let Err(e) = std::fs::write(&tmp, &bytes) {
                         warn!(id = %circuit_id, file = %filename, error = %e, "failed to write temp file");
                         std::fs::remove_file(&tmp).ok();
+                        any_failed = true;
                         continue;
                     }
                     if let Err(e) = std::fs::rename(&tmp, &dest) {
                         warn!(id = %circuit_id, file = %filename, error = %e, "failed to rename temp file");
                         std::fs::remove_file(&tmp).ok();
+                        any_failed = true;
                         continue;
                     }
                 }
             }
+        }
+
+        if any_failed {
+            warn!(id = %circuit_id, "skipping metadata marker due to download failures");
+            continue;
         }
 
         if let Some(metadata) = data.get("metadata") {
