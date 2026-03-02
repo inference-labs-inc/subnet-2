@@ -105,7 +105,8 @@ async fn main() -> Result<()> {
     };
 
     let http_port = cli.axon_port;
-    let quic_port = cli.quic_port;
+    let quic_port = cli.quic_port.unwrap_or(cli.axon_port);
+    anyhow::ensure!(quic_port != 0, "QUIC port must be non-zero");
 
     let dsperse = dsperse::DSperseClient::new();
 

@@ -998,7 +998,6 @@ impl ValidatorLoop {
 
                 let ip = neuron.axon_ip.clone();
                 let port = neuron.axon_port;
-                let protocol = neuron.axon_protocol;
                 let hotkey = neuron.hotkey.clone();
                 let timeout = if api_eligible.contains(&uid) {
                     API_TIMEOUT_SECONDS
@@ -1022,35 +1021,9 @@ impl ValidatorLoop {
                     let tokio_task_id = tokio::task::id();
 
                     let guard = client.read().await;
-                    let query_result = if protocol > 0 {
-                        let axon = QuicAxonInfo {
-                            hotkey,
-                            ip: ip.clone(),
-                            port,
-                            protocol,
-                        };
-                        let data: HashMap<String, serde_json::Value> =
-                            serde_json::from_value(body).unwrap_or_default();
-                        guard
-                            .query_miner_quic(&axon, synapse_name, data, timeout)
-                            .await
-                    } else {
-                        match guard.build_signing_headers(&body, &hotkey) {
-                            Ok(headers) => {
-                                guard
-                                    .query_miner_http(
-                                        &ip,
-                                        port,
-                                        synapse_name,
-                                        &body,
-                                        &headers,
-                                        timeout,
-                                    )
-                                    .await
-                            }
-                            Err(e) => Err(e),
-                        }
-                    };
+                    let query_result = guard
+                        .query_miner_adaptive(&ip, port, &hotkey, synapse_name, &body, timeout)
+                        .await;
                     drop(guard);
 
                     let outcome = match query_result {
@@ -1978,12 +1951,12 @@ impl ValidatorLoop {
             .metagraph
             .neurons
             .iter()
-            .filter(|n| n.axon_protocol > 0 && !n.axon_ip.is_empty())
+            .filter(|n| is_valid_ip(&n.axon_ip) && n.axon_port > 0)
             .map(|n| QuicAxonInfo {
                 hotkey: n.hotkey.clone(),
                 ip: n.axon_ip.clone(),
                 port: n.axon_port,
-                protocol: n.axon_protocol,
+                protocol: 4,
             })
             .collect();
 
@@ -1996,6 +1969,10 @@ impl ValidatorLoop {
             {
                 warn!(error = %e, "updating QUIC miner connections");
             }
+            client.clear_transport_cache();
+        } else {
+            let client = self.miner_client.read().await;
+            client.clear_transport_cache();
         }
 
         Ok(())

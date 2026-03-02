@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use btlightning::{LightningClient, QuicAxonInfo, QuicRequest, Signer};
+use btlightning::{LightningClient, LightningError, QuicAxonInfo, QuicRequest, Signer};
 use sha2::{Digest, Sha256};
 use sn2_chain::Wallet;
-use tracing::info;
+use tracing::{info, warn};
 
 struct WalletSigner(Arc<Wallet>);
 
@@ -18,10 +18,21 @@ impl Signer for WalletSigner {
     }
 }
 
+const QUIC_PROBE_TIMEOUT_SECS: f64 = 2.0;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TransportPreference {
+    Unknown,
+    Probing,
+    Quic,
+    HttpOnly,
+}
+
 pub struct MinerQueryClient {
     lightning: LightningClient,
     http: reqwest::Client,
     wallet: Option<Arc<Wallet>>,
+    transport_cache: Mutex<HashMap<String, TransportPreference>>,
 }
 
 impl MinerQueryClient {
@@ -38,6 +49,7 @@ impl MinerQueryClient {
             lightning,
             http,
             wallet: Some(wallet),
+            transport_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -52,6 +64,7 @@ impl MinerQueryClient {
             lightning,
             http,
             wallet: None,
+            transport_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -110,7 +123,7 @@ impl MinerQueryClient {
         timeout_secs: f64,
     ) -> Result<(serde_json::Value, f64)> {
         let request = QuicRequest::from_typed(synapse_type, &data)
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(anyhow::Error::from)
             .context("serializing QUIC request")?;
 
         let start = Instant::now();
@@ -118,15 +131,15 @@ impl MinerQueryClient {
             .lightning
             .query_axon_with_timeout(axon.clone(), request, Duration::from_secs_f64(timeout_secs))
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(anyhow::Error::from)
             .context("QUIC query")?;
         let elapsed = start.elapsed().as_secs_f64();
 
-        let response = response.into_result().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let response = response.into_result().map_err(anyhow::Error::from)?;
 
         let resp_body: serde_json::Value = response
             .deserialize_data()
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(anyhow::Error::from)
             .context("deserializing QUIC response")?;
         Ok((resp_body, elapsed))
     }
@@ -169,4 +182,124 @@ impl MinerQueryClient {
         let body: serde_json::Value = response.json().await.context("parsing miner response")?;
         Ok((body, elapsed))
     }
+
+    pub async fn query_miner_adaptive(
+        &self,
+        ip: &str,
+        port: u16,
+        hotkey: &str,
+        synapse_type: &str,
+        body: &serde_json::Value,
+        timeout_secs: f64,
+    ) -> Result<(serde_json::Value, f64)> {
+        let pref = self.get_or_claim_probe(hotkey);
+
+        if matches!(
+            pref,
+            TransportPreference::HttpOnly | TransportPreference::Probing
+        ) {
+            let headers = self.build_signing_headers(body, hotkey)?;
+            return self
+                .query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
+                .await;
+        }
+
+        let is_probe = pref == TransportPreference::Unknown;
+        let axon = QuicAxonInfo::new(hotkey.to_string(), ip.to_string(), port, 4);
+        let data: HashMap<String, serde_json::Value> = match serde_json::from_value(body.clone()) {
+            Ok(d) => d,
+            Err(e) => {
+                if is_probe {
+                    self.set_transport(hotkey, TransportPreference::Unknown);
+                }
+                return Err(anyhow::Error::from(e).context("deserializing QUIC payload"));
+            }
+        };
+
+        let quic_timeout = if is_probe {
+            timeout_secs.min(QUIC_PROBE_TIMEOUT_SECS)
+        } else {
+            timeout_secs
+        };
+
+        match self
+            .query_miner_quic(&axon, synapse_type, data, quic_timeout)
+            .await
+        {
+            Ok(result) => {
+                if is_probe {
+                    self.set_transport(hotkey, TransportPreference::Quic);
+                    info!(hotkey = hotkey, "QUIC probe succeeded, caching transport");
+                }
+                Ok(result)
+            }
+            Err(e) if is_connection_error(&e) => {
+                if is_probe {
+                    self.set_transport(hotkey, TransportPreference::HttpOnly);
+                    warn!(
+                        hotkey = hotkey,
+                        error = %e,
+                        "QUIC probe failed, falling back to HTTP"
+                    );
+                    let headers = self.build_signing_headers(body, hotkey)?;
+                    self.query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
+                        .await
+                } else {
+                    self.set_transport(hotkey, TransportPreference::Unknown);
+                    Err(e)
+                }
+            }
+            Err(e) => {
+                if is_probe {
+                    self.set_transport(hotkey, TransportPreference::Unknown);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn get_or_claim_probe(&self, hotkey: &str) -> TransportPreference {
+        let mut cache = self
+            .transport_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let entry = cache
+            .entry(hotkey.to_string())
+            .or_insert(TransportPreference::Unknown);
+        if *entry == TransportPreference::Unknown {
+            *entry = TransportPreference::Probing;
+            TransportPreference::Unknown
+        } else {
+            *entry
+        }
+    }
+
+    fn set_transport(&self, hotkey: &str, pref: TransportPreference) {
+        self.transport_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(hotkey.to_string(), pref);
+    }
+
+    pub fn clear_transport_cache(&self) {
+        self.transport_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+    }
+}
+
+fn is_connection_error(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        if let Some(le) = cause.downcast_ref::<LightningError>() {
+            return matches!(
+                le,
+                LightningError::Connection(_)
+                    | LightningError::Transport(_)
+                    | LightningError::Handshake(_)
+                    | LightningError::Stream(_)
+            );
+        }
+    }
+    false
 }
