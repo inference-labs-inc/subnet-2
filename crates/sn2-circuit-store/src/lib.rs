@@ -52,15 +52,40 @@ impl CircuitStore {
             return Ok(());
         }
 
-        let api_circuits = self.fetch_circuits_from_api().await.unwrap_or_else(|e| {
+        let mut api_circuits = self.fetch_circuits_from_api().await.unwrap_or_else(|e| {
             warn!(error = %e, "failed to fetch circuits from API, loading from cache only");
             Vec::new()
         });
 
-        let active_ids: std::collections::HashSet<String> = api_circuits
+        let mut active_ids: std::collections::HashSet<String> = api_circuits
             .iter()
             .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
             .collect();
+
+        for pinned_id in &self.pinned_ids {
+            if active_ids.contains(pinned_id) {
+                continue;
+            }
+            info!(id = %pinned_id, "fetching pinned circuit from API");
+            let url = format!("{}/circuits/{}", self.api_url, pinned_id);
+            match self.http.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                    Ok(data) => {
+                        active_ids.insert(pinned_id.clone());
+                        api_circuits.push(data);
+                    }
+                    Err(e) => {
+                        warn!(id = %pinned_id, error = %e, "failed to parse pinned circuit response");
+                    }
+                },
+                Ok(resp) => {
+                    warn!(id = %pinned_id, status = %resp.status(), "failed to fetch pinned circuit");
+                }
+                Err(e) => {
+                    warn!(id = %pinned_id, error = %e, "failed to fetch pinned circuit");
+                }
+            }
+        }
 
         self.load_from_cache(&active_ids);
 
@@ -92,19 +117,6 @@ impl CircuitStore {
 
         info!(count = self.circuits.len(), "circuits loaded");
         Ok(())
-    }
-
-    pub async fn load_pinned_circuits(&mut self) {
-        for id in self.pinned_ids.clone() {
-            match self.ensure_circuit(&id).await {
-                Ok(circuit) => {
-                    info!(id = %id, name = %circuit.metadata.name, "loaded pinned circuit");
-                }
-                Err(e) => {
-                    warn!(id = %id, error = %e, "failed to load pinned circuit");
-                }
-            }
-        }
     }
 
     pub async fn ensure_circuit(&mut self, circuit_id: &str) -> Result<Circuit> {

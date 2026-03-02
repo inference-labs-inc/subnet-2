@@ -12725,6 +12725,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sn2-circuit-store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest 0.12.28",
+ "serde_json",
+ "shellexpand",
+ "sn2-types",
+ "tokio",
+ "tracing",
+ "zip",
+]
+
+[[package]]
 name = "sn2-miner"
 version = "0.1.0"
 dependencies = [
@@ -12746,6 +12760,7 @@ dependencies = [
  "sha2 0.10.9",
  "shellexpand",
  "sn2-chain",
+ "sn2-circuit-store",
  "sn2-types",
  "sp-core 31.0.0",
  "subxt 0.37.0",
@@ -12784,8 +12799,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "shellexpand",
  "sn2-chain",
+ "sn2-circuit-store",
  "sn2-types",
  "sn2-verify",
  "subxt 0.37.0",
@@ -12794,7 +12809,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.22",
  "uuid",
- "zip",
 ]
 
 [[package]]

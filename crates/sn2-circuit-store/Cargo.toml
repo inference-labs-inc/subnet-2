@@ -1,0 +1,15 @@
+[package]
+name = "sn2-circuit-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sn2-types = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+shellexpand = { workspace = true }
+zip = { workspace = true }

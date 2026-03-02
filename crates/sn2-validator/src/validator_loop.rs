@@ -11,7 +11,7 @@ use tokio::sync::{Notify, RwLock};
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
-use crate::circuit_store::CircuitStore;
+use sn2_circuit_store::CircuitStore;
 use crate::config::ValidatorConfig;
 use crate::incremental_runner::{IncrementalRunManager, SliceArtifact};
 use crate::miner_client::MinerQueryClient;
@@ -212,7 +212,6 @@ impl ValidatorLoop {
 
     pub async fn run(&mut self) -> Result<()> {
         self.circuit_store.load_circuits().await?;
-        self.circuit_store.load_pinned_circuits().await;
         if let Some(relay) = &mut self.relay {
             relay.start().await?;
         }
@@ -437,7 +436,7 @@ impl ValidatorLoop {
                 let dir = slices_dir.clone();
                 let sid = slice_info.slice_id.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    crate::circuit_store::ensure_slice_extracted(&dir, &sid)
+                    sn2_circuit_store::ensure_slice_extracted(&dir, &sid)
                 })
                 .await;
                 match result {
@@ -507,7 +506,7 @@ impl ValidatorLoop {
                     &crate::tensor_json::arrayd_to_json(&output_tensor),
                 ) {
                     Ok(true) => {
-                        crate::circuit_store::cleanup_extracted_slice(
+                        sn2_circuit_store::cleanup_extracted_slice(
                             &slices_dir,
                             &slice_info.slice_id,
                         );
@@ -538,14 +537,14 @@ impl ValidatorLoop {
                         return;
                     }
                     Ok(false) => {
-                        crate::circuit_store::cleanup_extracted_slice(
+                        sn2_circuit_store::cleanup_extracted_slice(
                             &slices_dir,
                             &slice_info.slice_id,
                         );
                         continue;
                     }
                     Err(e) => {
-                        crate::circuit_store::cleanup_extracted_slice(
+                        sn2_circuit_store::cleanup_extracted_slice(
                             &slices_dir,
                             &slice_info.slice_id,
                         );
@@ -1512,7 +1511,7 @@ impl ValidatorLoop {
             .and_then(|cid| self.circuit_store.get_circuit(cid))
             .map(|c| c.paths.base_path.join("slices"));
         if let Some(ref sd) = slices_dir {
-            crate::circuit_store::cleanup_extracted_slice(sd, slice_num);
+            sn2_circuit_store::cleanup_extracted_slice(sd, slice_num);
         }
 
         match self.run_manager.apply_result(run_uid, slice_num, computed) {

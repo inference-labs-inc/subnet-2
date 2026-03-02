@@ -3,6 +3,7 @@ members = [
     "crates/sn2-types",
     "crates/sn2-chain",
     "crates/sn2-verify",
+    "crates/sn2-circuit-store",
     "crates/sn2-validator",
     "crates/sn2-miner",
 ]
@@ -19,6 +20,7 @@ repository = "https://github.com/inference-labs-inc/subnet-2"
 sn2-types = { path = "crates/sn2-types" }
 sn2-chain = { path = "crates/sn2-chain" }
 sn2-verify = { path = "crates/sn2-verify" }
+sn2-circuit-store = { path = "crates/sn2-circuit-store" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

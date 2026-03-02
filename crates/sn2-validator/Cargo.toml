@@ -12,6 +12,7 @@ path = "src/main.rs"
 sn2-types = { workspace = true }
 sn2-chain = { workspace = true }
 sn2-verify = { workspace = true }
+sn2-circuit-store = { workspace = true }
 btlightning = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -33,7 +34,5 @@ base64 = { workspace = true }
 rand = { workspace = true }
 dirs-next = { workspace = true }
 futures-util = { workspace = true }
-shellexpand = { workspace = true }
 dsperse = { workspace = true }
 ndarray = { workspace = true }
-zip = { workspace = true }

@@ -6,7 +6,6 @@ mod http_server;
 mod lightning_server;
 mod signature;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -110,11 +109,11 @@ async fn main() -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    if !cli.additional_circuits.is_empty() {
-        if let Err(e) = fetch_additional_circuits(&cli.additional_circuits).await {
-            warn!(error = %e, "failed to fetch some additional circuits");
-        }
-    }
+    let circuit_store = sn2_circuit_store::CircuitStore::new(
+        None,
+        false,
+        cli.additional_circuits.clone(),
+    );
 
     let circuit_mgr = std::sync::Arc::new(circuit_manager::CircuitManager::new(
         &cli.circuit_dir,
@@ -123,7 +122,7 @@ async fn main() -> Result<()> {
 
     let circuit_monitor = circuit_mgr.clone().start_monitor();
 
-    let handlers = handlers::MinerHandlers::new(dsperse, circuit_mgr);
+    let handlers = handlers::MinerHandlers::new(dsperse, circuit_mgr, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
 
     let disable_blacklist = cli.disable_blacklist;
@@ -231,11 +230,11 @@ async fn run_loopback(cli: Cli) -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    if !cli.additional_circuits.is_empty() {
-        if let Err(e) = fetch_additional_circuits(&cli.additional_circuits).await {
-            warn!(error = %e, "failed to fetch some additional circuits");
-        }
-    }
+    let circuit_store = sn2_circuit_store::CircuitStore::new(
+        None,
+        true,
+        cli.additional_circuits.clone(),
+    );
 
     let circuit_mgr = std::sync::Arc::new(circuit_manager::CircuitManager::new(
         &cli.circuit_dir,
@@ -244,7 +243,7 @@ async fn run_loopback(cli: Cli) -> Result<()> {
 
     let circuit_monitor = circuit_mgr.clone().start_monitor();
 
-    let handlers = handlers::MinerHandlers::new(dsperse, circuit_mgr);
+    let handlers = handlers::MinerHandlers::new(dsperse, circuit_mgr, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
 
     let metagraph = Arc::new(RwLock::new(sn2_chain::Metagraph::new(cli.netuid)));
@@ -274,162 +273,5 @@ async fn run_loopback(cli: Cli) -> Result<()> {
         }
     }
 
-    Ok(())
-}
-
-async fn fetch_additional_circuits(circuit_ids: &[String]) -> Result<()> {
-    let cache_dir = PathBuf::from(shellexpand::tilde(sn2_types::CIRCUIT_CACHE_DIR).to_string());
-    let api_url = sn2_types::CIRCUIT_API_URL;
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-
-    for circuit_id in circuit_ids {
-        let model_dir = cache_dir.join(format!("model_{circuit_id}"));
-        if model_dir.join("circuit_metadata.json").exists() {
-            info!(id = %circuit_id, "additional circuit already cached");
-            continue;
-        }
-
-        info!(id = %circuit_id, "fetching additional circuit from API");
-        let url = format!("{api_url}/circuits/{circuit_id}");
-        let resp = match http.get(&url).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(id = %circuit_id, error = %e, "failed to fetch additional circuit");
-                continue;
-            }
-        };
-
-        if !resp.status().is_success() {
-            warn!(id = %circuit_id, status = %resp.status(), "failed to fetch additional circuit");
-            continue;
-        }
-
-        let data: serde_json::Value = match resp.json().await {
-            Ok(d) => d,
-            Err(e) => {
-                warn!(id = %circuit_id, error = %e, "failed to parse circuit API response");
-                continue;
-            }
-        };
-
-        if let Err(e) = std::fs::create_dir_all(&model_dir) {
-            warn!(id = %circuit_id, dir = %model_dir.display(), error = %e, "failed to create circuit cache dir");
-            continue;
-        }
-
-        let mut any_failed = false;
-        if let Some(files) = data.get("files").and_then(|v| v.as_object()) {
-            for (filename, url_val) in files {
-                if filename == "full_model.onnx" || filename == "metadata.json" {
-                    continue;
-                }
-                let fname = std::path::Path::new(filename.as_str());
-                if fname.components().any(|c| {
-                    matches!(
-                        c,
-                        std::path::Component::ParentDir
-                            | std::path::Component::RootDir
-                            | std::path::Component::Prefix(_)
-                    )
-                }) || filename.contains('/')
-                    || filename.contains('\\')
-                {
-                    warn!(id = %circuit_id, file = %filename, "rejected filename with path components");
-                    any_failed = true;
-                    continue;
-                }
-                let dest = if filename.ends_with(".dslice") {
-                    let slices_dir = model_dir.join("slices");
-                    if let Err(e) = std::fs::create_dir_all(&slices_dir) {
-                        warn!(id = %circuit_id, file = %filename, error = %e, "failed to create slices dir");
-                        any_failed = true;
-                        continue;
-                    }
-                    slices_dir.join(filename)
-                } else {
-                    model_dir.join(filename)
-                };
-                if dest.exists() {
-                    continue;
-                }
-                let url = match url_val.as_str() {
-                    Some(u) => u,
-                    None => {
-                        warn!(id = %circuit_id, file = %filename, "file URL is not a string");
-                        any_failed = true;
-                        continue;
-                    }
-                };
-                let tmp = dest.with_extension("tmp");
-                let resp = match http
-                    .get(url)
-                    .timeout(std::time::Duration::from_secs(300))
-                    .send()
-                    .await
-                {
-                    Ok(r) => r,
-                    Err(e) => {
-                        warn!(id = %circuit_id, file = %filename, error = %e, "download request failed");
-                        any_failed = true;
-                        continue;
-                    }
-                };
-                if !resp.status().is_success() {
-                    warn!(id = %circuit_id, file = %filename, status = %resp.status(), "download returned error");
-                    any_failed = true;
-                    continue;
-                }
-                let bytes = match resp.bytes().await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        warn!(id = %circuit_id, file = %filename, error = %e, "failed to read download body");
-                        any_failed = true;
-                        continue;
-                    }
-                };
-                if let Err(e) = std::fs::write(&tmp, &bytes) {
-                    warn!(id = %circuit_id, file = %filename, error = %e, "failed to write temp file");
-                    std::fs::remove_file(&tmp).ok();
-                    any_failed = true;
-                    continue;
-                }
-                if let Err(e) = std::fs::rename(&tmp, &dest) {
-                    warn!(id = %circuit_id, file = %filename, error = %e, "failed to rename temp file");
-                    std::fs::remove_file(&tmp).ok();
-                    any_failed = true;
-                    continue;
-                }
-            }
-        }
-
-        if any_failed {
-            warn!(id = %circuit_id, "skipping metadata marker due to download failures");
-            continue;
-        }
-
-        if let Some(metadata) = data.get("metadata") {
-            let marker_tmp = model_dir.join("circuit_metadata.json.tmp");
-            let marker = model_dir.join("circuit_metadata.json");
-            match serde_json::to_string_pretty(metadata) {
-                Ok(json) => {
-                    if let Err(e) = std::fs::write(&marker_tmp, json)
-                        .and_then(|()| std::fs::rename(&marker_tmp, &marker))
-                    {
-                        warn!(id = %circuit_id, error = %e, "failed to write metadata marker");
-                        std::fs::remove_file(&marker_tmp).ok();
-                        continue;
-                    }
-                }
-                Err(e) => {
-                    warn!(id = %circuit_id, error = %e, "failed to serialize metadata");
-                    continue;
-                }
-            }
-        }
-
-        info!(id = %circuit_id, "additional circuit cached");
-    }
     Ok(())
 }

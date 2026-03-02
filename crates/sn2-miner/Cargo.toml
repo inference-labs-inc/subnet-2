@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 sn2-types = { workspace = true }
 sn2-chain = { workspace = true }
+sn2-circuit-store = { workspace = true }
 btlightning = { workspace = true }
 dsperse = { workspace = true }
 tokio = { workspace = true }
