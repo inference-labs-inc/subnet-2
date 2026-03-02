@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
     };
 
     match registration
-        .serve_axon(&chain_client, &wallet, external_ip, http_port, 4)
+        .serve_axon(&chain_client, &wallet, external_ip, quic_port, 4)
         .await
     {
         Ok(()) => {}
