@@ -241,7 +241,7 @@ impl CircuitStore {
                 std::fs::create_dir_all(&slices_dir).ok();
             }
 
-            let mut deferred_downloads: Vec<(String, PathBuf, PathBuf)> = Vec::new();
+            let mut deferred_downloads: Vec<(String, PathBuf)> = Vec::new();
 
             for (filename, url_val) in files {
                 let skip = if is_dsperse {
@@ -254,14 +254,14 @@ impl CircuitStore {
                 }
 
                 if is_dsperse && filename.ends_with(".dslice") {
-                    let stem = filename.trim_end_matches(".dslice");
-                    let extract_dir = cache_path.join("slices").join(stem);
-                    if extract_dir.exists() {
+                    let archive_dest = cache_path.join("slices").join(filename);
+                    let slice_name = filename.trim_end_matches(".dslice");
+                    let extracted_dir = cache_path.join("slices").join(slice_name);
+                    if archive_dest.exists() || extracted_dir.exists() {
                         continue;
                     }
                     if let Some(url) = url_val.as_str() {
-                        let archive_dest = cache_path.join("slices").join(filename);
-                        deferred_downloads.push((url.to_string(), archive_dest, extract_dir));
+                        deferred_downloads.push((url.to_string(), archive_dest));
                     }
                     continue;
                 }
@@ -289,32 +289,35 @@ impl CircuitStore {
                 info!(circuit = %circuit_id, files = count, "spawning background dslice downloads");
                 tokio::spawn(async move {
                     let mut downloaded = 0usize;
-                    for (url, archive_dest, extract_dir) in &deferred_downloads {
-                        if extract_dir.exists() {
+                    for (url, dest) in &deferred_downloads {
+                        if dest.exists() {
                             downloaded += 1;
                             continue;
                         }
-                        match download_file_static(&http, url, archive_dest).await {
+                        let partial = dest.with_extension("dslice.partial");
+                        match download_file_static(&http, url, &partial).await {
                             Ok(()) => {
-                                match extract_dslice(archive_dest, extract_dir) {
-                                    Ok(()) => {
-                                        let _ = std::fs::remove_file(archive_dest);
-                                        downloaded += 1;
-                                        if downloaded % 20 == 0 || downloaded == count {
-                                            info!(progress = %format!("{downloaded}/{count}"), "dslice extraction progress");
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!(file = %archive_dest.display(), error = %e, "failed to extract dslice");
-                                    }
+                                if let Err(e) = std::fs::rename(&partial, dest) {
+                                    warn!(
+                                        file = %dest.display(),
+                                        error = %e,
+                                        "failed to rename partial dslice download"
+                                    );
+                                    std::fs::remove_file(&partial).ok();
+                                    continue;
+                                }
+                                downloaded += 1;
+                                if downloaded % 20 == 0 || downloaded == count {
+                                    info!(progress = %format!("{downloaded}/{count}"), "dslice download progress");
                                 }
                             }
                             Err(e) => {
-                                warn!(file = %archive_dest.display(), error = %e, "failed to download dslice file");
+                                std::fs::remove_file(&partial).ok();
+                                warn!(file = %dest.display(), error = %e, "failed to download dslice file");
                             }
                         }
                     }
-                    info!(count = downloaded, "dslice downloads and extractions complete");
+                    info!(count = downloaded, "dslice background downloads complete");
                 });
             }
         }
@@ -456,21 +459,56 @@ fn migrate_dslice_layout(model_dir: &Path) {
     info!(dir = %model_dir.display(), "migrated dslice files to slices/ subdirectory");
 }
 
-fn extract_dslice(archive: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
-    let file = std::fs::File::open(archive)
-        .with_context(|| format!("opening {}", archive.display()))?;
+pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
+    let extract_dir = slices_dir.join(slice_id);
+    if extract_dir.exists() {
+        return Ok(());
+    }
+    let archive = slices_dir.join(format!("{slice_id}.dslice"));
+    if !archive.exists() {
+        anyhow::bail!("dslice archive not found: {}", archive.display());
+    }
+    let tmp_dir = slices_dir.join(format!(".{slice_id}.extracting"));
+    if tmp_dir.exists() {
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+    std::fs::create_dir_all(&tmp_dir).with_context(|| format!("creating {}", tmp_dir.display()))?;
+    let file =
+        std::fs::File::open(&archive).with_context(|| format!("opening {}", archive.display()))?;
     let mut zip =
         zip::ZipArchive::new(file).with_context(|| format!("reading zip {}", archive.display()))?;
-    std::fs::create_dir_all(dest_dir)
-        .with_context(|| format!("creating {}", dest_dir.display()))?;
-    zip.extract(dest_dir).with_context(|| {
-        format!(
-            "extracting {} to {}",
-            archive.display(),
-            dest_dir.display()
-        )
-    })?;
+    if let Err(e) = zip
+        .extract(&tmp_dir)
+        .with_context(|| format!("extracting {} to {}", archive.display(), tmp_dir.display()))
+    {
+        std::fs::remove_dir_all(&tmp_dir).ok();
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp_dir, &extract_dir) {
+        std::fs::remove_dir_all(&tmp_dir).ok();
+        return Err(anyhow::anyhow!(
+            "renaming {} to {}: {e}",
+            tmp_dir.display(),
+            extract_dir.display()
+        ));
+    }
+    if let Err(e) = std::fs::remove_file(&archive) {
+        tracing::warn!(
+            archive = %archive.display(),
+            error = %e,
+            "failed to remove dslice archive after extraction"
+        );
+    }
     Ok(())
+}
+
+pub fn cleanup_extracted_slice(slices_dir: &Path, slice_id: &str) {
+    let extract_dir = slices_dir.join(slice_id);
+    if extract_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&extract_dir) {
+            tracing::warn!(dir = %extract_dir.display(), error = %e, "failed to remove extracted slice dir");
+        }
+    }
 }
 
 fn parse_proof_system(s: &str) -> ProofSystem {

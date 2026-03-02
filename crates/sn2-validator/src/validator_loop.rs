@@ -415,6 +415,7 @@ impl ValidatorLoop {
     }
 
     async fn enqueue_next_dslice(&mut self, run_uid: &str, circuit: &Circuit) {
+        let slices_dir = circuit.paths.base_path.join("slices");
         loop {
             let slice_info = match self.run_manager.next_slice(run_uid) {
                 Ok(Some(info)) => info,
@@ -427,6 +428,28 @@ impl ValidatorLoop {
                     return;
                 }
             };
+
+            {
+                let dir = slices_dir.clone();
+                let sid = slice_info.slice_id.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::circuit_store::ensure_slice_extracted(&dir, &sid)
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "failed to extract dslice");
+                        self.run_manager.remove_run(run_uid);
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "dslice extraction task panicked");
+                        self.run_manager.remove_run(run_uid);
+                        return;
+                    }
+                }
+            }
 
             if !slice_info.use_circuit {
                 let onnx_path = match slice_info.onnx_path {
@@ -480,6 +503,10 @@ impl ValidatorLoop {
                     &crate::tensor_json::arrayd_to_json(&output_tensor),
                 ) {
                     Ok(true) => {
+                        crate::circuit_store::cleanup_extracted_slice(
+                            &slices_dir,
+                            &slice_info.slice_id,
+                        );
                         info!(run_uid = %run_uid, "incremental run complete after ONNX slice");
                         let active_run = self.run_manager.remove_run(run_uid);
                         if let Some(ref run) = active_run {
@@ -506,8 +533,18 @@ impl ValidatorLoop {
                         .await;
                         return;
                     }
-                    Ok(false) => continue,
+                    Ok(false) => {
+                        crate::circuit_store::cleanup_extracted_slice(
+                            &slices_dir,
+                            &slice_info.slice_id,
+                        );
+                        continue;
+                    }
                     Err(e) => {
+                        crate::circuit_store::cleanup_extracted_slice(
+                            &slices_dir,
+                            &slice_info.slice_id,
+                        );
                         warn!(run_uid = %run_uid, error = %e, "apply_result failed for ONNX slice");
                         self.run_manager.remove_run(run_uid);
                         return;
@@ -1465,6 +1502,15 @@ impl ValidatorLoop {
         slice_num: &str,
         computed: &serde_json::Value,
     ) {
+        let slices_dir = self
+            .run_manager
+            .get_circuit_id(run_uid)
+            .and_then(|cid| self.circuit_store.get_circuit(cid))
+            .map(|c| c.paths.base_path.join("slices"));
+        if let Some(ref sd) = slices_dir {
+            crate::circuit_store::cleanup_extracted_slice(sd, slice_num);
+        }
+
         match self.run_manager.apply_result(run_uid, slice_num, computed) {
             Ok(is_complete) => {
                 if is_complete {
