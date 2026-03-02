@@ -40,7 +40,11 @@ impl CircuitStore {
                 .unwrap_or_default(),
             loopback,
             api_url_overridden,
-            pinned_ids: additional_circuits.into_iter().collect(),
+            pinned_ids: additional_circuits
+                .into_iter()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect(),
         }
     }
 
@@ -89,7 +93,11 @@ impl CircuitStore {
             }
         }
 
-        self.load_from_cache(&active_ids);
+        let mut load_ids = active_ids.clone();
+        for id in &self.pinned_ids {
+            load_ids.insert(id.clone());
+        }
+        self.load_from_cache(&load_ids);
 
         for circuit_data in &api_circuits {
             if let Some(id) = circuit_data.get("id").and_then(|v| v.as_str()) {
