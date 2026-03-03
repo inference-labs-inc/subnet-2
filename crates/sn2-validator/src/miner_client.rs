@@ -238,7 +238,7 @@ impl MinerQueryClient {
                     self.set_transport(hotkey, TransportPreference::HttpOnly);
                     warn!(
                         hotkey = hotkey,
-                        error = %e,
+                        error = ?e,
                         "QUIC probe failed, falling back to HTTP"
                     );
                     let headers = self.build_signing_headers(body, hotkey)?;

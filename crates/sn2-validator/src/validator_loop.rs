@@ -1081,7 +1081,7 @@ impl ValidatorLoop {
                             }
                             TaskOutcome::Success(Box::new(response))
                         }
-                        Err(e) => TaskOutcome::Failure(e.to_string()),
+                        Err(e) => TaskOutcome::Failure(format!("{e:#}")),
                     };
 
                     TaskResult {
