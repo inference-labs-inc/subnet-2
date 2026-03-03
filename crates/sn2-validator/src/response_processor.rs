@@ -41,16 +41,14 @@ impl ResponseProcessor {
         let circuit = match &response.circuit {
             Some(c) => c,
             None => {
-                warn!(
-                    uid = response.uid,
-                    "no circuit data for verification, accepting proof"
-                );
-                return Ok(!proof_hex.is_empty());
+                warn!(uid = response.uid, "no circuit data for verification");
+                return Ok(false);
             }
         };
 
         if circuit.proof_system != ProofSystem::JSTPROVE {
-            return Ok(!proof_hex.is_empty());
+            warn!(uid = response.uid, proof_system = ?circuit.proof_system, "unsupported proof system");
+            return Ok(false);
         }
 
         let circuit_path = if response.is_incremental {
@@ -71,8 +69,8 @@ impl ResponseProcessor {
         };
 
         if !std::path::Path::new(&circuit_path).exists() {
-            warn!(uid = response.uid, path = %circuit_path, "compiled model not found, accepting proof");
-            return Ok(!proof_hex.is_empty());
+            warn!(uid = response.uid, path = %circuit_path, "compiled model not found");
+            return Ok(false);
         }
 
         let num_inputs = circuit
