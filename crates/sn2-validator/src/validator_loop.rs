@@ -1388,22 +1388,7 @@ impl ValidatorLoop {
         }
 
         if !self.run_manager.has_run(&run_uid) {
-            if is_tile {
-                return;
-            }
-            let (cid, cname) = response
-                .circuit
-                .as_ref()
-                .map(|c| (c.id.clone(), c.metadata.name.clone()))
-                .unwrap_or_default();
-            self.run_manager.start_run(
-                run_uid.clone(),
-                cid,
-                cname,
-                RunSource::Benchmark,
-                None,
-                None,
-            );
+            return;
         }
 
         self.run_manager.push_artifact(
