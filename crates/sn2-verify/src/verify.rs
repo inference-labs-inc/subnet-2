@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use tracing::warn;
 
 use jstprove_circuits::onnx::verify_and_extract_bn254;
+use jstprove_circuits::runner::main_runner::read_circuit_msgpack;
 
 use crate::protocol::{StoreResponse, VerifyAndStoreRequest, VerifyRequest, VerifyResponse};
 use crate::store::{StoredTile, TileStore};
@@ -29,8 +30,13 @@ pub async fn verify_inner(
     let expected_inputs = expected_inputs.clone();
 
     tokio::task::spawn_blocking(move || -> Result<VerifyResult> {
-        let circuit_bytes =
-            std::fs::read(&circuit_path).with_context(|| format!("reading {circuit_path}"))?;
+        let circuit_bytes = if std::path::Path::new(&circuit_path).is_dir() {
+            let bundle = read_circuit_msgpack(&circuit_path)
+                .map_err(|e| anyhow::anyhow!("reading bundle {circuit_path}: {e}"))?;
+            bundle.circuit
+        } else {
+            std::fs::read(&circuit_path).with_context(|| format!("reading {circuit_path}"))?
+        };
         let witness_bytes = hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
         let proof_bytes = hex::decode(proof_hex.trim()).context("hex-decoding proof")?;
 
