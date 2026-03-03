@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::tensor_json::{arrayd_to_json, json_to_arrayd};
@@ -33,6 +33,7 @@ pub struct ActiveRun {
     pub circuit_name: String,
     pub run_source: RunSource,
     pub started_at: Instant,
+    pub last_activity: Instant,
     pub artifacts: Vec<SliceArtifact>,
     pub relay_request_id: Option<String>,
     pub incremental: Option<IncrementalRun>,
@@ -53,10 +54,13 @@ struct TileBuffer {
     tiles: Vec<Option<ndarray::ArrayD<f64>>>,
 }
 
+const EVICTED_CAP: usize = 256;
+
 #[derive(Default)]
 pub struct IncrementalRunManager {
     runs: HashMap<String, ActiveRun>,
-    evicted: HashSet<String>,
+    evicted_set: HashSet<String>,
+    evicted_order: VecDeque<String>,
     tile_buffers: HashMap<(String, String), TileBuffer>,
 }
 
@@ -82,6 +86,7 @@ impl IncrementalRunManager {
             );
             return;
         }
+        let now = Instant::now();
         self.runs.insert(
             run_uid.clone(),
             ActiveRun {
@@ -89,7 +94,8 @@ impl IncrementalRunManager {
                 circuit_id,
                 circuit_name,
                 run_source,
-                started_at: Instant::now(),
+                started_at: now,
+                last_activity: now,
                 artifacts: Vec::new(),
                 relay_request_id,
                 incremental,
@@ -121,7 +127,18 @@ impl IncrementalRunManager {
     }
 
     pub fn is_evicted(&self, run_uid: &str) -> bool {
-        self.evicted.contains(run_uid)
+        self.evicted_set.contains(run_uid)
+    }
+
+    fn mark_evicted(&mut self, run_uid: String) {
+        if self.evicted_set.insert(run_uid.clone()) {
+            self.evicted_order.push_back(run_uid);
+        }
+        while self.evicted_order.len() > EVICTED_CAP {
+            if let Some(oldest) = self.evicted_order.pop_front() {
+                self.evicted_set.remove(&oldest);
+            }
+        }
     }
 
     pub fn get_circuit_id(&self, run_uid: &str) -> Option<&str> {
@@ -206,6 +223,9 @@ impl IncrementalRunManager {
         tile_idx: u32,
         output: ndarray::ArrayD<f64>,
     ) -> TileBufferOutcome {
+        if let Some(run) = self.runs.get_mut(run_uid) {
+            run.last_activity = Instant::now();
+        }
         let key = (run_uid.to_string(), slice_id.to_string());
         let buf = match self.tile_buffers.get_mut(&key) {
             Some(b) => b,
@@ -270,6 +290,7 @@ impl IncrementalRunManager {
             .runs
             .get_mut(run_uid)
             .ok_or_else(|| anyhow::anyhow!("unknown run {run_uid}"))?;
+        run.last_activity = Instant::now();
         let inc = run
             .incremental
             .as_mut()
@@ -332,31 +353,31 @@ impl IncrementalRunManager {
         let evict_set: HashSet<&str> = to_remove.iter().map(|s| s.as_str()).collect();
         self.tile_buffers
             .retain(|(run_uid, _), _| !evict_set.contains(run_uid.as_str()));
-        for uid in &to_remove {
+        for uid in to_remove.iter() {
             self.runs.remove(uid);
-            self.evicted.insert(uid.clone());
+            self.mark_evicted(uid.clone());
         }
         to_remove
     }
 
-    pub fn gc_stale(&mut self, max_age: Duration) -> Vec<String> {
+    pub fn gc_stale(&mut self, idle_timeout: Duration) -> Vec<String> {
         let now = Instant::now();
         let stale: Vec<String> = self
             .runs
             .iter()
-            .filter(|(_, run)| now.duration_since(run.started_at) >= max_age)
+            .filter(|(_, run)| now.duration_since(run.last_activity) >= idle_timeout)
             .map(|(uid, _)| uid.clone())
             .collect();
         if !stale.is_empty() {
-            info!(count = stale.len(), run_uids = ?stale, "evicting stale runs");
+            info!(count = stale.len(), run_uids = ?stale, "evicting idle runs");
         }
         let stale_set: HashSet<&str> = stale.iter().map(|s| s.as_str()).collect();
         self.tile_buffers
             .retain(|(run_uid, _), _| !stale_set.contains(run_uid.as_str()));
-        for uid in &stale {
+        for uid in stale.iter() {
             self.runs.remove(uid);
+            self.mark_evicted(uid.clone());
         }
-        self.evicted.clear();
         stale
     }
 }

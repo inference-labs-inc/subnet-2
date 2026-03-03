@@ -1384,11 +1384,13 @@ impl ValidatorLoop {
         let proof_str = response.proof_content.as_ref().and_then(|v| v.as_str());
 
         if self.run_manager.is_evicted(&run_uid) {
-            warn!(run_uid = %run_uid, "dropping late dslice response for evicted run");
             return;
         }
 
         if !self.run_manager.has_run(&run_uid) {
+            if is_tile {
+                return;
+            }
             let (cid, cname) = response
                 .circuit
                 .as_ref()
@@ -1423,7 +1425,7 @@ impl ValidatorLoop {
                 Some(idx) => idx,
                 None => {
                     warn!(run_uid = %run_uid, slice = %slice_num, "tile response missing tile_idx, removing run");
-                    self.run_manager.remove_run(&run_uid);
+                    self.teardown_run(&run_uid).await;
                     return;
                 }
             };
@@ -1444,7 +1446,7 @@ impl ValidatorLoop {
                         error = %e,
                         "tile output tensor conversion failed, removing run"
                     );
-                    self.run_manager.remove_run(&run_uid);
+                    self.teardown_run(&run_uid).await;
                     return;
                 }
             };
@@ -1467,7 +1469,7 @@ impl ValidatorLoop {
                         error = %reason,
                         "tile buffering failed, removing run"
                     );
-                    self.run_manager.remove_run(&run_uid);
+                    self.teardown_run(&run_uid).await;
                 }
             }
             return;
@@ -1571,7 +1573,7 @@ impl ValidatorLoop {
             }
             Err(e) => {
                 warn!(run_uid = %run_uid, error = %e, "failed to apply slice result, removing run");
-                self.run_manager.remove_run(run_uid);
+                self.teardown_run(run_uid).await;
             }
         }
     }
@@ -1640,6 +1642,14 @@ impl ValidatorLoop {
         });
     }
 
+    async fn teardown_run(&mut self, run_uid: &str) {
+        self.run_manager.remove_run(run_uid);
+        self.stacked_dslice_queue
+            .retain(|req| req.run_uid != run_uid);
+        self.api_dslice_queue.retain(|req| req.run_uid != run_uid);
+        self.relay_remove_pending(run_uid).await;
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn handle_failure(
         &mut self,
@@ -1690,12 +1700,14 @@ impl ValidatorLoop {
                     self.dispatch_notify.notify_one();
                 }
                 RetryPayload::DSlice(mut dslice) => {
-                    dslice.retry_count = next_retry;
-                    match dslice.run_source {
-                        RunSource::Api => self.api_dslice_queue.push_back(*dslice),
-                        RunSource::Benchmark => self.stacked_dslice_queue.push_back(*dslice),
+                    if self.run_manager.has_run(&dslice.run_uid) {
+                        dslice.retry_count = next_retry;
+                        match dslice.run_source {
+                            RunSource::Api => self.api_dslice_queue.push_back(*dslice),
+                            RunSource::Benchmark => self.stacked_dslice_queue.push_back(*dslice),
+                        }
+                        self.dispatch_notify.notify_one();
                     }
-                    self.dispatch_notify.notify_one();
                 }
                 RetryPayload::None => {}
             }
@@ -1705,8 +1717,7 @@ impl ValidatorLoop {
         if request_type == RequestType::DSlice {
             if let Some(run_uid) = run_uid {
                 warn!(run_uid = %run_uid, "dslice max retries exceeded, removing run");
-                self.run_manager.remove_run(run_uid);
-                self.relay_remove_pending(run_uid).await;
+                self.teardown_run(run_uid).await;
             }
         }
 
@@ -1847,6 +1858,22 @@ impl ValidatorLoop {
             let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
             for uid in &evicted {
                 self.relay_remove_pending(uid).await;
+            }
+            if !evicted.is_empty() {
+                let evicted_set: HashSet<&str> = evicted.iter().map(|s| s.as_str()).collect();
+                let before = self.stacked_dslice_queue.len() + self.api_dslice_queue.len();
+                self.stacked_dslice_queue
+                    .retain(|req| !evicted_set.contains(req.run_uid.as_str()));
+                self.api_dslice_queue
+                    .retain(|req| !evicted_set.contains(req.run_uid.as_str()));
+                let drained =
+                    before - self.stacked_dslice_queue.len() - self.api_dslice_queue.len();
+                if drained > 0 {
+                    info!(
+                        drained = drained,
+                        "drained orphaned requests from evicted runs"
+                    );
+                }
             }
             self.last_gc = now;
         }
