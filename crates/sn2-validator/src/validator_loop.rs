@@ -631,6 +631,7 @@ impl ValidatorLoop {
                         retry_count: 0,
                         inputs_path: None,
                         outputs_path: None,
+                        circuit_path: slice_info.circuit_path.clone(),
                     };
                     match run_source {
                         RunSource::Api => self.api_dslice_queue.push_back(request),
@@ -655,6 +656,7 @@ impl ValidatorLoop {
                 retry_count: 0,
                 inputs_path: None,
                 outputs_path: None,
+                circuit_path: slice_info.circuit_path.clone(),
             };
             match request.run_source {
                 RunSource::Api => self.api_dslice_queue.push_back(request),
@@ -799,6 +801,7 @@ impl ValidatorLoop {
                 let task_inputs: Option<serde_json::Value>;
                 let task_proof_system: Option<ProofSystem>;
                 let retry_payload: RetryPayload;
+                let dsperse_circuit_path: Option<String>;
 
                 if let Some(pow_circ) = pow_circuit
                     .as_ref()
@@ -828,6 +831,7 @@ impl ValidatorLoop {
                     });
                     guard_hash = Some(String::new());
                     retry_payload = RetryPayload::None;
+                    dsperse_circuit_path = None;
                 } else if let Some(rwr) = self.rwr_queue.pop_front() {
                     retry_payload = RetryPayload::Rwr(rwr.clone());
                     let circuit = match self.circuit_store.ensure_circuit(&rwr.circuit_id).await {
@@ -875,6 +879,7 @@ impl ValidatorLoop {
                         self.rwr_queue.push_back(rwr);
                         break;
                     }
+                    dsperse_circuit_path = None;
                 } else if api_eligible.contains(&uid) && !self.api_dslice_queue.is_empty() {
                     let Some(dslice) = self.api_dslice_queue.pop_front() else {
                         warn!(
@@ -914,6 +919,7 @@ impl ValidatorLoop {
                         self.api_dslice_queue.push_back(dslice);
                         break;
                     }
+                    dsperse_circuit_path = dslice.circuit_path.clone();
                 } else if let Some(dslice) = self.stacked_dslice_queue.pop_front() {
                     retry_payload = RetryPayload::DSlice(Box::new(dslice.clone()));
                     request_type = RequestType::DSlice;
@@ -947,6 +953,7 @@ impl ValidatorLoop {
                         self.stacked_dslice_queue.push_back(dslice);
                         break;
                     }
+                    dsperse_circuit_path = dslice.circuit_path.clone();
                 } else if !self.config.disable_benchmark
                     && !benchmark_circuits.is_empty()
                     && self
@@ -992,6 +999,7 @@ impl ValidatorLoop {
                         }
                         None => break,
                     }
+                    dsperse_circuit_path = None;
                 } else {
                     break;
                 }
@@ -1016,6 +1024,7 @@ impl ValidatorLoop {
                 let task_proof_system_clone = task_proof_system;
                 let task_retry_payload = retry_payload;
                 let task_guard_hash = guard_hash.clone();
+                let task_dsperse_circuit_path = dsperse_circuit_path;
 
                 let abort_handle = self.tasks.spawn(async move {
                     let tokio_task_id = tokio::task::id();
@@ -1057,6 +1066,7 @@ impl ValidatorLoop {
                                 is_incremental: request_type == RequestType::DSlice,
                                 witness: None,
                                 inputs_path: task_inputs_path_clone,
+                                dsperse_circuit_path: task_dsperse_circuit_path,
                             };
                             response.proof_size = response
                                 .proof_content

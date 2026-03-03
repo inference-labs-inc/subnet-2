@@ -26,4 +26,5 @@ pub struct DSliceRequest {
     pub retry_count: u32,
     pub inputs_path: Option<String>,
     pub outputs_path: Option<String>,
+    pub circuit_path: Option<String>,
 }

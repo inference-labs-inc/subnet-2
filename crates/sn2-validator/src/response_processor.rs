@@ -51,7 +51,9 @@ impl ResponseProcessor {
             return Ok(false);
         }
 
-        let circuit_path = if response.is_incremental {
+        let circuit_path = if let Some(ref p) = response.dsperse_circuit_path {
+            p.clone()
+        } else if response.is_incremental {
             let slice_num = response.dsperse_slice_num.unwrap_or(0);
             let slice_model = circuit
                 .paths

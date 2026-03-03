@@ -43,6 +43,7 @@ pub struct NextSliceInfo {
     pub inputs_json: serde_json::Value,
     pub use_circuit: bool,
     pub onnx_path: Option<String>,
+    pub circuit_path: Option<String>,
     pub input_tensor: ndarray::ArrayD<f64>,
     pub tiling: Option<TilingInfo>,
 }
@@ -152,6 +153,7 @@ impl IncrementalRunManager {
             inputs_json,
             use_circuit: work.use_circuit,
             onnx_path: work.onnx_path,
+            circuit_path: work.circuit_path,
             input_tensor: work.input,
             tiling: work.tiling,
         }))
