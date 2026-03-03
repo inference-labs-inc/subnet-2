@@ -168,9 +168,7 @@ impl ValidatorConfig {
         info!(endpoint = %self.chain_endpoint, "reconnecting to subtensor");
         let client = OnlineClient::<PolkadotConfig>::from_url(&self.chain_endpoint)
             .await
-            .with_context(|| {
-                format!("reconnecting to subtensor at {}", self.chain_endpoint)
-            })?;
+            .with_context(|| format!("reconnecting to subtensor at {}", self.chain_endpoint))?;
         self.chain_client = Some(client);
         info!("subtensor reconnection successful");
         Ok(())

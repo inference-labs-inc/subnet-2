@@ -1753,7 +1753,9 @@ impl ValidatorLoop {
                 if let Err(e) = self.try_reveal_weights().await {
                     if sn2_chain::is_rpc_disconnect(&e) {
                         warn!(error = ?e, "chain RPC disconnected during weight reveal, reconnecting");
-                        let _ = self.config.reconnect_chain_client().await;
+                        if let Err(re) = self.config.reconnect_chain_client().await {
+                            warn!(error = ?re, "chain reconnect failed after weight reveal RPC disconnect");
+                        }
                     }
                     warn!(error = ?e, "weight reveal failed, will retry next cycle");
                 }
@@ -1768,7 +1770,9 @@ impl ValidatorLoop {
                         Err(e) => {
                             if sn2_chain::is_rpc_disconnect(&e) {
                                 warn!(error = ?e, "chain RPC disconnected during weight update, reconnecting");
-                                let _ = self.config.reconnect_chain_client().await;
+                                if let Err(re) = self.config.reconnect_chain_client().await {
+                                    warn!(error = ?re, "chain reconnect failed after weight update RPC disconnect");
+                                }
                             }
                             warn!(error = ?e, "weight update failed, will retry next cycle");
                         }
