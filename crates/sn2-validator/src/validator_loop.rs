@@ -443,12 +443,12 @@ impl ValidatorLoop {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
                         warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "failed to extract dslice");
-                        self.run_manager.remove_run(run_uid);
+                        self.teardown_run(run_uid).await;
                         return;
                     }
                     Err(e) => {
                         warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "dslice extraction task panicked");
-                        self.run_manager.remove_run(run_uid);
+                        self.teardown_run(run_uid).await;
                         return;
                     }
                 }
@@ -459,7 +459,7 @@ impl ValidatorLoop {
                     Some(ref p) => p.clone(),
                     None => {
                         warn!(run_uid = %run_uid, slice = %slice_info.slice_id, "non-circuit slice has no onnx_path");
-                        self.run_manager.remove_run(run_uid);
+                        self.teardown_run(run_uid).await;
                         return;
                     }
                 };
@@ -473,7 +473,7 @@ impl ValidatorLoop {
                     Ok(result) => result,
                     Err(e) => {
                         warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference failed");
-                        self.run_manager.remove_run(run_uid);
+                        self.teardown_run(run_uid).await;
                         return;
                     }
                 };
@@ -490,7 +490,7 @@ impl ValidatorLoop {
                             error = %e,
                             "ONNX output shape mismatch"
                         );
-                        self.run_manager.remove_run(run_uid);
+                        self.teardown_run(run_uid).await;
                         return;
                     }
                 };
@@ -549,7 +549,7 @@ impl ValidatorLoop {
                             &slice_info.slice_id,
                         );
                         warn!(run_uid = %run_uid, error = %e, "apply_result failed for ONNX slice");
-                        self.run_manager.remove_run(run_uid);
+                        self.teardown_run(run_uid).await;
                         return;
                     }
                 }
@@ -573,7 +573,7 @@ impl ValidatorLoop {
                             error = %e,
                             "tiled slice requires 4D input"
                         );
-                        self.run_manager.remove_run(run_uid);
+                        self.teardown_run(run_uid).await;
                         return;
                     }
                 };
@@ -586,7 +586,7 @@ impl ValidatorLoop {
                             error = %e,
                             "split_into_tiles failed"
                         );
-                        self.run_manager.remove_run(run_uid);
+                        self.teardown_run(run_uid).await;
                         return;
                     }
                 };
@@ -608,7 +608,7 @@ impl ValidatorLoop {
                         error = %e,
                         "init_tile_buffer failed"
                     );
-                    self.run_manager.remove_run(run_uid);
+                    self.teardown_run(run_uid).await;
                     return;
                 }
 
