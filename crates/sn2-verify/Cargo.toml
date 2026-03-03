@@ -23,4 +23,4 @@ tracing-subscriber = { workspace = true }
 rmp-serde = { workspace = true }
 hex = { workspace = true }
 reqwest = { workspace = true }
-jstprove_circuits = { workspace = true }
+jstprove_circuits = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "60ef552" }
