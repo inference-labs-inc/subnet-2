@@ -1964,12 +1964,12 @@ impl ValidatorLoop {
             let mut client = self.miner_client.write().await;
             if let Err(e) = client
                 .lightning_mut()
-                .update_miner_registry(quic_miners)
+                .update_miner_registry(quic_miners.clone())
                 .await
             {
                 warn!(error = %e, "updating QUIC miner connections");
             }
-            client.clear_transport_cache();
+            client.seed_transport_cache(&quic_miners).await;
         } else {
             let client = self.miner_client.read().await;
             client.clear_transport_cache();

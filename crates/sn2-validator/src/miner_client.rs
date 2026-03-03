@@ -287,6 +287,35 @@ impl MinerQueryClient {
             .unwrap_or_else(|p| p.into_inner())
             .clear();
     }
+
+    pub async fn seed_transport_cache(&self, miners: &[QuicAxonInfo]) {
+        let stats = match self.lightning.get_connection_stats().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "failed to read connection stats for transport seeding");
+                self.clear_transport_cache();
+                return;
+            }
+        };
+        let mut cache = self
+            .transport_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        cache.clear();
+        let mut quic_count = 0u32;
+        for miner in miners {
+            let key = format!("connection_{}", miner.addr_key());
+            if stats.contains_key(&key) {
+                cache.insert(miner.hotkey.clone(), TransportPreference::Quic);
+                quic_count += 1;
+            }
+        }
+        info!(
+            quic = quic_count,
+            http_only = miners.len() as u32 - quic_count,
+            "seeded transport cache from QUIC connection state"
+        );
+    }
 }
 
 fn is_connection_error(err: &anyhow::Error) -> bool {
