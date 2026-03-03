@@ -13,6 +13,7 @@ pub struct ValidatorConfig {
     pub netuid: u16,
     pub wallet: Option<Arc<Wallet>>,
     pub chain_client: Option<OnlineClient<PolkadotConfig>>,
+    pub chain_endpoint: String,
     pub metagraph: Metagraph,
     pub user_uid: u16,
     pub relay_enabled: bool,
@@ -86,6 +87,7 @@ impl ValidatorConfig {
             netuid: cli.netuid,
             wallet: Some(wallet),
             chain_client: Some(chain_client),
+            chain_endpoint: endpoint,
             metagraph,
             user_uid,
             relay_enabled: cli.relay_enabled,
@@ -142,6 +144,7 @@ impl ValidatorConfig {
             netuid: cli.netuid,
             wallet: None,
             chain_client: None,
+            chain_endpoint: String::new(),
             metagraph,
             user_uid: 1,
             relay_enabled: false,
@@ -159,5 +162,17 @@ impl ValidatorConfig {
             loopback: true,
             additional_circuits: cli.additional_circuits.clone(),
         }
+    }
+
+    pub async fn reconnect_chain_client(&mut self) -> Result<()> {
+        info!(endpoint = %self.chain_endpoint, "reconnecting to subtensor");
+        let client = OnlineClient::<PolkadotConfig>::from_url(&self.chain_endpoint)
+            .await
+            .with_context(|| {
+                format!("reconnecting to subtensor at {}", self.chain_endpoint)
+            })?;
+        self.chain_client = Some(client);
+        info!("subtensor reconnection successful");
+        Ok(())
     }
 }
