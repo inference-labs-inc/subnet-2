@@ -234,20 +234,16 @@ impl MinerQueryClient {
                 Ok(result)
             }
             Err(e) if is_connection_error(&e) => {
-                if is_probe {
-                    self.set_transport(hotkey, TransportPreference::HttpOnly);
-                    warn!(
-                        hotkey = hotkey,
-                        error = ?e,
-                        "QUIC probe failed, falling back to HTTP"
-                    );
-                    let headers = self.build_signing_headers(body, hotkey)?;
-                    self.query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
-                        .await
-                } else {
-                    self.set_transport(hotkey, TransportPreference::Unknown);
-                    Err(e)
-                }
+                self.set_transport(hotkey, TransportPreference::HttpOnly);
+                warn!(
+                    hotkey = hotkey,
+                    error = ?e,
+                    probe = is_probe,
+                    "QUIC query failed, falling back to HTTP"
+                );
+                let headers = self.build_signing_headers(body, hotkey)?;
+                self.query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
+                    .await
             }
             Err(e) => {
                 if is_probe {
