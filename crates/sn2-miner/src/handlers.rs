@@ -6,24 +6,17 @@ use tracing::info;
 
 use sn2_types::*;
 
-use crate::circuit_manager::CircuitManager;
 use crate::dsperse::DSperseClient;
 
 pub struct MinerHandlers {
     dsperse: DSperseClient,
-    circuit_manager: std::sync::Arc<CircuitManager>,
     circuit_store: Mutex<CircuitStore>,
 }
 
 impl MinerHandlers {
-    pub fn new(
-        dsperse: DSperseClient,
-        circuit_manager: std::sync::Arc<CircuitManager>,
-        circuit_store: CircuitStore,
-    ) -> Self {
+    pub fn new(dsperse: DSperseClient, circuit_store: CircuitStore) -> Self {
         Self {
             dsperse,
-            circuit_manager,
             circuit_store: Mutex::new(circuit_store),
         }
     }
@@ -76,28 +69,6 @@ impl MinerHandlers {
             "proof": result.get("proof").and_then(|v| v.as_str()).unwrap_or(""),
             "public_signals": result.get("public_signals").and_then(|v| v.as_str()).unwrap_or(""),
         }))
-    }
-
-    pub async fn handle_competition(&self, data: Competition) -> Result<serde_json::Value> {
-        info!(id = data.id, hash = %data.hash, file = %data.file_name, "handling Competition");
-
-        let commitment = self.circuit_manager.get_commitment().await?;
-
-        match commitment {
-            Some(c) => Ok(json!({
-                "id": data.id,
-                "hash": data.hash,
-                "file_name": data.file_name,
-                "commitment": c.get("signature"),
-                "file_content": c.get("file_urls").and_then(|u| u.get(&data.file_name)),
-            })),
-            None => Ok(json!({
-                "id": data.id,
-                "hash": data.hash,
-                "file_name": data.file_name,
-                "error": "no commitment available",
-            })),
-        }
     }
 
     pub async fn handle_dslice(

@@ -53,17 +53,6 @@ pub async fn run_lightning_server(
         )
         .await?;
 
-    let h = handlers;
-    server
-        .register_async_synapse_handler(
-            Competition::NAME.to_string(),
-            typed_async_handler(move |query: Competition| {
-                let h = h.clone();
-                async move { h.handle_competition(query).await }
-            }),
-        )
-        .await?;
-
     server.start().await?;
 
     info!(host = host, port = port, "QUIC Lightning server listening");

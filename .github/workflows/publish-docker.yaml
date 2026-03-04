@@ -56,6 +56,7 @@ jobs:
 
       - name: Scan testnet container image with Trivy
         if: github.event_name != 'release'
+        id: trivy-scan-testnet
         uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
@@ -65,7 +66,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy testnet image scan to GitHub Security tab
-        if: github.event_name != 'release'
+        if: ${{ steps.trivy-scan-testnet.conclusion == 'success' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image-results.sarif
@@ -96,6 +97,7 @@ jobs:
 
       - name: Scan release container image with Trivy
         if: github.event_name == 'release'
+        id: trivy-scan-release
         uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
@@ -105,7 +107,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy release image scan to GitHub Security tab
-        if: github.event_name == 'release'
+        if: ${{ steps.trivy-scan-release.conclusion == 'success' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image-results.sarif

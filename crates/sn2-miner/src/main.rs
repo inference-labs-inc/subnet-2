@@ -1,4 +1,3 @@
-mod circuit_manager;
 mod cli;
 mod dsperse;
 mod handlers;
@@ -118,14 +117,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let circuit_mgr = std::sync::Arc::new(circuit_manager::CircuitManager::new(
-        &cli.circuit_dir,
-        cli.storage_bucket.as_deref(),
-    ));
-
-    let circuit_monitor = circuit_mgr.clone().start_monitor();
-
-    let handlers = handlers::MinerHandlers::new(dsperse, circuit_mgr, circuit_store);
+    let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
 
     let disable_blacklist = cli.disable_blacklist;
@@ -216,9 +208,6 @@ async fn main() -> Result<()> {
         r = quic_handle => {
             r?.context("QUIC server")?;
         }
-        _ = circuit_monitor => {
-            warn!("circuit monitor exited unexpectedly");
-        }
         r = metagraph_sync => {
             match r {
                 Ok(()) => warn!("metagraph sync loop exited unexpectedly"),
@@ -249,14 +238,7 @@ async fn run_loopback(cli: Cli) -> Result<()> {
         }
     }
 
-    let circuit_mgr = std::sync::Arc::new(circuit_manager::CircuitManager::new(
-        &cli.circuit_dir,
-        cli.storage_bucket.as_deref(),
-    ));
-
-    let circuit_monitor = circuit_mgr.clone().start_monitor();
-
-    let handlers = handlers::MinerHandlers::new(dsperse, circuit_mgr, circuit_store);
+    let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
 
     let metagraph = Arc::new(RwLock::new(sn2_chain::Metagraph::new(cli.netuid)));
@@ -277,9 +259,6 @@ async fn run_loopback(cli: Cli) -> Result<()> {
     tokio::select! {
         r = http_handle => {
             r?.context("HTTP server")?;
-        }
-        r = circuit_monitor => {
-            r.context("circuit monitor")?;
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");

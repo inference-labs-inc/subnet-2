@@ -27,6 +27,7 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+# Hashes must be regenerated when these crates are bumped: cargo deny check licenses
 [[licenses.clarify]]
 name = "ring"
 expression = "ISC"

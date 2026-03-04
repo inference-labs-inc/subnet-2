@@ -51,7 +51,6 @@ pub async fn run_http_server(
             &format!("/{}", ProofOfWeightsDataModel::NAME),
             post(handle_proof_of_weights),
         )
-        .route(&format!("/{}", Competition::NAME), post(handle_competition))
         .route(
             &format!("/{}", DSliceProofGenerationDataModel::NAME),
             post(handle_dslice),
@@ -203,12 +202,6 @@ synapse_handler!(
     ProofOfWeightsDataModel,
     handle_proof_of_weights,
     "ProofOfWeights handler"
-);
-synapse_handler!(
-    handle_competition,
-    Competition,
-    handle_competition,
-    "Competition handler"
 );
 synapse_handler!(
     handle_dslice,
