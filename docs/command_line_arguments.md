@@ -35,7 +35,7 @@ All arguments use `--long-flag` syntax. Flags are shared between miner and valid
 | `--api-miners-pct` | `20` | Percentage of miners allocated to API requests |
 | `--disable-benchmark` | `false` | Disable benchmark queries |
 | `--relay-url` | None | WebSocket relay URL |
-| `--relay-enabled` | `false` | Enable the relay WebSocket connection |
+| `--no-relay` | `false` | Disable the relay WebSocket connection |
 | `--metrics-port` | `9090` | Prometheus metrics exporter port |
 | `--dsperse-socket` | None | dsperse prover socket address |
 

@@ -89,7 +89,7 @@ impl ValidatorConfig {
             chain_endpoint: endpoint,
             metagraph,
             user_uid,
-            relay_enabled: cli.relay_enabled,
+            relay_enabled: !cli.no_relay,
             relay_url,
             max_concurrency: cli.max_concurrency,
             api_miners_pct: cli.api_miners_pct,

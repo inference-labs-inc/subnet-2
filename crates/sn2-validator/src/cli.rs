@@ -37,7 +37,7 @@ pub struct Cli {
     pub relay_url: Option<String>,
 
     #[arg(long, default_value_t = false)]
-    pub relay_enabled: bool,
+    pub no_relay: bool,
 
     #[arg(long, default_value_t = 9090)]
     pub metrics_port: u16,
