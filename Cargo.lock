@@ -1685,7 +1685,7 @@ checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
 dependencies = [
  "bitcoin_hashes 0.14.1",
  "rand 0.8.5",
- "rand_core 0.5.1",
+ "rand_core 0.6.4",
  "serde",
  "unicode-normalization",
 ]
@@ -3720,10 +3720,10 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dsperse"
 version = "0.0.0"
-source = "git+https://github.com/inference-labs-inc/dsperse?rev=61ba62b#61ba62b17b6b37a5ff3f9cfb268858fe5a5f5629"
+source = "git+https://github.com/inference-labs-inc/dsperse?rev=830f5e6#830f5e69c118fc6500290ef2b606d81d9cd920de"
 dependencies = [
  "clap",
- "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=60ef552)",
+ "jstprove_circuits",
  "ndarray",
  "prost 0.13.5",
  "prost-build",
@@ -5513,7 +5513,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tokio",
  "tower-service",
  "tracing",
@@ -6216,16 +6216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jstprove-direct-builder"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=904d9cc#904d9cc6b52c5b0c6c1ea58f7500c08ae9c073e6"
-dependencies = [
- "arith",
- "ethnum",
- "expander_compiler",
-]
-
-[[package]]
 name = "jstprove-io"
 version = "0.1.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=60ef552#60ef552173cf0480c0799531e60971729cbdd424"
@@ -6238,32 +6228,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "jstprove-io"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=904d9cc#904d9cc6b52c5b0c6c1ea58f7500c08ae9c073e6"
-dependencies = [
- "anyhow",
- "crc32c",
- "rmp-serde",
- "serde",
- "zstd 0.13.3",
-]
-
-[[package]]
 name = "jstprove-onnx"
 version = "0.1.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=60ef552#60ef552173cf0480c0799531e60971729cbdd424"
-dependencies = [
- "anyhow",
- "prost 0.13.5",
- "prost-build",
- "serde",
-]
-
-[[package]]
-name = "jstprove-onnx"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=904d9cc#904d9cc6b52c5b0c6c1ea58f7500c08ae9c073e6"
 dependencies = [
  "anyhow",
  "prost 0.13.5",
@@ -6285,9 +6252,9 @@ dependencies = [
  "ethnum",
  "expander_compiler",
  "halo2curves",
- "jstprove-direct-builder 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=60ef552)",
- "jstprove-io 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=60ef552)",
- "jstprove-onnx 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=60ef552)",
+ "jstprove-direct-builder",
+ "jstprove-io",
+ "jstprove-onnx",
  "lazy_static",
  "ndarray",
  "num-bigint",
@@ -6305,41 +6272,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tiny-keccak",
  "tracing",
- "zstd 0.13.3",
-]
-
-[[package]]
-name = "jstprove_circuits"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=904d9cc#904d9cc6b52c5b0c6c1ea58f7500c08ae9c073e6"
-dependencies = [
- "anyhow",
- "arith",
- "ark-std 0.4.0",
- "chrono",
- "circuit-std-rs",
- "clap",
- "ethnum",
- "expander_compiler",
- "halo2curves",
- "jstprove-direct-builder 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=904d9cc)",
- "jstprove-io 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=904d9cc)",
- "jstprove-onnx 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=904d9cc)",
- "lazy_static",
- "ndarray",
- "num-bigint",
- "num-traits",
- "once_cell",
- "openssl",
- "rand 0.8.5",
- "rmp-serde",
- "rmpv",
- "serde",
- "serde_bytes",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "thiserror 2.0.18",
- "tiny-keccak",
  "zstd 0.13.3",
 ]
 
@@ -9281,7 +9213,7 @@ checksum = "4e69bf016dc406eff7d53a7d3f7cf1c2e72c82b9088aac1118591e36dd2cd3e9"
 dependencies = [
  "bitcoin_hashes 0.13.0",
  "rand 0.8.5",
- "rand_core 0.5.1",
+ "rand_core 0.6.4",
  "serde",
  "unicode-normalization",
 ]
@@ -10683,7 +10615,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls 0.23.37",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -10722,7 +10654,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -12816,7 +12748,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
- "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=904d9cc)",
+ "jstprove_circuits",
  "reqwest 0.12.28",
  "rmp-serde",
  "serde",

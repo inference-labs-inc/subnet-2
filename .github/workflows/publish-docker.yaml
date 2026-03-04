@@ -46,6 +46,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          pull: true
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
@@ -68,6 +69,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          pull: true
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
