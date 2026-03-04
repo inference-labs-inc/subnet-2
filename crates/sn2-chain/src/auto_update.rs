@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
+use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
@@ -142,7 +143,7 @@ async fn check_and_update(
         return Err(e);
     }
 
-    info!(version = %remote, "update applied, exiting for restart");
+    info!(version = %remote, "update applied, signaling graceful shutdown for restart");
     Ok(true)
 }
 
@@ -158,7 +159,10 @@ fn set_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn spawn_update_loop(binary_name: &'static str) -> tokio::task::JoinHandle<()> {
+pub fn spawn_update_loop(
+    binary_name: &'static str,
+    shutdown_tx: watch::Sender<bool>,
+) -> tokio::task::JoinHandle<()> {
     let suffix = platform_suffix();
     if suffix.is_empty() {
         warn!("unsupported platform for auto-update, skipping");
@@ -181,7 +185,10 @@ pub fn spawn_update_loop(binary_name: &'static str) -> tokio::task::JoinHandle<(
                 }
             };
             match check_and_update(&client, binary_name, suffix).await {
-                Ok(true) => std::process::exit(0),
+                Ok(true) => {
+                    let _ = shutdown_tx.send(true);
+                    return;
+                }
                 Ok(false) => {}
                 Err(e) => warn!(error = %e, "auto-update check failed"),
             }

@@ -18,6 +18,7 @@ mod validator_loop;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use tokio::sync::watch;
 use tracing::info;
 
 use crate::cli::Cli;
@@ -37,8 +38,11 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
     if !cli.no_auto_update && option_env!("SN2_RELEASE_CHANNEL") == Some("mainnet") {
-        let _update_handle = sn2_chain::auto_update::spawn_update_loop("sn2-validator");
+        let _update_handle =
+            sn2_chain::auto_update::spawn_update_loop("sn2-validator", shutdown_tx.clone());
     }
 
     let config = if cli.loopback {
@@ -65,7 +69,7 @@ async fn main() -> Result<()> {
     let mut validator = validator_loop::ValidatorLoop::new(config)
         .await
         .context("building validator loop")?;
-    validator.run().await
+    validator.run(shutdown_rx).await
 }
 
 fn parse_miner_address(addr: &str) -> Result<(String, u16)> {

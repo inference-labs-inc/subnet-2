@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use tokio::sync::watch;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
@@ -33,8 +34,11 @@ async fn main() -> Result<()> {
         return run_loopback(cli).await;
     }
 
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+
     if !cli.no_auto_update && option_env!("SN2_RELEASE_CHANNEL") == Some("mainnet") {
-        let _update_handle = sn2_chain::auto_update::spawn_update_loop("sn2-miner");
+        let _update_handle =
+            sn2_chain::auto_update::spawn_update_loop("sn2-miner", shutdown_tx.clone());
     }
 
     info!(
@@ -216,6 +220,9 @@ async fn main() -> Result<()> {
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");
+        }
+        _ = async { loop { shutdown_rx.changed().await.ok()?; if *shutdown_rx.borrow() { return Some(()); } } } => {
+            info!("shutting down miner for auto-update restart");
         }
     }
 
