@@ -4,10 +4,8 @@ use std::time::Instant;
 
 use base64::Engine;
 use sn2_chain::Wallet;
-use sn2_types::MinerResponse;
+use sn2_types::{MinerResponse, DEFAULT_API_URL};
 use tracing::{info, warn};
-
-const DEFAULT_API_URL: &str = "https://sn2-api.inferencelabs.com";
 const LOG_INTERVAL_SECS: u64 = 60;
 const HEALTH_FLUSH_INTERVAL_SECS: u64 = 60;
 const REQUEST_TIMEOUT_SECS: u64 = 5;

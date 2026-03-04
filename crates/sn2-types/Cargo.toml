@@ -7,3 +7,4 @@ rust-version.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing-subscriber = { workspace = true }

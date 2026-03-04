@@ -16,12 +16,7 @@ const SOCKET_PATH: &str = "/tmp/sn2-verify.sock";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    sn2_types::init_tracing("info");
 
     let sock_path = std::env::var("SN2_VERIFY_SOCK").unwrap_or_else(|_| SOCKET_PATH.to_string());
 

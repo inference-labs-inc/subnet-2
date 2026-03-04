@@ -34,14 +34,7 @@ pub struct ValidatorConfig {
 impl ValidatorConfig {
     pub async fn from_cli(cli: &Cli) -> Result<Self> {
         let endpoint =
-            cli.subtensor_chain_endpoint
-                .clone()
-                .unwrap_or_else(|| match cli.network.as_str() {
-                    "finney" | "mainnet" => sn2_chain::FINNEY_ENDPOINT.to_string(),
-                    "test" | "testnet" => sn2_chain::TEST_ENDPOINT.to_string(),
-                    "local" | "localnet" => sn2_chain::LOCAL_ENDPOINT.to_string(),
-                    other => other.to_string(),
-                });
+            sn2_chain::resolve_endpoint(&cli.network, cli.subtensor_chain_endpoint.as_deref());
 
         let chain_client = OnlineClient::<PolkadotConfig>::from_url(&endpoint)
             .await

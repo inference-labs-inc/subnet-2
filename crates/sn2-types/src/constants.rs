@@ -52,6 +52,7 @@ pub const MAX_EVALUATION_ITEMS: usize = 1024;
 pub const MAX_CIRCUIT_SIZE_GB: usize = 50;
 
 pub const SN2_RELAY_URL: &str = "wss://sn2-relay.inferencelabs.com:8443";
+pub const DEFAULT_API_URL: &str = "https://sn2-api.inferencelabs.com";
 pub const CIRCUIT_API_URL: &str = "https://repository.inferencelabs.com";
 pub const CIRCUIT_R2_BASE_URL: &str = "https://dsperse.inferencelabs.com";
 pub const CIRCUIT_CACHE_DIR: &str = "~/.bittensor/subnet-2/circuit_cache";

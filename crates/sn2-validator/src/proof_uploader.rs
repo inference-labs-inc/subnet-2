@@ -3,11 +3,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use base64::Engine;
 use sn2_chain::Wallet;
+use sn2_types::DEFAULT_API_URL;
 use tracing::{info, warn};
 
 use crate::incremental_runner::SliceArtifact;
-
-const DEFAULT_API_URL: &str = "https://sn2-api.inferencelabs.com";
 
 pub struct ProofUploader {
     http: reqwest::Client,

@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use serde::de::{self, Error as _, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -57,6 +59,21 @@ impl std::fmt::Display for ProofSystem {
             Self::JOLT => write!(f, "JOLT"),
             Self::EZKL => write!(f, "EZKL"),
             Self::JSTPROVE => write!(f, "JSTPROVE"),
+        }
+    }
+}
+
+impl FromStr for ProofSystem {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ZKML" => Ok(Self::ZKML),
+            "CIRCOM" => Ok(Self::CIRCOM),
+            "JOLT" => Ok(Self::JOLT),
+            "EZKL" => Ok(Self::EZKL),
+            "JSTPROVE" => Ok(Self::JSTPROVE),
+            other => Err(format!("unknown proof system: {other}")),
         }
     }
 }

@@ -18,16 +18,7 @@ use crate::cli::Cli;
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::try_new(&cli.log_level).unwrap_or_else(|e| {
-                    eprintln!("invalid --log-level \"{}\": {e}", cli.log_level);
-                    std::process::exit(1);
-                })
-            }),
-        )
-        .init();
+    sn2_types::init_tracing(&cli.log_level);
 
     if cli.loopback {
         return run_loopback(cli).await;
@@ -53,14 +44,7 @@ async fn main() -> Result<()> {
     );
 
     let endpoint =
-        cli.subtensor_chain_endpoint
-            .clone()
-            .unwrap_or_else(|| match cli.network.as_str() {
-                "finney" | "mainnet" => sn2_chain::FINNEY_ENDPOINT.to_string(),
-                "test" | "testnet" => sn2_chain::TEST_ENDPOINT.to_string(),
-                "local" | "localnet" => sn2_chain::LOCAL_ENDPOINT.to_string(),
-                other => other.to_string(),
-            });
+        sn2_chain::resolve_endpoint(&cli.network, cli.subtensor_chain_endpoint.as_deref());
 
     let chain_client = subxt::OnlineClient::<subxt::PolkadotConfig>::from_url(&endpoint)
         .await
@@ -109,13 +93,7 @@ async fn main() -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    let mut circuit_store =
-        sn2_circuit_store::CircuitStore::new(None, false, cli.additional_circuits.clone());
-    for id in &cli.additional_circuits {
-        if let Err(e) = circuit_store.ensure_circuit(id).await {
-            warn!(id = %id, error = %e, "failed to preload pinned circuit");
-        }
-    }
+    let circuit_store = init_circuit_store(false, &cli.additional_circuits).await;
 
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
@@ -230,13 +208,7 @@ async fn run_loopback(cli: Cli) -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    let mut circuit_store =
-        sn2_circuit_store::CircuitStore::new(None, true, cli.additional_circuits.clone());
-    for id in &cli.additional_circuits {
-        if let Err(e) = circuit_store.ensure_circuit(id).await {
-            warn!(id = %id, error = %e, "failed to preload pinned circuit");
-        }
-    }
+    let circuit_store = init_circuit_store(true, &cli.additional_circuits).await;
 
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
@@ -266,4 +238,18 @@ async fn run_loopback(cli: Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn init_circuit_store(
+    loopback: bool,
+    additional_circuits: &[String],
+) -> sn2_circuit_store::CircuitStore {
+    let mut store =
+        sn2_circuit_store::CircuitStore::new(None, loopback, additional_circuits.to_vec());
+    for id in additional_circuits {
+        if let Err(e) = store.ensure_circuit(id).await {
+            warn!(id = %id, error = %e, "failed to preload pinned circuit");
+        }
+    }
+    store
 }

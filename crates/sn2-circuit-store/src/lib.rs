@@ -385,7 +385,10 @@ impl CircuitStore {
         }
 
         let settings = load_settings(&cache_path);
-        let proof_system = parse_proof_system(&metadata.proof_system);
+        let proof_system = metadata
+            .proof_system
+            .parse::<ProofSystem>()
+            .unwrap_or(ProofSystem::JSTPROVE);
 
         Ok(Circuit {
             id: circuit_id.to_string(),
@@ -469,7 +472,10 @@ fn load_circuit_from_cache(circuit_id: &str, dir: &Path, cache_dir: &Path) -> Re
     let metadata: CircuitMetadata =
         serde_json::from_str(&metadata_str).context("parsing cached metadata")?;
     let settings = load_settings(dir);
-    let proof_system = parse_proof_system(&metadata.proof_system);
+    let proof_system = metadata
+        .proof_system
+        .parse::<ProofSystem>()
+        .unwrap_or(ProofSystem::JSTPROVE);
 
     Ok(Circuit {
         id: circuit_id.to_string(),
@@ -583,16 +589,5 @@ pub fn cleanup_extracted_slice(slices_dir: &Path, slice_id: &str) {
         if let Err(e) = std::fs::remove_dir_all(&extract_dir) {
             tracing::warn!(dir = %extract_dir.display(), error = %e, "failed to remove extracted slice dir");
         }
-    }
-}
-
-fn parse_proof_system(s: &str) -> ProofSystem {
-    match s {
-        "ZKML" => ProofSystem::ZKML,
-        "CIRCOM" => ProofSystem::CIRCOM,
-        "JOLT" => ProofSystem::JOLT,
-        "EZKL" => ProofSystem::EZKL,
-        "JSTPROVE" => ProofSystem::JSTPROVE,
-        _ => ProofSystem::JSTPROVE,
     }
 }
