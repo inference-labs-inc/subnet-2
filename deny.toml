@@ -1,0 +1,50 @@
+[graph]
+targets = []
+all-features = false
+
+[advisories]
+yanked = "warn"
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSD-1-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+    "Unlicense",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[[licenses.clarify]]
+name = "encoding_rs"
+expression = "Apache-2.0 OR MIT"
+license-files = [{ path = "LICENSE-APACHE", hash = 0xb23f3e28 }, { path = "LICENSE-MIT", hash = 0xb23f3e28 }]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = [
+    "https://github.com/inference-labs-inc/btlightning.git",
+    "https://github.com/inference-labs-inc/dsperse",
+]

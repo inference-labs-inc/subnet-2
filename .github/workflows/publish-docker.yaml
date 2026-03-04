@@ -21,6 +21,7 @@ jobs:
       packages: write
       attestations: write
       id-token: write
+      security-events: write
 
     steps:
       - name: Checkout repository
@@ -53,6 +54,23 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Scan testnet container image with Trivy
+        if: github.event_name != 'release'
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
+          format: sarif
+          output: trivy-image-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Upload Trivy testnet image scan to GitHub Security tab
+        if: github.event_name != 'release'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image-results.sarif
+          category: trivy-image-testnet
+
       - name: Generate artifact attestation for testnet
         if: github.event_name != 'release'
         id: attest-testnet
@@ -75,6 +93,23 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Scan release container image with Trivy
+        if: github.event_name == 'release'
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
+          format: sarif
+          output: trivy-image-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Upload Trivy release image scan to GitHub Security tab
+        if: github.event_name == 'release'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image-results.sarif
+          category: trivy-image-release
 
       - name: Generate artifact attestation for release
         if: github.event_name == 'release'

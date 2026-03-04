@@ -296,6 +296,7 @@ jobs:
       packages: write
       attestations: write
       id-token: write
+      security-events: write
 
     steps:
       - uses: actions/checkout@v5
@@ -317,6 +318,22 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:testnet-nightly
+
+      - name: Scan container image with Trivy
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:testnet-nightly
+          format: sarif
+          output: trivy-image-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Upload Trivy image scan to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-image-results.sarif
+          category: trivy-image-nightly
 
       - name: Attest provenance
         uses: actions/attest-build-provenance@v1
