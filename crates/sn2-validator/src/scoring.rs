@@ -63,17 +63,16 @@ impl ScoreManager {
         let calculated_score_fraction = response_time_metric.clamp(0.0, 1.0);
         let effective_max = maximum_score * calculated_score_fraction;
 
-        let (distance, new_score) = if verified {
+        let new_score = if verified {
             let distance = effective_max - previous_score;
             let change = rate_of_change * distance;
-            (distance, previous_score + change)
+            previous_score + change
         } else {
             let distance = previous_score;
             let change = rate_of_change * distance;
-            (distance, previous_score - change)
+            previous_score - change
         };
 
-        let _ = distance;
         self.scores.insert(uid, new_score.max(0.0));
     }
 

@@ -342,23 +342,8 @@ impl Metagraph {
             .and_then(|uids| uids.first().copied())
     }
 
-    pub fn get_uids_by_coldkey(&self, coldkey: &str) -> &[u16] {
-        self.coldkey_to_uids
-            .get(coldkey)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-    }
-
     pub fn uids(&self) -> Vec<u16> {
         self.neurons.iter().map(|n| n.uid).collect()
-    }
-
-    pub fn hotkeys(&self) -> Vec<&str> {
-        self.neurons.iter().map(|n| n.hotkey.as_str()).collect()
-    }
-
-    pub fn stakes(&self) -> Vec<u64> {
-        self.neurons.iter().map(|n| n.stake).collect()
     }
 
     pub fn active_neurons(&self) -> impl Iterator<Item = &NeuronInfo> {

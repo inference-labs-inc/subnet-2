@@ -24,7 +24,5 @@ pub struct DSliceRequest {
     pub task_id: Option<String>,
     pub run_source: RunSource,
     pub retry_count: u32,
-    pub inputs_path: Option<String>,
-    pub outputs_path: Option<String>,
     pub circuit_path: Option<String>,
 }

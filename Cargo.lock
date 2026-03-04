@@ -12000,7 +12000,6 @@ dependencies = [
  "reqwest 0.12.28",
  "semver 1.0.27",
  "serde",
- "serde_json",
  "sha2 0.10.9",
  "sn2-types",
  "sp-core 31.0.0",
@@ -12029,17 +12028,13 @@ name = "sn2-miner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "axum",
- "base64 0.22.1",
  "btlightning",
  "clap",
  "dsperse",
  "hex",
- "ndarray",
  "reqwest 0.12.28",
  "rmp-serde",
- "serde",
  "serde_json",
  "sha2 0.10.9",
  "shellexpand",
@@ -12051,7 +12046,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.22",
- "uuid",
 ]
 
 [[package]]
@@ -12079,8 +12073,6 @@ dependencies = [
  "ndarray",
  "rand 0.8.5",
  "reqwest 0.12.28",
- "rmp-serde",
- "serde",
  "serde_json",
  "sha2 0.10.9",
  "sn2-chain",
