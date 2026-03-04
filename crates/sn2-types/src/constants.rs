@@ -33,7 +33,6 @@ pub const MAX_CIRCUIT_SIZE_GB: usize = 500;
 pub const SN2_RELAY_URL: &str = "wss://sn2-relay.inferencelabs.com:8443";
 pub const CIRCUIT_API_URL: &str = "https://repository.inferencelabs.com";
 pub const CIRCUIT_CACHE_DIR: &str = "~/.bittensor/subnet-2/circuit_cache";
-pub const MAX_CIRCUIT_SIZE_GB: usize = 500;
 
 pub const RELAY_RECONNECT_BASE_DELAY: u64 = 1;
 pub const RELAY_RECONNECT_MAX_DELAY: u64 = 60;
