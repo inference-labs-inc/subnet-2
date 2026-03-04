@@ -914,6 +914,7 @@ impl ValidatorLoop {
                         &dslice.circuit.id,
                         &dslice.slice_num,
                         &dslice.run_uid,
+                        dslice.tile_idx,
                     );
                     if guard_hash.is_none() {
                         self.api_dslice_queue.push_back(dslice);
@@ -948,6 +949,7 @@ impl ValidatorLoop {
                         &dslice.circuit.id,
                         &dslice.slice_num,
                         &dslice.run_uid,
+                        dslice.tile_idx,
                     );
                     if guard_hash.is_none() {
                         self.stacked_dslice_queue.push_back(dslice);

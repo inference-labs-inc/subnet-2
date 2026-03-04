@@ -62,6 +62,7 @@ impl RequestPipeline {
         circuit_id: &str,
         slice_num: &str,
         run_uid: &str,
+        tile_idx: Option<u32>,
     ) -> Option<String> {
         let mut hasher = Sha256::new();
         hasher.update(circuit_id.as_bytes());
@@ -69,6 +70,10 @@ impl RequestPipeline {
         hasher.update(slice_num.as_bytes());
         hasher.update(b":");
         hasher.update(run_uid.as_bytes());
+        if let Some(idx) = tile_idx {
+            hasher.update(b":");
+            hasher.update(idx.to_string().as_bytes());
+        }
         let hash = hex::encode(hasher.finalize());
         if self.hash_guard.contains(&hash) {
             return None;
@@ -191,10 +196,10 @@ mod tests {
     fn check_dslice_hash_deduplicates() {
         let mut pipeline = RequestPipeline::new();
         assert!(pipeline
-            .check_dslice_hash("circuit1", "slice0", "run1")
+            .check_dslice_hash("circuit1", "slice0", "run1", None)
             .is_some());
         assert!(pipeline
-            .check_dslice_hash("circuit1", "slice0", "run1")
+            .check_dslice_hash("circuit1", "slice0", "run1", None)
             .is_none());
     }
 
@@ -202,11 +207,25 @@ mod tests {
     fn check_dslice_hash_varies_with_component() {
         let mut pipeline = RequestPipeline::new();
         assert!(pipeline
-            .check_dslice_hash("circuit1", "slice0", "run1")
+            .check_dslice_hash("circuit1", "slice0", "run1", None)
             .is_some());
         assert!(pipeline
-            .check_dslice_hash("circuit1", "slice0", "run2")
+            .check_dslice_hash("circuit1", "slice0", "run2", None)
             .is_some());
+    }
+
+    #[test]
+    fn check_dslice_hash_varies_with_tile_idx() {
+        let mut pipeline = RequestPipeline::new();
+        assert!(pipeline
+            .check_dslice_hash("circuit1", "slice0", "run1", Some(0))
+            .is_some());
+        assert!(pipeline
+            .check_dslice_hash("circuit1", "slice0", "run1", Some(1))
+            .is_some());
+        assert!(pipeline
+            .check_dslice_hash("circuit1", "slice0", "run1", Some(0))
+            .is_none());
     }
 
     #[test]
