@@ -49,7 +49,7 @@ pub const POW_SCORES_OFFSET: usize = 0;
 pub const POW_UIDS_OFFSET: usize = POW_OUTPUT_STRIDE * 2;
 pub const POW_NUM_OUTPUT_ARRAYS: usize = 4;
 pub const MAX_EVALUATION_ITEMS: usize = 1024;
-pub const MAX_CIRCUIT_SIZE_GB: usize = 50;
+pub const MAX_CIRCUIT_SIZE_GB: usize = 500;
 
 pub const SN2_RELAY_URL: &str = "wss://sn2-relay.inferencelabs.com:8443";
 pub const CIRCUIT_API_URL: &str = "https://repository.inferencelabs.com";
