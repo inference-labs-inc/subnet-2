@@ -634,8 +634,6 @@ impl ValidatorLoop {
                         task_id: None,
                         run_source,
                         retry_count: 0,
-                        inputs_path: None,
-                        outputs_path: None,
                         circuit_path: slice_info.circuit_path.clone(),
                     };
                     match run_source {
@@ -659,8 +657,6 @@ impl ValidatorLoop {
                 task_id: None,
                 run_source,
                 retry_count: 0,
-                inputs_path: None,
-                outputs_path: None,
                 circuit_path: slice_info.circuit_path.clone(),
             };
             match request.run_source {
@@ -1027,7 +1023,6 @@ impl ValidatorLoop {
                 let task_task_id = task_id.clone();
                 let task_circuit_clone = task_circuit;
                 let task_inputs_clone = task_inputs;
-                let task_inputs_path_clone: Option<String> = None;
                 let task_proof_system_clone = task_proof_system;
                 let task_retry_payload = retry_payload;
                 let task_guard_hash = guard_hash.clone();
@@ -1072,7 +1067,6 @@ impl ValidatorLoop {
                                 computed_outputs: None,
                                 is_incremental: request_type == RequestType::DSlice,
                                 witness: None,
-                                inputs_path: task_inputs_path_clone,
                                 dsperse_circuit_path: task_dsperse_circuit_path,
                             };
                             response.proof_size = response

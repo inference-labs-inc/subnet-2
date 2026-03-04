@@ -40,22 +40,6 @@ impl WeightsSetter {
         blake2_256(&payload)
     }
 
-    pub async fn commit_reveal_enabled(
-        &self,
-        client: &OnlineClient<PolkadotConfig>,
-    ) -> Result<bool> {
-        let query = subxt::dynamic::storage(
-            "SubtensorModule",
-            "CommitRevealWeightsEnabled",
-            vec![Value::from(self.netuid as u64)],
-        );
-        let storage = client.storage().at_latest().await?;
-        match storage.fetch(&query).await? {
-            Some(val) => Ok(val.to_value()?.as_bool().unwrap_or(true)),
-            None => Ok(true),
-        }
-    }
-
     pub async fn query_tempo(&self, client: &OnlineClient<PolkadotConfig>) -> Result<u64> {
         let query = subxt::dynamic::storage(
             "SubtensorModule",
@@ -99,55 +83,6 @@ impl WeightsSetter {
         let first_reveal_block = reveal_epoch * tempo_plus_one - netuid_offset;
         let last_reveal_block = first_reveal_block + tempo;
         (first_reveal_block, last_reveal_block)
-    }
-
-    pub async fn set_weights(
-        &self,
-        client: &OnlineClient<PolkadotConfig>,
-        wallet: &Arc<Wallet>,
-        uids: &[u16],
-        weights: &[u16],
-        version_key: u32,
-    ) -> Result<()> {
-        anyhow::ensure!(
-            uids.len() == weights.len(),
-            "set_weights: uids.len({}) != weights.len({})",
-            uids.len(),
-            weights.len()
-        );
-
-        let dests: Vec<Value> = uids.iter().map(|&u| Value::from(u as u64)).collect();
-        let weight_vals: Vec<Value> = weights.iter().map(|&w| Value::from(w as u64)).collect();
-
-        let tx = subxt::dynamic::tx(
-            "SubtensorModule",
-            "set_weights",
-            vec![
-                Value::from(self.netuid as u64),
-                Value::unnamed_composite(dests),
-                Value::unnamed_composite(weight_vals),
-                Value::from(version_key as u64),
-            ],
-        );
-
-        let signer = SubxtSr25519Signer::new(wallet)?;
-
-        let result = client
-            .tx()
-            .sign_and_submit_then_watch_default(&tx, &signer)
-            .await
-            .context("submitting set_weights")?
-            .wait_for_finalized_success()
-            .await
-            .context("set_weights finalization")?;
-
-        info!(
-            block = %result.extrinsic_hash(),
-            uids_count = uids.len(),
-            "weights set on chain"
-        );
-
-        Ok(())
     }
 
     pub async fn commit_weights(

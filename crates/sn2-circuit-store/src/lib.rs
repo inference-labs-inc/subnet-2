@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use sn2_types::{
     Circuit, CircuitMetadata, CircuitPaths, CircuitType, ProofSystem, CIRCUIT_API_URL,
     CIRCUIT_CACHE_DIR, CIRCUIT_TIMEOUT_SECONDS, IGNORED_MODEL_HASHES,
 };
+use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 
 const SKIP_AUTO_DOWNLOAD: &[&str] = &["metadata.json", "full_model.onnx"];
@@ -457,10 +459,53 @@ async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) ->
         anyhow::bail!("download returned {}", resp.status());
     }
 
-    let bytes = resp.bytes().await.context("reading download body")?;
-    std::fs::write(dest, &bytes).with_context(|| format!("writing {}", dest.display()))?;
+    let partial = dest.with_extension("partial");
 
-    Ok(())
+    let result = async {
+        let max_bytes = (sn2_types::MAX_CIRCUIT_SIZE_GB as u64) * 1024 * 1024 * 1024;
+        if let Some(content_len) = resp.content_length() {
+            anyhow::ensure!(
+                content_len <= max_bytes,
+                "download too large: {content_len} bytes (max: {max_bytes} bytes)"
+            );
+        }
+
+        let file = tokio::fs::File::create(&partial)
+            .await
+            .with_context(|| format!("creating {}", partial.display()))?;
+        let mut writer = tokio::io::BufWriter::new(file);
+        let mut stream = resp.bytes_stream();
+        let mut downloaded: u64 = 0;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("reading download stream")?;
+            downloaded += chunk.len() as u64;
+            anyhow::ensure!(
+                downloaded <= max_bytes,
+                "download exceeded max size: {downloaded} > {max_bytes} bytes"
+            );
+            writer
+                .write_all(&chunk)
+                .await
+                .with_context(|| format!("writing to {}", partial.display()))?;
+        }
+
+        writer
+            .flush()
+            .await
+            .with_context(|| format!("flushing {}", partial.display()))?;
+
+        tokio::fs::rename(&partial, dest)
+            .await
+            .with_context(|| format!("renaming {} to {}", partial.display(), dest.display()))
+    }
+    .await;
+
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&partial).await;
+    }
+
+    result
 }
 
 fn load_circuit_from_cache(circuit_id: &str, dir: &Path, cache_dir: &Path) -> Result<Circuit> {

@@ -63,17 +63,16 @@ impl ScoreManager {
         let calculated_score_fraction = response_time_metric.clamp(0.0, 1.0);
         let effective_max = maximum_score * calculated_score_fraction;
 
-        let (distance, new_score) = if verified {
+        let new_score = if verified {
             let distance = effective_max - previous_score;
             let change = rate_of_change * distance;
-            (distance, previous_score + change)
+            previous_score + change
         } else {
             let distance = previous_score;
             let change = rate_of_change * distance;
-            (distance, previous_score - change)
+            previous_score - change
         };
 
-        let _ = distance;
         self.scores.insert(uid, new_score.max(0.0));
     }
 
@@ -113,8 +112,16 @@ impl ScoreManager {
 
     pub fn save(&self) -> Result<()> {
         let json = serde_json::to_string_pretty(&self.scores)?;
-        std::fs::write(&self.persistence_path, json)
-            .with_context(|| format!("writing scores to {}", self.persistence_path.display()))?;
+        let tmp_path = self.persistence_path.with_extension("tmp");
+        std::fs::write(&tmp_path, json)
+            .with_context(|| format!("writing scores to {}", tmp_path.display()))?;
+        std::fs::rename(&tmp_path, &self.persistence_path).with_context(|| {
+            format!(
+                "renaming {} to {}",
+                tmp_path.display(),
+                self.persistence_path.display()
+            )
+        })?;
         Ok(())
     }
 

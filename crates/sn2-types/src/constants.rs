@@ -1,47 +1,26 @@
 pub const VALIDATOR_REQUEST_TIMEOUT_SECONDS: u64 = 120;
 pub const CIRCUIT_TIMEOUT_SECONDS: u64 = 180;
-pub const EXTERNAL_REQUEST_QUEUE_TIME_SECONDS: u64 = 10;
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
-pub const DEFAULT_PROOF_SIZE: usize = 5000;
-pub const MAXIMUM_SCORE_MEDIAN_SAMPLE: f64 = 0.05;
-pub const MINIMUM_SCORE_SHIFT: f64 = 0.0;
 pub const WEIGHTS_VERSION: u32 = 11003;
 pub const WEIGHT_RATE_LIMIT_BLOCKS: u64 = 100;
 pub const WEIGHT_UPDATE_POLL_SECS: u64 = 60;
 pub const LOOP_DELAY_SECONDS: f64 = 0.1;
 pub const EXCEPTION_DELAY_SECONDS: u64 = 10;
-pub const DEFAULT_MAX_SCORE: f64 = 1.0 / 235.0;
 pub const DEFAULT_NETUID: u16 = 2;
-pub const FIELD_MODULUS: &str =
-    "21888242871839275222246405745257275088548364400416034343698204186575808495617";
-pub const EPOCH_TEMPO: u64 = 360;
-pub const ONCHAIN_PROOF_OF_WEIGHTS_ENABLED: bool = false;
-pub const PROOF_OF_WEIGHTS_INTERVAL: u64 = 1000;
-pub const MAX_PROOFS_TO_LOG: usize = 0;
-pub const PROOF_OF_WEIGHTS_LIFESPAN: u64 = 2;
-pub const ACTIVE_COMPETITION: u32 = 0;
-pub const COMPETITION_SYNC_INTERVAL: u64 = 86400;
 pub const MAX_SIGNATURE_LIFESPAN: u64 = 300;
 
 pub const BATCHED_PROOF_OF_WEIGHTS_MODEL_ID: &str =
     "1550853037e01d93c0831e2a4f80de7811b1c6780fb36b3cee89f4ba524df1be";
-pub const SINGLE_PROOF_OF_WEIGHTS_MODEL_ID: &str =
-    "4a87c995300f4e9ad9add9d5b800eb93bb3ecd3f9459b617f9924a211407a88c";
 
 pub const PERFORMANCE_WINDOW_SIZE: usize = 2000;
 pub const PERFORMANCE_CURVE_POWER: f64 = 3.0;
 pub const PERFORMANCE_MIN_SAMPLES: usize = 5;
 pub const PERFORMANCE_RESCHEDULE_PENALTY: f64 = -0.4;
-pub const PERFORMANCE_RESPONSE_TIME_WEIGHT: f64 = 0.5;
 pub const PERFORMANCE_SCORING_PERCENTILE: f64 = 0.50;
 pub const CAPACITY_WINDOW_SIZE: usize = 20;
 pub const CAPACITY_RAMP_THRESHOLD: f64 = 1.0;
 pub const CAPACITY_BACKOFF_THRESHOLD: f64 = 0.50;
 pub const CAPACITY_MIN_AT_CAP: usize = 8;
-
-pub const IDLE_BENCHMARK_PROBABILITY: f64 = 0.1;
-pub const EMA_BOOST_FACTOR: f64 = 1.2;
-pub const EMA_ENABLED: bool = false;
 
 pub const MAX_POW_QUEUE_SIZE: usize = 1024;
 pub const POW_OUTPUT_STRIDE: usize = MAX_POW_QUEUE_SIZE;
@@ -49,17 +28,15 @@ pub const POW_SCORES_OFFSET: usize = 0;
 pub const POW_UIDS_OFFSET: usize = POW_OUTPUT_STRIDE * 2;
 pub const POW_NUM_OUTPUT_ARRAYS: usize = 4;
 pub const MAX_EVALUATION_ITEMS: usize = 1024;
-pub const MAX_CIRCUIT_SIZE_GB: usize = 50;
+pub const MAX_CIRCUIT_SIZE_GB: usize = 500;
 
 pub const SN2_RELAY_URL: &str = "wss://sn2-relay.inferencelabs.com:8443";
 pub const CIRCUIT_API_URL: &str = "https://repository.inferencelabs.com";
-pub const CIRCUIT_R2_BASE_URL: &str = "https://dsperse.inferencelabs.com";
 pub const CIRCUIT_CACHE_DIR: &str = "~/.bittensor/subnet-2/circuit_cache";
 
 pub const RELAY_RECONNECT_BASE_DELAY: u64 = 1;
 pub const RELAY_RECONNECT_MAX_DELAY: u64 = 60;
 pub const RELAY_AUTH_TIMEOUT: u64 = 10;
-pub const RELAY_OPEN_TIMEOUT: u64 = 20;
 pub const RELAY_PING_INTERVAL: u64 = 30;
 pub const RELAY_PING_TIMEOUT: u64 = 120;
 

@@ -12,4 +12,5 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
 shellexpand = { workspace = true }
+futures-util = { workspace = true }
 zip = { workspace = true }

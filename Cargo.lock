@@ -1671,7 +1671,7 @@ dependencies = [
 [[package]]
 name = "btlightning"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/btlightning.git?rev=a7f38dec4a15b815db7b60f9a5683281f2dc2281#a7f38dec4a15b815db7b60f9a5683281f2dc2281"
+source = "git+https://github.com/inference-labs-inc/btlightning.git?rev=6e8b399184f1b8bc88d5668ae75e5b548cc2fcaa#6e8b399184f1b8bc88d5668ae75e5b548cc2fcaa"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -10401,6 +10401,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-core",
+ "futures-util",
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
@@ -10420,12 +10421,14 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tokio",
  "tokio-rustls 0.26.4",
+ "tokio-util",
  "tower 0.5.3",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.6",
 ]
@@ -11997,7 +12000,6 @@ dependencies = [
  "reqwest 0.12.28",
  "semver 1.0.27",
  "serde",
- "serde_json",
  "sha2 0.10.9",
  "sn2-types",
  "sp-core 31.0.0",
@@ -12011,6 +12013,7 @@ name = "sn2-circuit-store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures-util",
  "reqwest 0.12.28",
  "serde_json",
  "shellexpand",
@@ -12025,17 +12028,13 @@ name = "sn2-miner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "axum",
- "base64 0.22.1",
  "btlightning",
  "clap",
  "dsperse",
  "hex",
- "ndarray",
  "reqwest 0.12.28",
  "rmp-serde",
- "serde",
  "serde_json",
  "sha2 0.10.9",
  "shellexpand",
@@ -12047,7 +12046,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.22",
- "uuid",
 ]
 
 [[package]]
@@ -12075,8 +12073,6 @@ dependencies = [
  "ndarray",
  "rand 0.8.5",
  "reqwest 0.12.28",
- "rmp-serde",
- "serde",
  "serde_json",
  "sha2 0.10.9",
  "sn2-chain",
@@ -15295,6 +15291,19 @@ dependencies = [
  "cc",
  "cxx",
  "cxx-build",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
