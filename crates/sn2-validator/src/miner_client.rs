@@ -301,9 +301,11 @@ impl MinerQueryClient {
         let mut quic_count = 0u32;
         for miner in miners {
             let key = format!("connection_{}", miner.addr_key());
-            if stats.contains_key(&key) {
-                cache.insert(miner.hotkey.clone(), TransportPreference::Quic);
-                quic_count += 1;
+            if let Some(status) = stats.get(&key) {
+                if status == "active" {
+                    cache.insert(miner.hotkey.clone(), TransportPreference::Quic);
+                    quic_count += 1;
+                }
             }
         }
         info!(
