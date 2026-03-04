@@ -9,6 +9,9 @@ concurrency:
   group: nightly-publish
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/subnet-2
