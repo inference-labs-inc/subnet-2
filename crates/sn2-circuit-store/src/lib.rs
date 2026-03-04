@@ -390,7 +390,10 @@ impl CircuitStore {
         let proof_system = metadata
             .proof_system
             .parse::<ProofSystem>()
-            .unwrap_or(ProofSystem::JSTPROVE);
+            .unwrap_or_else(|_| {
+                warn!(raw = %metadata.proof_system, "unknown proof_system, defaulting to JSTPROVE");
+                ProofSystem::JSTPROVE
+            });
 
         Ok(Circuit {
             id: circuit_id.to_string(),
