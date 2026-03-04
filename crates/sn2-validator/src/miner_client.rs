@@ -330,3 +330,86 @@ fn is_connection_error(err: &anyhow::Error) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_client() -> MinerQueryClient {
+        MinerQueryClient {
+            lightning: LightningClient::new("test".to_string()),
+            http: reqwest::Client::new(),
+            wallet: None,
+            transport_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[test]
+    fn probe_claim_transitions_unknown_to_probing() {
+        let client = make_client();
+        let pref = client.get_or_claim_probe("hk1");
+        assert_eq!(pref, TransportPreference::Unknown);
+
+        let pref2 = client.get_or_claim_probe("hk1");
+        assert_eq!(pref2, TransportPreference::Probing);
+    }
+
+    #[test]
+    fn set_transport_overrides_preference() {
+        let client = make_client();
+        client.set_transport("hk1", TransportPreference::Quic);
+        let pref = client.get_or_claim_probe("hk1");
+        assert_eq!(pref, TransportPreference::Quic);
+    }
+
+    #[test]
+    fn clear_transport_cache_resets_all() {
+        let client = make_client();
+        client.set_transport("hk1", TransportPreference::Quic);
+        client.set_transport("hk2", TransportPreference::HttpOnly);
+        client.clear_transport_cache();
+        let pref = client.get_or_claim_probe("hk1");
+        assert_eq!(pref, TransportPreference::Unknown);
+    }
+
+    #[test]
+    fn is_connection_error_classifies_transport_errors() {
+        let conn = anyhow::Error::from(LightningError::Connection("reset".into()));
+        assert!(is_connection_error(&conn));
+
+        let transport = anyhow::Error::from(LightningError::Transport("timeout".into()));
+        assert!(is_connection_error(&transport));
+
+        let handshake = anyhow::Error::from(LightningError::Handshake("mismatch".into()));
+        assert!(is_connection_error(&handshake));
+
+        let stream = anyhow::Error::from(LightningError::Stream("closed".into()));
+        assert!(is_connection_error(&stream));
+    }
+
+    #[test]
+    fn is_connection_error_rejects_non_transport_errors() {
+        let other = anyhow::anyhow!("some random error");
+        assert!(!is_connection_error(&other));
+
+        let serialization =
+            anyhow::Error::from(LightningError::Serialization("bad format".into()));
+        assert!(!is_connection_error(&serialization));
+    }
+
+    #[test]
+    fn independent_hotkeys_have_independent_state() {
+        let client = make_client();
+        client.set_transport("hk1", TransportPreference::Quic);
+        client.set_transport("hk2", TransportPreference::HttpOnly);
+        assert_eq!(client.get_or_claim_probe("hk1"), TransportPreference::Quic);
+        assert_eq!(
+            client.get_or_claim_probe("hk2"),
+            TransportPreference::HttpOnly
+        );
+        assert_eq!(
+            client.get_or_claim_probe("hk3"),
+            TransportPreference::Unknown
+        );
+    }
+}
