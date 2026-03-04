@@ -1,10 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 
 use anyhow::{bail, Result};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::reconstruct;
+
+const DEFAULT_MAX_TILES: usize = 65536;
 
 pub struct StoredTile {
     pub data: Vec<f64>,
@@ -13,8 +15,14 @@ pub struct StoredTile {
     pub width: usize,
 }
 
+struct TileStoreInner {
+    map: HashMap<String, StoredTile>,
+    insertion_order: VecDeque<String>,
+    max_capacity: usize,
+}
+
 pub struct TileStore {
-    data: Mutex<HashMap<String, StoredTile>>,
+    data: Mutex<TileStoreInner>,
 }
 
 impl Default for TileStore {
@@ -23,9 +31,7 @@ impl Default for TileStore {
     }
 }
 
-fn lock_store(
-    mutex: &Mutex<HashMap<String, StoredTile>>,
-) -> Result<std::sync::MutexGuard<'_, HashMap<String, StoredTile>>> {
+fn lock_store(mutex: &Mutex<TileStoreInner>) -> Result<std::sync::MutexGuard<'_, TileStoreInner>> {
     mutex
         .lock()
         .map_err(|e| anyhow::anyhow!("tile store lock poisoned: {e}"))
@@ -33,8 +39,16 @@ fn lock_store(
 
 impl TileStore {
     pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_MAX_TILES)
+    }
+
+    pub fn with_capacity(max_capacity: usize) -> Self {
         Self {
-            data: Mutex::new(HashMap::new()),
+            data: Mutex::new(TileStoreInner {
+                map: HashMap::new(),
+                insertion_order: VecDeque::new(),
+                max_capacity,
+            }),
         }
     }
 
@@ -61,9 +75,29 @@ impl TileStore {
                 tile.width
             );
         }
-        let mut map = lock_store(&self.data)?;
-        info!(key = %key, len = tile.data.len(), "tile stored");
-        map.insert(key, tile);
+        let mut inner = lock_store(&self.data)?;
+
+        if inner.max_capacity == 0 {
+            return Ok(());
+        }
+
+        #[allow(clippy::map_entry)]
+        if inner.map.contains_key(&key) {
+            inner.map.insert(key, tile);
+        } else {
+            while inner.map.len() >= inner.max_capacity {
+                if let Some(oldest_key) = inner.insertion_order.pop_front() {
+                    if inner.map.remove(&oldest_key).is_some() {
+                        warn!(evicted = %oldest_key, capacity = inner.max_capacity, "tile evicted due to capacity limit");
+                    }
+                } else {
+                    break;
+                }
+            }
+            info!(key = %key, len = tile.data.len(), "tile stored");
+            inner.insertion_order.push_back(key.clone());
+            inner.map.insert(key, tile);
+        }
         Ok(())
     }
 
@@ -98,9 +132,10 @@ impl TileStore {
             );
         }
 
-        let map = lock_store(&self.data)?;
+        let inner = lock_store(&self.data)?;
 
-        let first = map
+        let first = inner
+            .map
             .get(&tile_keys[0])
             .ok_or_else(|| anyhow::anyhow!("missing tile key: {}", tile_keys[0]))?;
         let channels = first.channels;
@@ -109,7 +144,8 @@ impl TileStore {
 
         let mut tile_refs: Vec<&[f64]> = Vec::with_capacity(expected);
         for key in tile_keys {
-            let entry = map
+            let entry = inner
+                .map
                 .get(key)
                 .ok_or_else(|| anyhow::anyhow!("missing tile key: {}", key))?;
             if entry.channels != channels || entry.height != tile_h || entry.width != tile_w {
@@ -133,15 +169,19 @@ impl TileStore {
     }
 
     pub fn evict(&self, keys: &[String]) -> Result<usize> {
-        let mut map = lock_store(&self.data)?;
+        let mut inner = lock_store(&self.data)?;
         let mut removed = 0;
         for key in keys {
-            if map.remove(key).is_some() {
+            if inner.map.remove(key).is_some() {
                 removed += 1;
             }
         }
         if removed > 0 {
-            info!(removed, remaining = map.len(), "tiles evicted");
+            let remove_set: HashSet<&str> = keys.iter().map(String::as_str).collect();
+            inner
+                .insertion_order
+                .retain(|k| !remove_set.contains(k.as_str()));
+            info!(removed, remaining = inner.map.len(), "tiles evicted");
         }
         Ok(removed)
     }
@@ -236,5 +276,31 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("duplicate tile keys"));
+    }
+
+    #[test]
+    fn capacity_evicts_oldest() {
+        let store = TileStore::with_capacity(2);
+        store.insert("a".into(), make_tile(vec![1.0; 4])).unwrap();
+        store.insert("b".into(), make_tile(vec![2.0; 4])).unwrap();
+        store.insert("c".into(), make_tile(vec![3.0; 4])).unwrap();
+        let inner = lock_store(&store.data).unwrap();
+        assert_eq!(inner.map.len(), 2);
+        assert!(!inner.map.contains_key("a"));
+        assert!(inner.map.contains_key("b"));
+        assert!(inner.map.contains_key("c"));
+    }
+
+    #[test]
+    fn overwrite_existing_key_does_not_evict() {
+        let store = TileStore::with_capacity(2);
+        store.insert("a".into(), make_tile(vec![1.0; 4])).unwrap();
+        store.insert("b".into(), make_tile(vec![2.0; 4])).unwrap();
+        store.insert("a".into(), make_tile(vec![9.0; 4])).unwrap();
+        let inner = lock_store(&store.data).unwrap();
+        assert_eq!(inner.map.len(), 2);
+        assert!(inner.map.contains_key("a"));
+        assert!(inner.map.contains_key("b"));
+        assert_eq!(inner.map.get("a").unwrap().data[0], 9.0);
     }
 }

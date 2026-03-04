@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::json;
 use sn2_circuit_store::CircuitStore;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tracing::info;
 
 use sn2_types::*;
@@ -10,15 +10,30 @@ use crate::dsperse::DSperseClient;
 
 pub struct MinerHandlers {
     dsperse: DSperseClient,
-    circuit_store: Mutex<CircuitStore>,
+    circuit_store: RwLock<CircuitStore>,
 }
 
 impl MinerHandlers {
     pub fn new(dsperse: DSperseClient, circuit_store: CircuitStore) -> Self {
         Self {
             dsperse,
-            circuit_store: Mutex::new(circuit_store),
+            circuit_store: RwLock::new(circuit_store),
         }
+    }
+
+    async fn ensure_circuit_cached(&self, circuit_id: &str) -> Result<()> {
+        {
+            let store = self.circuit_store.read().await;
+            if store.get_circuit(circuit_id).is_some() {
+                return Ok(());
+            }
+        }
+        let mut store = self.circuit_store.write().await;
+        if store.get_circuit(circuit_id).is_some() {
+            return Ok(());
+        }
+        store.ensure_circuit(circuit_id).await?;
+        Ok(())
     }
 
     pub async fn handle_query_zk_proof(&self, data: QueryZkProof) -> Result<serde_json::Value> {
@@ -26,11 +41,7 @@ impl MinerHandlers {
         info!(model_id = model_id, "handling QueryZkProof");
 
         if !model_id.is_empty() {
-            self.circuit_store
-                .lock()
-                .await
-                .ensure_circuit(model_id)
-                .await?;
+            self.ensure_circuit_cached(model_id).await?;
         }
 
         let result = self
@@ -54,10 +65,7 @@ impl MinerHandlers {
             "handling ProofOfWeights"
         );
 
-        self.circuit_store
-            .lock()
-            .await
-            .ensure_circuit(&data.verification_key_hash)
+        self.ensure_circuit_cached(&data.verification_key_hash)
             .await?;
 
         let result = self
@@ -81,11 +89,7 @@ impl MinerHandlers {
         info!(circuit = circuit_id, slice = slice_num, "handling DSlice");
 
         if !circuit_id.is_empty() {
-            self.circuit_store
-                .lock()
-                .await
-                .ensure_circuit(circuit_id)
-                .await?;
+            self.ensure_circuit_cached(circuit_id).await?;
         }
 
         let result = self

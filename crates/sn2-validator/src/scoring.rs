@@ -113,8 +113,16 @@ impl ScoreManager {
 
     pub fn save(&self) -> Result<()> {
         let json = serde_json::to_string_pretty(&self.scores)?;
-        std::fs::write(&self.persistence_path, json)
-            .with_context(|| format!("writing scores to {}", self.persistence_path.display()))?;
+        let tmp_path = self.persistence_path.with_extension("tmp");
+        std::fs::write(&tmp_path, json)
+            .with_context(|| format!("writing scores to {}", tmp_path.display()))?;
+        std::fs::rename(&tmp_path, &self.persistence_path).with_context(|| {
+            format!(
+                "renaming {} to {}",
+                tmp_path.display(),
+                self.persistence_path.display()
+            )
+        })?;
         Ok(())
     }
 
