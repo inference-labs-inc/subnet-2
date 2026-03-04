@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use btlightning::QuicAxonInfo;
 use sn2_chain::{PendingReveal, WeightsSetter};
 use sn2_types::*;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{watch, Notify, RwLock};
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
@@ -210,7 +210,7 @@ impl ValidatorLoop {
         })
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(&mut self, mut update_shutdown_rx: watch::Receiver<bool>) -> Result<()> {
         self.circuit_store.load_circuits().await?;
         if let Some(relay) = &mut self.relay {
             relay.start().await?;
@@ -285,6 +285,11 @@ impl ValidatorLoop {
                 }
                 _ = tokio::signal::ctrl_c() => {
                     info!("shutting down validator");
+                    self.shutdown().await;
+                    return Ok(());
+                }
+                _ = async { loop { update_shutdown_rx.changed().await.ok()?; if *update_shutdown_rx.borrow() { return Some(()); } } } => {
+                    info!("shutting down validator for auto-update restart");
                     self.shutdown().await;
                     return Ok(());
                 }
@@ -2207,6 +2212,26 @@ impl ValidatorLoop {
     }
 
     async fn shutdown(&mut self) {
+        info!("draining in-flight weight tasks");
+        while let Some(result) = self.weight_tasks.join_next().await {
+            match result {
+                Ok(WeightTaskResult::Committed(pending)) => {
+                    self.pending_reveal = Some(pending);
+                }
+                Ok(WeightTaskResult::CommitFailed(e)) => {
+                    warn!(error = %e, "weight commit failed during shutdown");
+                }
+                Ok(WeightTaskResult::Revealed) => {
+                    info!("weights revealed during shutdown");
+                }
+                Ok(WeightTaskResult::RevealFailed(e)) => {
+                    warn!(error = %e, "weight reveal failed during shutdown");
+                }
+                Err(e) => {
+                    warn!(error = %e, "weight task panicked during shutdown");
+                }
+            }
+        }
         info!("aborting in-flight miner tasks");
         self.tasks.shutdown().await;
         info!("draining in-flight proof uploads");
