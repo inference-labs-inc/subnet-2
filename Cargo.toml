@@ -29,20 +29,14 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+reqwest = { version = "0.12", features = ["rustls-tls", "json", "stream"], default-features = false }
 axum = "0.7"
 rmp-serde = "1"
 hex = "0.4"
-num-bigint = "0.4"
-num-traits = "0.2"
-num-integer = "0.1"
-tempfile = "3"
-zstd = "0.13"
-which = "7"
 sp-core = "31"
 bittensor_wallet = { version = "4.0.1", package = "btwallet", default-features = false }
 subxt = "0.37"
-btlightning = { git = "https://github.com/inference-labs-inc/btlightning.git", rev = "a7f38dec4a15b815db7b60f9a5683281f2dc2281", features = ["btwallet", "subtensor"] }
+btlightning = { git = "https://github.com/inference-labs-inc/btlightning.git", rev = "6e8b399184f1b8bc88d5668ae75e5b548cc2fcaa", features = ["btwallet", "subtensor"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
@@ -50,7 +44,6 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 sha2 = "0.10"
 semver = "1"
-async-trait = "0.1"
 rand = "0.8"
 dirs-next = "2"
 futures-util = "0.3"
