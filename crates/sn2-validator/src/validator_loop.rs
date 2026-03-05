@@ -1723,7 +1723,7 @@ impl ValidatorLoop {
                     verification_time_sec: a.verification_time,
                     success,
                     is_tiled: tiling.is_some(),
-                    tile_count: tiling.map(|t| t.num_tiles),
+                    tile_count: Some(tiling.map(|t| t.num_tiles).unwrap_or(1)),
                 }
             })
             .collect();
