@@ -1,5 +1,8 @@
 name: Build Platform Binaries
 
+permissions:
+  contents: read
+
 on:
   workflow_call:
     inputs:
