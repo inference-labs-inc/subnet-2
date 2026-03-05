@@ -69,7 +69,7 @@ jobs:
 
       - name: Upload Trivy testnet image scan to GitHub Security tab
         if: ${{ steps.trivy-scan-testnet.conclusion == 'success' }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-image-results.sarif
           category: trivy-image-testnet
@@ -112,7 +112,7 @@ jobs:
 
       - name: Upload Trivy release image scan to GitHub Security tab
         if: ${{ steps.trivy-scan-release.conclusion == 'success' }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-image-results.sarif
           category: trivy-image-release
