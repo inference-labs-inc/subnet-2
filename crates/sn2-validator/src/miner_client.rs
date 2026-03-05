@@ -300,10 +300,7 @@ impl MinerQueryClient {
             let addr = miner.addr_key().to_string();
             match old.get(&miner.hotkey) {
                 Some((TransportPreference::Quic, old_addr)) if *old_addr == addr => {
-                    cache.insert(
-                        miner.hotkey.clone(),
-                        (TransportPreference::Quic, addr),
-                    );
+                    cache.insert(miner.hotkey.clone(), (TransportPreference::Quic, addr));
                     quic_kept += 1;
                 }
                 Some((TransportPreference::Quic, _)) => {
