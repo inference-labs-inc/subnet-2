@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - testnet
+  pull_request:
+    types: [labeled, synchronize]
   release:
     types: [created]
   workflow_dispatch: null
@@ -15,6 +17,7 @@ env:
 
 jobs:
   build-and-push-image:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-build')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,7 +54,7 @@ jobs:
           context: .
           file: ./Dockerfile
           pull: true
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           build-args: |
             SN2_VERSION=dev-${{ github.sha }}
           tags: |
@@ -62,7 +65,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Scan testnet container image with Trivy
-        if: github.event_name != 'release'
+        if: github.event_name == 'push'
         id: trivy-scan-testnet
         uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478 # 0.34.2
         with:
@@ -80,7 +83,7 @@ jobs:
           category: trivy-image-testnet
 
       - name: Generate artifact attestation for testnet
-        if: github.event_name != 'release'
+        if: github.event_name == 'push'
         id: attest-testnet
         uses: actions/attest-build-provenance@v1
         with:
