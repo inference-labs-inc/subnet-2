@@ -1704,11 +1704,10 @@ impl ValidatorLoop {
                     failed_count += 1;
                 }
                 let tiling = model_slices.as_ref().and_then(|slices| {
-                    let idx: usize = a
+                    let idx = a
                         .slice_num
                         .strip_prefix("slice_")
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0);
+                        .and_then(|s| s.parse::<usize>().ok())?;
                     slices.get(idx).and_then(|s| s.tiling.as_ref())
                 });
                 DsperseSliceReport {
