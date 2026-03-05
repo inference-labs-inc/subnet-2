@@ -62,6 +62,11 @@ enum TaskOutcome {
     Failure(String),
 }
 
+struct VerifyResult {
+    task_result: TaskResult,
+    verified: bool,
+}
+
 pub struct ValidatorLoop {
     config: ValidatorConfig,
     score_manager: ScoreManager,
@@ -70,7 +75,6 @@ pub struct ValidatorLoop {
     miner_client: Arc<RwLock<MinerQueryClient>>,
     relay: Option<RelayManager>,
     pipeline: RequestPipeline,
-    response_processor: ResponseProcessor,
     circuit_store: CircuitStore,
     tasks: JoinSet<TaskResult>,
     miner_active_count: HashMap<u16, usize>,
@@ -102,6 +106,7 @@ pub struct ValidatorLoop {
     dsperse_events: Option<Arc<DsperseEventClient>>,
     dsperse_flush_task: Option<tokio::task::JoinHandle<()>>,
     dsperse_emit_tasks: JoinSet<()>,
+    verify_tasks: JoinSet<VerifyResult>,
 }
 
 impl ValidatorLoop {
@@ -183,7 +188,6 @@ impl ValidatorLoop {
         };
 
         let pipeline = RequestPipeline::new();
-        let response_processor = ResponseProcessor::new();
         let circuit_store_loopback = config.loopback && config.circuit_api_url.is_none();
         let circuit_store = CircuitStore::new(
             config.circuit_api_url.as_deref(),
@@ -202,7 +206,6 @@ impl ValidatorLoop {
             miner_client,
             relay,
             pipeline,
-            response_processor,
             circuit_store,
             tasks: JoinSet::new(),
             miner_active_count: HashMap::new(),
@@ -234,6 +237,7 @@ impl ValidatorLoop {
             dsperse_events,
             dsperse_flush_task,
             dsperse_emit_tasks: JoinSet::new(),
+            verify_tasks: JoinSet::new(),
         })
     }
 
@@ -276,7 +280,7 @@ impl ValidatorLoop {
                     match result {
                         Ok(task_result) => {
                             self.task_meta.remove(&task_result.tokio_task_id);
-                            self.handle_task_result(task_result).await;
+                            self.start_verification(task_result);
                         }
                         Err(e) => {
                             if let Some((uid, guard_hash, is_benchmark)) = self.task_meta.remove(&e.id()) {
@@ -297,6 +301,16 @@ impl ValidatorLoop {
                         }
                     }
                     self.dispatch_notify.notify_one();
+                }
+                Some(result) = self.verify_tasks.join_next() => {
+                    match result {
+                        Ok(verify_result) => {
+                            self.finish_verification(verify_result).await;
+                        }
+                        Err(e) => {
+                            error!(error = %e, "verification task panicked");
+                        }
+                    }
                 }
                 Some(submission) = self.dsperse_rx.recv() => {
                     self.handle_dsperse_submission(submission).await;
@@ -1252,7 +1266,51 @@ impl ValidatorLoop {
             .collect()
     }
 
-    async fn handle_task_result(&mut self, mut result: TaskResult) {
+    fn start_verification(&mut self, mut result: TaskResult) {
+        let uid = result.uid;
+
+        if let Some(count) = self.miner_active_count.get_mut(&uid) {
+            *count = count.saturating_sub(1);
+        }
+        if result.request_type == RequestType::Benchmark {
+            self.benchmark_in_flight = self.benchmark_in_flight.saturating_sub(1);
+        }
+
+        match result.outcome {
+            TaskOutcome::Success(ref mut response) if response.proof_content.is_some() => {
+                let mut response = match std::mem::replace(
+                    &mut result.outcome,
+                    TaskOutcome::Failure(String::new()),
+                ) {
+                    TaskOutcome::Success(r) => r,
+                    _ => unreachable!(),
+                };
+                let processor = ResponseProcessor::new();
+                self.verify_tasks.spawn(async move {
+                    let verified =
+                        matches!(processor.verify_response(&mut response).await, Ok(true));
+                    response.verification_result = verified;
+                    result.outcome = TaskOutcome::Success(response);
+                    VerifyResult {
+                        task_result: result,
+                        verified,
+                    }
+                });
+            }
+            _ => {
+                self.verify_tasks.spawn(async move {
+                    VerifyResult {
+                        task_result: result,
+                        verified: false,
+                    }
+                });
+            }
+        }
+    }
+
+    async fn finish_verification(&mut self, vr: VerifyResult) {
+        let result = vr.task_result;
+        let verified = vr.verified;
         let uid = result.uid;
         let was_at_capacity = result.was_at_capacity;
         let request_type = result.request_type;
@@ -1263,22 +1321,12 @@ impl ValidatorLoop {
         let tile_idx = result.tile_idx;
         let external_request_hash = result.external_request_hash.clone();
         let retry_count = result.retry_count;
+        let mut result = result;
         let retry_payload = std::mem::replace(&mut result.retry_payload, RetryPayload::None);
         let guard_hash = result.guard_hash.clone();
 
-        if let Some(count) = self.miner_active_count.get_mut(&uid) {
-            *count = count.saturating_sub(1);
-        }
-        if request_type == RequestType::Benchmark {
-            self.benchmark_in_flight = self.benchmark_in_flight.saturating_sub(1);
-        }
-
         let failed = match result.outcome {
-            TaskOutcome::Success(ref mut response) => {
-                let verify_result = self.response_processor.verify_response(response).await;
-                let verified = matches!(verify_result, Ok(true));
-                response.verification_result = verified;
-
+            TaskOutcome::Success(ref response) => {
                 if verified {
                     if request_type == RequestType::ProofOfWeights {
                         self.handle_pow_success(response).await;
@@ -1375,12 +1423,7 @@ impl ValidatorLoop {
                             });
                         }
                     }
-                    let reason = match verify_result {
-                        Ok(false) => "verification failed".to_string(),
-                        Err(e) => e.to_string(),
-                        Ok(true) => "unexpected verification state".to_string(),
-                    };
-                    Some(reason)
+                    Some("verification failed".to_string())
                 }
             }
             TaskOutcome::Failure(ref e) => Some(e.clone()),
