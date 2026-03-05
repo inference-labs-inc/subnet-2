@@ -435,7 +435,7 @@ impl ValidatorLoop {
             Some(incremental),
         );
 
-        let (total_slices, total_tiles) = self.run_manager.slice_tile_counts(&run_uid);
+        let (total_slices, total_tiles, stc) = self.run_manager.slice_tile_counts(&run_uid);
 
         if let Some(ev) = &self.dsperse_events {
             let ev = Arc::clone(ev);
@@ -443,7 +443,7 @@ impl ValidatorLoop {
             let cid = circuit.id.clone();
             let cname = circuit.metadata.name.clone();
             self.dsperse_emit_tasks.spawn(async move {
-                ev.emit_run_started(&uid, &cid, &cname, total_slices, total_tiles, "api")
+                ev.emit_run_started(&uid, &cid, &cname, total_slices, total_tiles, &stc, "api")
                     .await;
             });
         }
@@ -789,14 +789,17 @@ impl ValidatorLoop {
         );
 
         if let Some(ev) = &self.dsperse_events {
-            let (total_slices, total_tiles) = self.run_manager.slice_tile_counts(&run_uid);
+            let (total_slices, total_tiles, stc) =
+                self.run_manager.slice_tile_counts(&run_uid);
             let ev = Arc::clone(ev);
             let uid = run_uid.clone();
             let cid = circuit.id.clone();
             let cname = circuit.metadata.name.clone();
             self.dsperse_emit_tasks.spawn(async move {
-                ev.emit_run_started(&uid, &cid, &cname, total_slices, total_tiles, "benchmark")
-                    .await;
+                ev.emit_run_started(
+                    &uid, &cid, &cname, total_slices, total_tiles, &stc, "benchmark",
+                )
+                .await;
             });
         }
 

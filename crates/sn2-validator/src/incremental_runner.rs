@@ -107,23 +107,28 @@ impl IncrementalRunManager {
         self.runs.contains_key(run_uid)
     }
 
-    pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize) {
+    pub fn slice_tile_counts(
+        &self,
+        run_uid: &str,
+    ) -> (usize, usize, HashMap<String, usize>) {
         let run = match self.runs.get(run_uid) {
             Some(r) => r,
-            None => return (0, 0),
+            None => return (0, 0, HashMap::new()),
         };
         let inc = match run.incremental.as_ref() {
             Some(i) => i,
-            None => return (0, 0),
+            None => return (0, 0, HashMap::new()),
         };
         let meta = inc.model_meta();
         let total_slices = meta.slices.len();
-        let total_tiles: usize = meta
-            .slices
-            .iter()
-            .map(|s| s.tiling.as_ref().map(|t| t.num_tiles).unwrap_or(1))
-            .sum();
-        (total_slices, total_tiles)
+        let mut map = HashMap::with_capacity(total_slices);
+        let mut total_tiles = 0usize;
+        for s in &meta.slices {
+            let tiles = s.tiling.as_ref().map(|t| t.num_tiles).unwrap_or(1);
+            map.insert(format!("slice_{}", s.index), tiles);
+            total_tiles += tiles;
+        }
+        (total_slices, total_tiles, map)
     }
 
     pub fn is_evicted(&self, run_uid: &str) -> bool {

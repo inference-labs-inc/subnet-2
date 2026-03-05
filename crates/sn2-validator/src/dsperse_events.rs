@@ -148,6 +148,7 @@ impl DsperseEventClient {
         circuit_name: &str,
         total_slices: usize,
         total_tiles: usize,
+        slice_tile_counts: &std::collections::HashMap<String, usize>,
         run_source: &str,
     ) {
         self.emit(serde_json::json!({
@@ -157,6 +158,7 @@ impl DsperseEventClient {
             "circuit_name": circuit_name,
             "total_slices": total_slices,
             "total_tiles": total_tiles,
+            "slice_tile_counts": slice_tile_counts,
             "run_source": run_source,
         }))
         .await;
