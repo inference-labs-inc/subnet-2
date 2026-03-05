@@ -107,10 +107,7 @@ impl IncrementalRunManager {
         self.runs.contains_key(run_uid)
     }
 
-    pub fn slice_tile_counts(
-        &self,
-        run_uid: &str,
-    ) -> (usize, usize, HashMap<String, usize>) {
+    pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize, HashMap<String, usize>) {
         let run = match self.runs.get(run_uid) {
             Some(r) => r,
             None => return (0, 0, HashMap::new()),
