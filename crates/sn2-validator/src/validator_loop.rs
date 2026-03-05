@@ -2241,7 +2241,7 @@ impl ValidatorLoop {
             {
                 warn!(error = %e, "updating QUIC miner connections");
             }
-            client.seed_transport_cache(&quic_miners).await;
+            client.seed_transport_cache(&quic_miners);
         } else {
             let client = self.miner_client.read().await;
             client.clear_transport_cache();

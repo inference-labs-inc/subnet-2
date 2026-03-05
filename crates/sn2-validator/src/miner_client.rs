@@ -32,7 +32,7 @@ pub struct MinerQueryClient {
     lightning: LightningClient,
     http: reqwest::Client,
     wallet: Option<Arc<Wallet>>,
-    transport_cache: Mutex<HashMap<String, TransportPreference>>,
+    transport_cache: Mutex<HashMap<String, (TransportPreference, String)>>,
 }
 
 impl MinerQueryClient {
@@ -192,6 +192,7 @@ impl MinerQueryClient {
         body: &serde_json::Value,
         timeout_secs: f64,
     ) -> Result<(serde_json::Value, f64)> {
+        let addr = format!("{ip}:{port}");
         let pref = self.get_or_claim_probe(hotkey);
 
         if matches!(
@@ -210,7 +211,7 @@ impl MinerQueryClient {
             Ok(d) => d,
             Err(e) => {
                 if is_probe {
-                    self.set_transport(hotkey, TransportPreference::Unknown);
+                    self.set_transport(hotkey, TransportPreference::Unknown, &addr);
                 }
                 return Err(anyhow::Error::from(e).context("deserializing QUIC payload"));
             }
@@ -228,13 +229,13 @@ impl MinerQueryClient {
         {
             Ok(result) => {
                 if is_probe {
-                    self.set_transport(hotkey, TransportPreference::Quic);
+                    self.set_transport(hotkey, TransportPreference::Quic, &addr);
                     info!(hotkey = hotkey, "QUIC probe succeeded, caching transport");
                 }
                 Ok(result)
             }
             Err(e) if is_connection_error(&e) => {
-                self.set_transport(hotkey, TransportPreference::HttpOnly);
+                self.set_transport(hotkey, TransportPreference::HttpOnly, &addr);
                 warn!(
                     hotkey = hotkey,
                     error = ?e,
@@ -247,7 +248,7 @@ impl MinerQueryClient {
             }
             Err(e) => {
                 if is_probe {
-                    self.set_transport(hotkey, TransportPreference::Unknown);
+                    self.set_transport(hotkey, TransportPreference::Unknown, &addr);
                 }
                 Err(e)
             }
@@ -261,20 +262,20 @@ impl MinerQueryClient {
             .unwrap_or_else(|p| p.into_inner());
         let entry = cache
             .entry(hotkey.to_string())
-            .or_insert(TransportPreference::Unknown);
-        if *entry == TransportPreference::Unknown {
-            *entry = TransportPreference::Probing;
+            .or_insert((TransportPreference::Unknown, String::new()));
+        if entry.0 == TransportPreference::Unknown {
+            entry.0 = TransportPreference::Probing;
             TransportPreference::Unknown
         } else {
-            *entry
+            entry.0
         }
     }
 
-    fn set_transport(&self, hotkey: &str, pref: TransportPreference) {
+    fn set_transport(&self, hotkey: &str, pref: TransportPreference, addr: &str) {
         self.transport_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(hotkey.to_string(), pref);
+            .insert(hotkey.to_string(), (pref, addr.to_string()));
     }
 
     pub fn clear_transport_cache(&self) {
@@ -284,34 +285,43 @@ impl MinerQueryClient {
             .clear();
     }
 
-    pub async fn seed_transport_cache(&self, miners: &[QuicAxonInfo]) {
-        let stats = match self.lightning.get_connection_stats().await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "failed to read connection stats for transport seeding");
-                self.clear_transport_cache();
-                return;
-            }
-        };
+    pub fn seed_transport_cache(&self, miners: &[QuicAxonInfo]) {
         let mut cache = self
             .transport_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        cache.clear();
-        let mut quic_count = 0u32;
+        let old = std::mem::take(&mut *cache);
+
+        let mut quic_kept = 0u32;
+        let mut quic_reset = 0u32;
+        let mut http_reset = 0u32;
+
         for miner in miners {
-            let key = format!("connection_{}", miner.addr_key());
-            if let Some(status) = stats.get(&key) {
-                if status == "active" {
-                    cache.insert(miner.hotkey.clone(), TransportPreference::Quic);
-                    quic_count += 1;
+            let addr = miner.addr_key().to_string();
+            match old.get(&miner.hotkey) {
+                Some((TransportPreference::Quic, old_addr)) if *old_addr == addr => {
+                    cache.insert(
+                        miner.hotkey.clone(),
+                        (TransportPreference::Quic, addr),
+                    );
+                    quic_kept += 1;
                 }
+                Some((TransportPreference::Quic, _)) => {
+                    quic_reset += 1;
+                }
+                Some((TransportPreference::HttpOnly, _)) => {
+                    http_reset += 1;
+                }
+                _ => {}
             }
         }
+
         info!(
-            quic = quic_count,
-            http_only = miners.len() as u32 - quic_count,
-            "seeded transport cache from QUIC connection state"
+            quic_kept,
+            quic_reset,
+            http_reset,
+            new = miners.len() as u32 - quic_kept - quic_reset - http_reset,
+            "seeded transport cache"
         );
     }
 }
@@ -357,7 +367,7 @@ mod tests {
     #[test]
     fn set_transport_overrides_preference() {
         let client = make_client();
-        client.set_transport("hk1", TransportPreference::Quic);
+        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
         let pref = client.get_or_claim_probe("hk1");
         assert_eq!(pref, TransportPreference::Quic);
     }
@@ -365,8 +375,8 @@ mod tests {
     #[test]
     fn clear_transport_cache_resets_all() {
         let client = make_client();
-        client.set_transport("hk1", TransportPreference::Quic);
-        client.set_transport("hk2", TransportPreference::HttpOnly);
+        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
+        client.set_transport("hk2", TransportPreference::HttpOnly, "5.6.7.8:8091");
         client.clear_transport_cache();
         let pref = client.get_or_claim_probe("hk1");
         assert_eq!(pref, TransportPreference::Unknown);
@@ -399,8 +409,8 @@ mod tests {
     #[test]
     fn independent_hotkeys_have_independent_state() {
         let client = make_client();
-        client.set_transport("hk1", TransportPreference::Quic);
-        client.set_transport("hk2", TransportPreference::HttpOnly);
+        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
+        client.set_transport("hk2", TransportPreference::HttpOnly, "5.6.7.8:8091");
         assert_eq!(client.get_or_claim_probe("hk1"), TransportPreference::Quic);
         assert_eq!(
             client.get_or_claim_probe("hk2"),
@@ -408,6 +418,39 @@ mod tests {
         );
         assert_eq!(
             client.get_or_claim_probe("hk3"),
+            TransportPreference::Unknown
+        );
+    }
+
+    #[test]
+    fn seed_keeps_quic_with_same_addr() {
+        let client = make_client();
+        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
+        let miners = vec![QuicAxonInfo::new("hk1".into(), "1.2.3.4".into(), 8091, 4)];
+        client.seed_transport_cache(&miners);
+        assert_eq!(client.get_or_claim_probe("hk1"), TransportPreference::Quic);
+    }
+
+    #[test]
+    fn seed_resets_quic_on_ip_change() {
+        let client = make_client();
+        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
+        let miners = vec![QuicAxonInfo::new("hk1".into(), "9.9.9.9".into(), 8091, 4)];
+        client.seed_transport_cache(&miners);
+        assert_eq!(
+            client.get_or_claim_probe("hk1"),
+            TransportPreference::Unknown
+        );
+    }
+
+    #[test]
+    fn seed_resets_http_only_to_unknown() {
+        let client = make_client();
+        client.set_transport("hk1", TransportPreference::HttpOnly, "1.2.3.4:8091");
+        let miners = vec![QuicAxonInfo::new("hk1".into(), "1.2.3.4".into(), 8091, 4)];
+        client.seed_transport_cache(&miners);
+        assert_eq!(
+            client.get_or_claim_probe("hk1"),
             TransportPreference::Unknown
         );
     }
