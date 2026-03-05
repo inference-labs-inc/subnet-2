@@ -63,6 +63,7 @@ enum TaskOutcome {
 }
 
 struct VerifyResult {
+    verify_task_id: tokio::task::Id,
     task_result: TaskResult,
     verified: bool,
 }
@@ -107,6 +108,7 @@ pub struct ValidatorLoop {
     dsperse_flush_task: Option<tokio::task::JoinHandle<()>>,
     dsperse_emit_tasks: JoinSet<()>,
     verify_tasks: JoinSet<VerifyResult>,
+    verify_guard_hashes: HashMap<tokio::task::Id, Option<String>>,
 }
 
 impl ValidatorLoop {
@@ -238,6 +240,7 @@ impl ValidatorLoop {
             dsperse_flush_task,
             dsperse_emit_tasks: JoinSet::new(),
             verify_tasks: JoinSet::new(),
+            verify_guard_hashes: HashMap::new(),
         })
     }
 
@@ -305,9 +308,17 @@ impl ValidatorLoop {
                 Some(result) = self.verify_tasks.join_next() => {
                     match result {
                         Ok(verify_result) => {
-                            self.finish_verification(verify_result).await;
+                            let guard_hash = self.verify_guard_hashes.remove(&verify_result.verify_task_id);
+                            self.finish_verification(verify_result, guard_hash.flatten()).await;
                         }
                         Err(e) => {
+                            if let Some(guard_hash) = self.verify_guard_hashes.remove(&e.id()) {
+                                if let Some(hash) = &guard_hash {
+                                    if !hash.is_empty() {
+                                        self.pipeline.release_hash(hash);
+                                    }
+                                }
+                            }
                             error!(error = %e, "verification task panicked");
                         }
                     }
@@ -1276,7 +1287,8 @@ impl ValidatorLoop {
             self.benchmark_in_flight = self.benchmark_in_flight.saturating_sub(1);
         }
 
-        match result.outcome {
+        let guard_hash = result.guard_hash.clone();
+        let handle = match result.outcome {
             TaskOutcome::Success(ref mut response) if response.proof_content.is_some() => {
                 let mut response = match std::mem::replace(
                     &mut result.outcome,
@@ -1287,28 +1299,30 @@ impl ValidatorLoop {
                 };
                 let processor = ResponseProcessor::new();
                 self.verify_tasks.spawn(async move {
+                    let verify_task_id = tokio::task::id();
                     let verified =
                         matches!(processor.verify_response(&mut response).await, Ok(true));
                     response.verification_result = verified;
                     result.outcome = TaskOutcome::Success(response);
                     VerifyResult {
+                        verify_task_id,
                         task_result: result,
                         verified,
                     }
-                });
+                })
             }
-            _ => {
-                self.verify_tasks.spawn(async move {
-                    VerifyResult {
-                        task_result: result,
-                        verified: false,
-                    }
-                });
-            }
-        }
+            _ => self.verify_tasks.spawn(async move {
+                VerifyResult {
+                    verify_task_id: tokio::task::id(),
+                    task_result: result,
+                    verified: false,
+                }
+            }),
+        };
+        self.verify_guard_hashes.insert(handle.id(), guard_hash);
     }
 
-    async fn finish_verification(&mut self, vr: VerifyResult) {
+    async fn finish_verification(&mut self, vr: VerifyResult, guard_hash: Option<String>) {
         let result = vr.task_result;
         let verified = vr.verified;
         let uid = result.uid;
@@ -1323,7 +1337,6 @@ impl ValidatorLoop {
         let retry_count = result.retry_count;
         let mut result = result;
         let retry_payload = std::mem::replace(&mut result.retry_payload, RetryPayload::None);
-        let guard_hash = result.guard_hash.clone();
 
         let failed = match result.outcome {
             TaskOutcome::Success(ref response) => {
