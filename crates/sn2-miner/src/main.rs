@@ -181,7 +181,7 @@ async fn main() -> Result<()> {
         })
     };
 
-    let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+    let mut sigterm = signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
 
     tokio::select! {
         r = http_handle => {
@@ -238,7 +238,7 @@ async fn run_loopback(cli: Cli) -> Result<()> {
 
     info!(port = cli.axon_port, "miner loopback running");
 
-    let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+    let mut sigterm = signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
 
     tokio::select! {
         r = http_handle => {

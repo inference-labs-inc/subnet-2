@@ -237,7 +237,7 @@ impl ValidatorLoop {
         let mut tick =
             tokio::time::interval(Duration::from_millis((LOOP_DELAY_SECONDS * 1000.0) as u64));
         let mut sigterm =
-            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+            signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
 
         loop {
             tokio::select! {
@@ -2271,22 +2271,7 @@ fn is_valid_ip(ip_str: &str) -> bool {
         Ok(a) => a,
         Err(_) => return false,
     };
-    let octets = addr.octets();
-    !addr.is_unspecified()
-        && !addr.is_loopback()
-        && !addr.is_multicast()
-        && !addr.is_broadcast()
-        && !matches!(octets[0], 240..=255)
-        && !matches!(octets, [10, ..])
-        && !matches!(octets, [172, 16..=31, ..])
-        && !matches!(octets, [192, 168, ..])
-        && !matches!(octets, [169, 254, ..])
-        && !matches!(octets, [100, 64..=127, ..])
-        && !matches!(octets, [192, 0, 0, ..])
-        && !matches!(octets, [192, 0, 2, ..])
-        && !matches!(octets, [198, 51, 100, ..])
-        && !matches!(octets, [203, 0, 113, ..])
-        && !matches!(octets, [198, 18..=19, ..])
+    addr.is_global() && !addr.is_multicast()
 }
 
 #[cfg(test)]

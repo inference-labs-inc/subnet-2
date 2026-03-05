@@ -1,3 +1,5 @@
+#![feature(ip)]
+
 mod cli;
 mod config;
 mod incremental_runner;
