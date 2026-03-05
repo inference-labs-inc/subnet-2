@@ -40,6 +40,11 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
+      - name: Install toolchain from rust-toolchain.toml
+        run: |
+          source "$HOME/.cargo/env"
+          rustup show
+
       - uses: actions/cache@v4
         with:
           path: |
