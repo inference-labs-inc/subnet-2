@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use subxt::{OnlineClient, PolkadotConfig};
-use tracing::{error, info};
+use tracing::info;
 
 use sn2_chain::{Metagraph, NeuronInfo, Wallet};
 
@@ -58,15 +58,13 @@ impl ValidatorConfig {
         let user_uid = match metagraph.get_uid_by_hotkey(wallet.hotkey_ss58()) {
             Some(uid) => uid,
             None => {
-                error!(
-                    hotkey = %wallet.hotkey_ss58(),
-                    netuid = cli.netuid,
-                    network = %cli.network,
-                    "Hotkey is not registered on subnet. Register with: btcli subnets register --netuid {} --network {}",
+                anyhow::bail!(
+                    "hotkey {} is not registered on subnet {}. Register with: btcli subnets register --netuid {} --network {}",
+                    wallet.hotkey_ss58(),
+                    cli.netuid,
                     cli.netuid,
                     cli.network,
                 );
-                std::process::exit(1);
             }
         };
 

@@ -7,9 +7,10 @@ use anyhow::{Context, Result};
 use btlightning::QuicAxonInfo;
 use sn2_chain::{PendingReveal, WeightsSetter};
 use sn2_types::*;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{watch, Notify, RwLock};
 use tokio::task::JoinSet;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::ValidatorConfig;
 use crate::incremental_runner::{IncrementalRunManager, SliceArtifact};
@@ -235,6 +236,7 @@ impl ValidatorLoop {
 
         let mut tick =
             tokio::time::interval(Duration::from_millis((LOOP_DELAY_SECONDS * 1000.0) as u64));
+        let mut sigterm = signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
 
         loop {
             tokio::select! {
@@ -285,6 +287,11 @@ impl ValidatorLoop {
                 }
                 _ = tokio::signal::ctrl_c() => {
                     info!("shutting down validator");
+                    self.shutdown().await;
+                    return Ok(());
+                }
+                _ = sigterm.recv() => {
+                    info!("received SIGTERM, shutting down validator");
                     self.shutdown().await;
                     return Ok(());
                 }
@@ -1931,9 +1938,11 @@ impl ValidatorLoop {
         let uids = self.config.metagraph.uids();
         self.score_manager.sync_uids(&uids);
 
+        let mut axon_count = 0usize;
         for n in &self.config.metagraph.neurons {
             if !n.axon_ip.is_empty() && n.axon_port > 0 {
-                info!(
+                axon_count += 1;
+                debug!(
                     uid = n.uid,
                     ip = %n.axon_ip,
                     port = n.axon_port,
@@ -1946,12 +1955,20 @@ impl ValidatorLoop {
         }
 
         if self.config.target_uids.is_some() {
-            info!("target_uids set, skipping non-queryable score zeroing");
+            info!(
+                neurons_with_axon = axon_count,
+                "target_uids set, skipping non-queryable score zeroing"
+            );
         } else {
             let queryable = self.get_queryable_neurons();
             for n in &queryable {
-                info!(uid = n.uid, ip = %n.axon_ip, port = n.axon_port, protocol = n.axon_protocol, active = n.is_active, "queryable neuron");
+                debug!(uid = n.uid, ip = %n.axon_ip, port = n.axon_port, protocol = n.axon_protocol, active = n.is_active, "queryable neuron");
             }
+            info!(
+                neurons_with_axon = axon_count,
+                queryable = queryable.len(),
+                "metagraph sync complete"
+            );
             let queryable_uids: HashSet<u16> = queryable.iter().map(|n| n.uid).collect();
             self.score_manager.zero_non_queryable(&queryable_uids);
         }

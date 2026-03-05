@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
@@ -62,17 +63,14 @@ async fn main() -> Result<()> {
         .await
         .context("initial metagraph sync")?;
 
-    if metagraph.get_uid_by_hotkey(wallet.hotkey_ss58()).is_none() {
-        error!(
-            hotkey = %wallet.hotkey_ss58(),
-            netuid = cli.netuid,
-            network = %cli.network,
-            "Hotkey is not registered on subnet. Register with: btcli subnets register --netuid {} --network {}",
-            cli.netuid,
-            cli.network,
-        );
-        std::process::exit(1);
-    }
+    anyhow::ensure!(
+        metagraph.get_uid_by_hotkey(wallet.hotkey_ss58()).is_some(),
+        "hotkey {} is not registered on subnet {}. Register with: btcli subnets register --netuid {} --network {}",
+        wallet.hotkey_ss58(),
+        cli.netuid,
+        cli.netuid,
+        cli.network,
+    );
 
     let metagraph = Arc::new(RwLock::new(metagraph));
 
@@ -183,6 +181,8 @@ async fn main() -> Result<()> {
         })
     };
 
+    let mut sigterm = signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
+
     tokio::select! {
         r = http_handle => {
             r?.context("HTTP server")?;
@@ -198,6 +198,9 @@ async fn main() -> Result<()> {
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");
+        }
+        _ = sigterm.recv() => {
+            info!("received SIGTERM, shutting down miner");
         }
         _ = async { loop { shutdown_rx.changed().await.ok()?; if *shutdown_rx.borrow() { return Some(()); } } } => {
             info!("shutting down miner for auto-update restart");
@@ -235,12 +238,17 @@ async fn run_loopback(cli: Cli) -> Result<()> {
 
     info!(port = cli.axon_port, "miner loopback running");
 
+    let mut sigterm = signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
+
     tokio::select! {
         r = http_handle => {
             r?.context("HTTP server")?;
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");
+        }
+        _ = sigterm.recv() => {
+            info!("received SIGTERM, shutting down miner");
         }
     }
 
