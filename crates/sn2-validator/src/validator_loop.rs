@@ -156,33 +156,44 @@ impl ValidatorLoop {
                 dsperse_tx.clone(),
                 rwr_tx.clone(),
             );
-            let uploader = Arc::new(ProofUploader::new(
-                wallet.clone(),
-                config.proof_api_url.clone(),
-            ));
-            let reporter = if config.disable_metric_logging {
-                None
+            let api_reporting_enabled = config.is_mainnet() || config.proof_api_url.is_some();
+            if !api_reporting_enabled {
+                info!(
+                    network = %config.network,
+                    "sn2-api reporting disabled for non-mainnet network"
+                );
+            }
+            let uploader = if api_reporting_enabled {
+                Some(Arc::new(ProofUploader::new(
+                    wallet.clone(),
+                    config.proof_api_url.clone(),
+                )))
             } else {
+                None
+            };
+            let reporter = if api_reporting_enabled && !config.disable_metric_logging {
                 Some(StatsReporter::new(
                     wallet.clone(),
                     config.proof_api_url.clone(),
                     config.user_uid,
                 ))
-            };
-            let (events, flush_task) = if config.disable_metric_logging {
-                (None, None)
             } else {
+                None
+            };
+            let (events, flush_task) = if api_reporting_enabled && !config.disable_metric_logging {
                 let ec = Arc::new(DsperseEventClient::new(
                     wallet,
                     config.proof_api_url.clone(),
                 ));
                 let handle = ec.spawn_flush_loop();
                 (Some(ec), Some(handle))
+            } else {
+                (None, None)
             };
             (
                 Arc::new(RwLock::new(client)),
                 Some(relay),
-                Some(uploader),
+                uploader,
                 reporter,
                 events,
                 flush_task,
