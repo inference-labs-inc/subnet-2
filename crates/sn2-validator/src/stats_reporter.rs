@@ -337,7 +337,7 @@ fn get_disk_free_gb() -> Option<f64> {
         unsafe {
             let mut stat: libc::statvfs = std::mem::zeroed();
             if libc::statvfs(path.as_ptr(), &mut stat) == 0 {
-                let free_bytes = stat.f_bavail as u64 * stat.f_frsize as u64;
+                let free_bytes = stat.f_bavail * stat.f_frsize;
                 Some(free_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
             } else {
                 None
