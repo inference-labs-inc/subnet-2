@@ -66,12 +66,6 @@ async fn check_and_update(
         return Ok(false);
     }
 
-    info!(
-        from = %local,
-        to = %remote,
-        "new version available, updating"
-    );
-
     let asset_name = format!("{binary_name}-{suffix}");
     let asset = release
         .assets
@@ -112,13 +106,28 @@ async fn check_and_update(
         .with_context(|| format!("hash for '{asset_name}' not found in SHA256SUMS"))?;
 
     let current_exe = std::env::current_exe().context("resolving current executable path")?;
-    if let Ok(current_bytes) = std::fs::read(&current_exe) {
-        let current_hash = hex::encode(Sha256::digest(&current_bytes));
-        if current_hash == expected_hash {
-            info!("current binary matches latest release, skipping update");
-            return Ok(false);
+    match std::fs::read(&current_exe) {
+        Ok(current_bytes) => {
+            let current_hash = hex::encode(Sha256::digest(&current_bytes));
+            if current_hash == expected_hash {
+                info!("current binary matches latest release, skipping update");
+                return Ok(false);
+            }
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                path = %current_exe.display(),
+                "failed to read current executable for hash check, continuing update"
+            );
         }
     }
+
+    info!(
+        from = %local,
+        to = %remote,
+        "new version available, updating"
+    );
 
     let binary_bytes = client
         .get(&asset.browser_download_url)
@@ -137,7 +146,6 @@ async fn check_and_update(
         bail!("SHA256 mismatch: expected {expected_hash}, got {actual_hash}");
     }
 
-    let current_exe = std::env::current_exe().context("resolving current executable path")?;
     let parent = current_exe
         .parent()
         .context("resolving executable parent directory")?;
