@@ -29,6 +29,8 @@ async fn main() -> Result<()> {
 
     sn2_types::init_tracing(&cli.log_level);
 
+    info!(version = sn2_types::SOFTWARE_VERSION, "sn2-validator");
+
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     if !cli.no_auto_update && option_env!("SN2_RELEASE_CHANNEL") == Some("mainnet") {

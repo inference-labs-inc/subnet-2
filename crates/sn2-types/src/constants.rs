@@ -1,3 +1,8 @@
+pub const SOFTWARE_VERSION: &str = match option_env!("SN2_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 pub const VALIDATOR_REQUEST_TIMEOUT_SECONDS: u64 = 120;
 pub const CIRCUIT_TIMEOUT_SECONDS: u64 = 180;
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;

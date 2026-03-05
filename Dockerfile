@@ -16,7 +16,8 @@ RUN rustup show
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 
-RUN cargo build --release --bin sn2-validator --bin sn2-miner
+ARG SN2_VERSION=dev
+RUN SN2_VERSION=${SN2_VERSION} cargo build --release --bin sn2-validator --bin sn2-miner
 
 FROM --platform=linux/amd64 debian:bookworm-20250224-slim
 

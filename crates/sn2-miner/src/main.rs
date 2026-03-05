@@ -22,6 +22,8 @@ async fn main() -> Result<()> {
 
     sn2_types::init_tracing(&cli.log_level);
 
+    info!(version = sn2_types::SOFTWARE_VERSION, "sn2-miner");
+
     if cli.loopback {
         return run_loopback(cli).await;
     }

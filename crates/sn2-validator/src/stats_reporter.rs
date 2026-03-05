@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use base64::Engine;
 use sn2_chain::Wallet;
-use sn2_types::{MinerResponse, DEFAULT_API_URL};
+use sn2_types::{MinerResponse, DEFAULT_API_URL, SOFTWARE_VERSION};
 use tracing::{info, warn};
 const LOG_INTERVAL_SECS: u64 = 60;
 const HEALTH_FLUSH_INTERVAL_SECS: u64 = 60;
@@ -130,6 +130,7 @@ impl StatsReporter {
                 "block": block,
                 "responses": response_logs,
                 "scores": scores_map,
+                "software_version": SOFTWARE_VERSION,
             });
 
             self.spawn_post("/statistics/log/", body, move |ok| {
@@ -165,6 +166,7 @@ impl StatsReporter {
                 "avg_active_tasks": avg_active_tasks,
                 "avg_current_concurrency": avg_active_tasks,
                 "avg_queue_size": avg_queue_size,
+                "software_version": SOFTWARE_VERSION,
             });
 
             self.spawn_post("/statistics/health/log/", body, |_| {});
@@ -207,7 +209,10 @@ impl StatsReporter {
             "total_run_time_sec": report.total_run_time_sec,
             "all_successful": report.all_successful,
             "failed_slice_count": report.failed_slice_count,
-            "environment": serde_json::Value::Null,
+            "environment": serde_json::json!({
+                "sn2_version": SOFTWARE_VERSION,
+            }),
+            "software_version": SOFTWARE_VERSION,
             "slices": slices,
         });
 

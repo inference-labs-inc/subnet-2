@@ -49,6 +49,8 @@ jobs:
           file: ./Dockerfile
           pull: true
           push: true
+          build-args: |
+            SN2_VERSION=dev-${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev
@@ -90,6 +92,8 @@ jobs:
           file: ./Dockerfile
           pull: true
           push: true
+          build-args: |
+            SN2_VERSION=${{ github.event.release.tag_name }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
