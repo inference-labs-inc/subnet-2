@@ -312,11 +312,9 @@ impl ValidatorLoop {
                             self.finish_verification(verify_result, guard_hash.flatten()).await;
                         }
                         Err(e) => {
-                            if let Some(guard_hash) = self.verify_guard_hashes.remove(&e.id()) {
-                                if let Some(hash) = &guard_hash {
-                                    if !hash.is_empty() {
-                                        self.pipeline.release_hash(hash);
-                                    }
+                            if let Some(Some(hash)) = self.verify_guard_hashes.remove(&e.id()) {
+                                if !hash.is_empty() {
+                                    self.pipeline.release_hash(&hash);
                                 }
                             }
                             error!(error = %e, "verification task panicked");
