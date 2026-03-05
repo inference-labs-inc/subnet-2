@@ -2,6 +2,7 @@
 
 mod cli;
 mod config;
+mod dsperse_events;
 mod incremental_runner;
 mod metrics_server;
 mod miner_client;
