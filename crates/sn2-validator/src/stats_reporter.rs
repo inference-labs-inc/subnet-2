@@ -44,6 +44,8 @@ pub struct DsperseSliceReport {
     pub response_time_sec: f64,
     pub verification_time_sec: f64,
     pub success: bool,
+    pub is_tiled: bool,
+    pub tile_count: Option<usize>,
 }
 
 impl StatsReporter {
@@ -185,7 +187,8 @@ impl StatsReporter {
                     "witness_time_sec": 0.0,
                     "response_time_sec": s.response_time_sec,
                     "verification_time_sec": s.verification_time_sec,
-                    "is_tiled": false,
+                    "is_tiled": s.is_tiled,
+                    "tile_count": s.tile_count,
                     "success": s.success,
                 })
             })
@@ -209,9 +212,7 @@ impl StatsReporter {
             "total_run_time_sec": report.total_run_time_sec,
             "all_successful": report.all_successful,
             "failed_slice_count": report.failed_slice_count,
-            "environment": serde_json::json!({
-                "sn2_version": SOFTWARE_VERSION,
-            }),
+            "environment": collect_environment(),
             "software_version": SOFTWARE_VERSION,
             "slices": slices,
         });
@@ -272,6 +273,80 @@ impl StatsReporter {
                 Ok(_) => on_done(true),
             }
         });
+    }
+}
+
+pub fn collect_environment() -> serde_json::Value {
+    let cpu_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(0);
+    let (total_memory_gb, available_memory_gb) = get_memory_gb();
+    let disk_free_gb = get_disk_free_gb();
+
+    serde_json::json!({
+        "sn2_version": SOFTWARE_VERSION,
+        "jst_installed": true,
+        "cpu_count": cpu_count,
+        "total_memory_gb": total_memory_gb,
+        "available_memory_gb": available_memory_gb,
+        "disk_free_gb": disk_free_gb,
+    })
+}
+
+fn get_memory_gb() -> (Option<f64>, Option<f64>) {
+    #[cfg(target_os = "linux")]
+    {
+        let mut total = None;
+        let mut available = None;
+        if let Ok(contents) = std::fs::read_to_string("/proc/meminfo") {
+            for line in contents.lines() {
+                if let Some(val) = line.strip_prefix("MemTotal:") {
+                    total = val
+                        .trim()
+                        .trim_end_matches("kB")
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .map(|kb| kb / (1024.0 * 1024.0));
+                } else if let Some(val) = line.strip_prefix("MemAvailable:") {
+                    available = val
+                        .trim()
+                        .trim_end_matches("kB")
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .map(|kb| kb / (1024.0 * 1024.0));
+                }
+                if total.is_some() && available.is_some() {
+                    break;
+                }
+            }
+        }
+        (total, available)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        (None, None)
+    }
+}
+
+fn get_disk_free_gb() -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        let path = std::ffi::CString::new("/").ok()?;
+        unsafe {
+            let mut stat: libc::statvfs = std::mem::zeroed();
+            if libc::statvfs(path.as_ptr(), &mut stat) == 0 {
+                let free_bytes = stat.f_bavail as u64 * stat.f_frsize as u64;
+                Some(free_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+            } else {
+                None
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
     }
 }
 

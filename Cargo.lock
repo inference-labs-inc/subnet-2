@@ -12069,6 +12069,7 @@ dependencies = [
  "dsperse",
  "futures-util",
  "hex",
+ "libc",
  "metrics",
  "metrics-exporter-prometheus",
  "ndarray",

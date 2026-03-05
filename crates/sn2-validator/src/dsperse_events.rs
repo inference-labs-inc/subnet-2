@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::stats_reporter::collect_environment;
 use base64::Engine;
 use sn2_chain::Wallet;
 use sn2_types::DEFAULT_API_URL;
@@ -160,6 +161,7 @@ impl DsperseEventClient {
             "total_tiles": total_tiles,
             "slice_tile_counts": slice_tile_counts,
             "run_source": run_source,
+            "environment": collect_environment(),
         }))
         .await;
     }

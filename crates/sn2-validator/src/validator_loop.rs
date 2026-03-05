@@ -1691,6 +1691,10 @@ impl ValidatorLoop {
 
         let total_run_time_sec = run.started_at.elapsed().as_secs_f64();
         let mut failed_count = 0usize;
+        let model_slices = run
+            .incremental
+            .as_ref()
+            .map(|i| i.model_meta().slices.clone());
         let slice_reports: Vec<DsperseSliceReport> = run
             .artifacts
             .iter()
@@ -1699,6 +1703,14 @@ impl ValidatorLoop {
                 if !success {
                     failed_count += 1;
                 }
+                let tiling = model_slices.as_ref().and_then(|slices| {
+                    let idx: usize = a
+                        .slice_num
+                        .strip_prefix("slice_")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
+                    slices.get(idx).and_then(|s| s.tiling.as_ref())
+                });
                 DsperseSliceReport {
                     slice_num: a.slice_num.clone(),
                     proof_system: a
@@ -1708,6 +1720,8 @@ impl ValidatorLoop {
                     response_time_sec: a.response_time,
                     verification_time_sec: a.verification_time,
                     success,
+                    is_tiled: tiling.is_some(),
+                    tile_count: tiling.map(|t| t.num_tiles),
                 }
             })
             .collect();
