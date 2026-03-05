@@ -18,12 +18,9 @@ impl Signer for WalletSigner {
     }
 }
 
-const QUIC_PROBE_TIMEOUT_SECS: f64 = 2.0;
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum TransportPreference {
     Unknown,
-    Probing,
     Quic,
     HttpOnly,
 }
@@ -193,82 +190,52 @@ impl MinerQueryClient {
         timeout_secs: f64,
     ) -> Result<(serde_json::Value, f64)> {
         let addr = format!("{ip}:{port}");
-        let pref = self.get_or_claim_probe(hotkey);
+        let pref = self.get_transport(hotkey);
 
-        if matches!(
-            pref,
-            TransportPreference::HttpOnly | TransportPreference::Probing
-        ) {
+        if pref != TransportPreference::Quic {
             let headers = self.build_signing_headers(body, hotkey)?;
             return self
                 .query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
                 .await;
         }
 
-        let is_probe = pref == TransportPreference::Unknown;
         let axon = QuicAxonInfo::new(hotkey.to_string(), ip.to_string(), port, 4);
         let data: HashMap<String, serde_json::Value> = match serde_json::from_value(body.clone()) {
             Ok(d) => d,
             Err(e) => {
-                if is_probe {
-                    self.set_transport(hotkey, TransportPreference::Unknown, &addr);
-                }
                 return Err(anyhow::Error::from(e).context("deserializing QUIC payload"));
             }
         };
 
-        let quic_timeout = if is_probe {
-            timeout_secs.min(QUIC_PROBE_TIMEOUT_SECS)
-        } else {
-            timeout_secs
-        };
-
         match self
-            .query_miner_quic(&axon, synapse_type, data, quic_timeout)
+            .query_miner_quic(&axon, synapse_type, data, timeout_secs)
             .await
         {
-            Ok(result) => {
-                if is_probe {
-                    self.set_transport(hotkey, TransportPreference::Quic, &addr);
-                    info!(hotkey = hotkey, "QUIC probe succeeded, caching transport");
-                }
-                Ok(result)
-            }
+            Ok(result) => Ok(result),
             Err(e) if is_connection_error(&e) => {
                 self.set_transport(hotkey, TransportPreference::HttpOnly, &addr);
                 warn!(
                     hotkey = hotkey,
                     error = ?e,
-                    probe = is_probe,
-                    "QUIC query failed, falling back to HTTP"
+                    "QUIC connection failed, falling back to HTTP"
                 );
                 let headers = self.build_signing_headers(body, hotkey)?;
                 self.query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
                     .await
             }
-            Err(e) => {
-                if is_probe {
-                    self.set_transport(hotkey, TransportPreference::Unknown, &addr);
-                }
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 
-    fn get_or_claim_probe(&self, hotkey: &str) -> TransportPreference {
-        let mut cache = self
+    fn get_transport(&self, hotkey: &str) -> TransportPreference {
+        let cache = self
             .transport_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        let entry = cache
-            .entry(hotkey.to_string())
-            .or_insert((TransportPreference::Unknown, String::new()));
-        if entry.0 == TransportPreference::Unknown {
-            entry.0 = TransportPreference::Probing;
-            TransportPreference::Unknown
-        } else {
-            entry.0
-        }
+        cache
+            .get(hotkey)
+            .map(|(pref, _)| *pref)
+            .unwrap_or(TransportPreference::Unknown)
     }
 
     fn set_transport(&self, hotkey: &str, pref: TransportPreference, addr: &str) {
@@ -285,40 +252,37 @@ impl MinerQueryClient {
             .clear();
     }
 
-    pub fn seed_transport_cache(&self, miners: &[QuicAxonInfo]) {
+    pub async fn seed_transport_cache(&self, miners: &[QuicAxonInfo]) {
+        let stats = match self.lightning.get_connection_stats().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "failed to read connection stats for transport seeding");
+                self.clear_transport_cache();
+                return;
+            }
+        };
+
         let mut cache = self
             .transport_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        let old = std::mem::take(&mut *cache);
+        cache.clear();
 
-        let mut quic_kept = 0u32;
-        let mut quic_reset = 0u32;
-        let mut http_reset = 0u32;
+        let mut quic_count = 0u32;
 
         for miner in miners {
-            let addr = miner.addr_key().to_string();
-            match old.get(&miner.hotkey) {
-                Some((TransportPreference::Quic, old_addr)) if *old_addr == addr => {
-                    cache.insert(miner.hotkey.clone(), (TransportPreference::Quic, addr));
-                    quic_kept += 1;
-                }
-                Some((TransportPreference::Quic, _)) => {
-                    quic_reset += 1;
-                }
-                Some((TransportPreference::HttpOnly, _)) => {
-                    http_reset += 1;
-                }
-                _ => {}
+            let key = format!("connection_{}", miner.addr_key());
+            if stats.get(&key).map(|s| s == "active").unwrap_or(false) {
+                let addr = miner.addr_key().to_string();
+                cache.insert(miner.hotkey.clone(), (TransportPreference::Quic, addr));
+                quic_count += 1;
             }
         }
 
         info!(
-            quic_kept,
-            quic_reset,
-            http_reset,
-            new = miners.len() as u32 - quic_kept - quic_reset - http_reset,
-            "seeded transport cache"
+            quic = quic_count,
+            http = miners.len() as u32 - quic_count,
+            "seeded transport cache from connection stats"
         );
     }
 }
@@ -352,20 +316,17 @@ mod tests {
     }
 
     #[test]
-    fn probe_claim_transitions_unknown_to_probing() {
+    fn unknown_returned_for_new_hotkey() {
         let client = make_client();
-        let pref = client.get_or_claim_probe("hk1");
+        let pref = client.get_transport("hk1");
         assert_eq!(pref, TransportPreference::Unknown);
-
-        let pref2 = client.get_or_claim_probe("hk1");
-        assert_eq!(pref2, TransportPreference::Probing);
     }
 
     #[test]
     fn set_transport_overrides_preference() {
         let client = make_client();
         client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
-        let pref = client.get_or_claim_probe("hk1");
+        let pref = client.get_transport("hk1");
         assert_eq!(pref, TransportPreference::Quic);
     }
 
@@ -375,7 +336,7 @@ mod tests {
         client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
         client.set_transport("hk2", TransportPreference::HttpOnly, "5.6.7.8:8091");
         client.clear_transport_cache();
-        let pref = client.get_or_claim_probe("hk1");
+        let pref = client.get_transport("hk1");
         assert_eq!(pref, TransportPreference::Unknown);
     }
 
@@ -408,47 +369,8 @@ mod tests {
         let client = make_client();
         client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
         client.set_transport("hk2", TransportPreference::HttpOnly, "5.6.7.8:8091");
-        assert_eq!(client.get_or_claim_probe("hk1"), TransportPreference::Quic);
-        assert_eq!(
-            client.get_or_claim_probe("hk2"),
-            TransportPreference::HttpOnly
-        );
-        assert_eq!(
-            client.get_or_claim_probe("hk3"),
-            TransportPreference::Unknown
-        );
-    }
-
-    #[test]
-    fn seed_keeps_quic_with_same_addr() {
-        let client = make_client();
-        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
-        let miners = vec![QuicAxonInfo::new("hk1".into(), "1.2.3.4".into(), 8091, 4)];
-        client.seed_transport_cache(&miners);
-        assert_eq!(client.get_or_claim_probe("hk1"), TransportPreference::Quic);
-    }
-
-    #[test]
-    fn seed_resets_quic_on_ip_change() {
-        let client = make_client();
-        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
-        let miners = vec![QuicAxonInfo::new("hk1".into(), "9.9.9.9".into(), 8091, 4)];
-        client.seed_transport_cache(&miners);
-        assert_eq!(
-            client.get_or_claim_probe("hk1"),
-            TransportPreference::Unknown
-        );
-    }
-
-    #[test]
-    fn seed_resets_http_only_to_unknown() {
-        let client = make_client();
-        client.set_transport("hk1", TransportPreference::HttpOnly, "1.2.3.4:8091");
-        let miners = vec![QuicAxonInfo::new("hk1".into(), "1.2.3.4".into(), 8091, 4)];
-        client.seed_transport_cache(&miners);
-        assert_eq!(
-            client.get_or_claim_probe("hk1"),
-            TransportPreference::Unknown
-        );
+        assert_eq!(client.get_transport("hk1"), TransportPreference::Quic);
+        assert_eq!(client.get_transport("hk2"), TransportPreference::HttpOnly);
+        assert_eq!(client.get_transport("hk3"), TransportPreference::Unknown);
     }
 }
