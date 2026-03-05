@@ -28,13 +28,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to the Container registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -42,14 +42,14 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
       - name: Build and push Docker image for testnet branch
         if: github.event_name != 'release'
         id: push-testnet
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
@@ -77,7 +77,7 @@ jobs:
 
       - name: Upload Trivy testnet image scan to GitHub Security tab
         if: ${{ steps.trivy-scan-testnet.conclusion == 'success' }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@ae9ef3a1d2e3413523c3741725c30064970cc0d4 # v3.28.19
         with:
           sarif_file: trivy-image-results.sarif
           category: trivy-image-testnet
@@ -85,7 +85,7 @@ jobs:
       - name: Generate artifact attestation for testnet
         if: github.event_name == 'push'
         id: attest-testnet
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
           subject-digest: ${{ steps.push-testnet.outputs.digest }}
@@ -94,7 +94,7 @@ jobs:
       - name: Build and push Docker image for release
         if: github.event_name == 'release'
         id: push-release
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
@@ -122,7 +122,7 @@ jobs:
 
       - name: Upload Trivy release image scan to GitHub Security tab
         if: ${{ steps.trivy-scan-release.conclusion == 'success' }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@ae9ef3a1d2e3413523c3741725c30064970cc0d4 # v3.28.19
         with:
           sarif_file: trivy-image-results.sarif
           category: trivy-image-release
@@ -130,7 +130,7 @@ jobs:
       - name: Generate artifact attestation for release
         if: github.event_name == 'release'
         id: attest-release
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
           subject-digest: ${{ steps.push-release.outputs.digest }}
