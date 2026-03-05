@@ -223,7 +223,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-x86_64-release-${{ hashFiles('Cargo.lock') }}
+          key: linux-x86_64-release-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: linux-x86_64-release-
 
       - name: Build release binaries
@@ -275,7 +275,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: macos-aarch64-release-${{ hashFiles('Cargo.lock') }}
+          key: macos-aarch64-release-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: macos-aarch64-release-
 
       - name: Build release binaries

@@ -81,6 +81,9 @@ if [ -n "$PUID" ]; then
     if [ "$PUID" = "0" ]; then
         echo "PUID=0 (root) is not permitted; running as subnet2" >&2
         exec gosu subnet2 "$@"
+    elif ! echo "$PUID" | grep -qE '^[0-9]+$'; then
+        echo "PUID=$PUID is not a valid numeric UID; running as subnet2" >&2
+        exec gosu subnet2 "$@"
     else
         usermod -u "$PUID" subnet2
         exec gosu subnet2 "$@"
