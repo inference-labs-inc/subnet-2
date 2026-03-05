@@ -111,6 +111,15 @@ async fn check_and_update(
         })
         .with_context(|| format!("hash for '{asset_name}' not found in SHA256SUMS"))?;
 
+    let current_exe = std::env::current_exe().context("resolving current executable path")?;
+    if let Ok(current_bytes) = std::fs::read(&current_exe) {
+        let current_hash = hex::encode(Sha256::digest(&current_bytes));
+        if current_hash == expected_hash {
+            info!("current binary matches latest release, skipping update");
+            return Ok(false);
+        }
+    }
+
     let binary_bytes = client
         .get(&asset.browser_download_url)
         .timeout(DOWNLOAD_TIMEOUT)
