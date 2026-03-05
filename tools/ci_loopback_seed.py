@@ -68,10 +68,46 @@ def download_file(url: str, dest: Path) -> None:
     print(f"  {dest.name}: {total:,} bytes", file=sys.stderr)
 
 
+def find_cached_circuit() -> str | None:
+    if not CIRCUIT_CACHE_DIR.exists():
+        return None
+    for entry in sorted(CIRCUIT_CACHE_DIR.iterdir()):
+        if not entry.name.startswith("model_") or not entry.is_dir():
+            continue
+        circuit_id = entry.name[6:]
+        if len(circuit_id) != 64 or circuit_id in IGNORED:
+            continue
+        metadata_path = entry / CIRCUIT_METADATA_FILENAME
+        if not metadata_path.exists():
+            continue
+        try:
+            meta = json.loads(metadata_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if meta.get("type") != "PROOF_OF_COMPUTATION":
+            continue
+        if meta.get("proof_system") != "JSTPROVE":
+            continue
+        if all((entry / f).exists() for f in REQUIRED_FILES):
+            return circuit_id
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--force", action="store_true", help="Re-download even if cached")
     args = parser.parse_args()
+
+    if not args.force:
+        cached = find_cached_circuit()
+        if cached:
+            model_dir = CIRCUIT_CACHE_DIR / f"model_{cached}"
+            print(f"Using cached circuit: {cached[:16]}...", file=sys.stderr)
+            for f in REQUIRED_FILES:
+                sz = (model_dir / f).stat().st_size
+                print(f"  {f}: cached ({sz:,} bytes)", file=sys.stderr)
+            print(cached)
+            return
 
     print(f"Fetching circuit list from {CIRCUIT_API_URL} ...", file=sys.stderr)
     data = fetch_json(f"{CIRCUIT_API_URL}/circuits")

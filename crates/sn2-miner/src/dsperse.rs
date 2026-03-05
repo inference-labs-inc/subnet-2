@@ -8,6 +8,14 @@ pub struct DSperseClient {
     cache_dir: PathBuf,
 }
 
+fn validate_circuit_id(id: &str) -> Result<()> {
+    anyhow::ensure!(
+        id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid circuit id: expected 64-char hex string"
+    );
+    Ok(())
+}
+
 fn find_slice_onnx(slice_dir: &Path) -> Result<PathBuf> {
     let payload_dir = slice_dir.join("payload");
     if payload_dir.is_dir() {
@@ -52,6 +60,7 @@ impl DSperseClient {
         slice_num: &str,
         inputs: &serde_json::Value,
     ) -> Result<serde_json::Value> {
+        validate_circuit_id(circuit_id)?;
         let slices_dir = self
             .cache_dir
             .join(format!("model_{circuit_id}"))
@@ -145,6 +154,7 @@ impl DSperseClient {
         model_id: &str,
         inputs: &serde_json::Value,
     ) -> Result<serde_json::Value> {
+        validate_circuit_id(model_id)?;
         let model_dir = self.cache_dir.join(format!("model_{model_id}"));
         let circuit_path = model_dir.join("model.compiled");
 
