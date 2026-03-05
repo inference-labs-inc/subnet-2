@@ -5,6 +5,9 @@ on:
     - cron: '0 5 * * *'
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 concurrency:
   group: nightly-publish
   cancel-in-progress: false
