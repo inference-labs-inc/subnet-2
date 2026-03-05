@@ -236,8 +236,7 @@ impl ValidatorLoop {
 
         let mut tick =
             tokio::time::interval(Duration::from_millis((LOOP_DELAY_SECONDS * 1000.0) as u64));
-        let mut sigterm =
-            signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
+        let mut sigterm = signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
 
         loop {
             tokio::select! {
