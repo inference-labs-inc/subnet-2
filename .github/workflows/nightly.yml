@@ -222,8 +222,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: linux-x86_64-registry-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-x86_64-registry-
+            target
+          key: linux-x86_64-release-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-x86_64-release-
 
       - name: Build release binaries
         run: |
@@ -273,8 +274,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: macos-aarch64-registry-${{ hashFiles('Cargo.lock') }}
-          restore-keys: macos-aarch64-registry-
+            target
+          key: macos-aarch64-release-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macos-aarch64-release-
 
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
@@ -309,6 +311,9 @@ jobs:
         with:
           ref: testnet
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to container registry
         uses: docker/login-action@v3
         with:
@@ -324,6 +329,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:testnet-nightly
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Scan container image with Trivy
         id: trivy-scan

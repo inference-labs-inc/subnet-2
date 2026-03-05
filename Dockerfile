@@ -1,5 +1,6 @@
-FROM --platform=linux/amd64 rust:1.91.0-bookworm AS builder
+FROM --platform=linux/amd64 rust:1.91.0-bookworm AS chef
 
+RUN cargo install cargo-chef --locked
 RUN apt-get update && apt-get install -y \
     clang \
     llvm \
@@ -13,6 +14,15 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 COPY rust-toolchain.toml ./
 RUN rustup show
+
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 
