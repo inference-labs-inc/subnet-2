@@ -28,7 +28,7 @@ jobs:
         run: cargo audit --json > cargo-audit-results.json
 
       - name: Upload Audit Results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: cargo-audit-results
           path: cargo-audit-results.json
@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload Semgrep Results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: semgrep-results
           path: |
@@ -100,7 +100,7 @@ jobs:
           output: "trivy-results.json"
 
       - name: Upload Trivy Results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-results
           path: trivy-results.json
@@ -169,7 +169,7 @@ jobs:
           echo "- Secrets Detection: ${{ needs.secrets-detection.result }}" >> security-summary.md
 
       - name: Upload Security Summary
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: security-summary
           path: security-summary.md
