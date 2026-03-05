@@ -1708,7 +1708,10 @@ impl ValidatorLoop {
                         .slice_num
                         .strip_prefix("slice_")
                         .and_then(|s| s.parse::<usize>().ok())?;
-                    slices.get(idx).and_then(|s| s.tiling.as_ref())
+                    slices
+                        .iter()
+                        .find(|s| s.index == idx)
+                        .and_then(|s| s.tiling.as_ref())
                 });
                 DsperseSliceReport {
                     slice_num: a.slice_num.clone(),
