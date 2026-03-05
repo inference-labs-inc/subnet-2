@@ -42,7 +42,7 @@ jobs:
 
       - name: Install toolchain from rust-toolchain.toml
         run: |
-          source "$HOME/.cargo/env"
+          . "$HOME/.cargo/env"
           rustup show
 
       - uses: actions/cache@v4
@@ -55,7 +55,7 @@ jobs:
 
       - name: Build release binaries
         run: |
-          source "$HOME/.cargo/env"
+          . "$HOME/.cargo/env"
           cargo build --release --locked --bin sn2-validator --bin sn2-miner
         env:
           PYO3_PYTHON: /usr/bin/python3.12
