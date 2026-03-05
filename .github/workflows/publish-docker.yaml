@@ -43,7 +43,7 @@ jobs:
       - name: Build and push Docker image for testnet branch
         if: github.event_name != 'release'
         id: push-testnet
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -86,7 +86,7 @@ jobs:
       - name: Build and push Docker image for release
         if: github.event_name == 'release'
         id: push-release
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
