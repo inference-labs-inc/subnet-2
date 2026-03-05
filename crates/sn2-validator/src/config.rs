@@ -29,7 +29,6 @@ pub struct ValidatorConfig {
     pub disable_metric_logging: bool,
     pub loopback: bool,
     pub additional_circuits: Vec<String>,
-    pub network: String,
 }
 
 impl ValidatorConfig {
@@ -98,7 +97,6 @@ impl ValidatorConfig {
             disable_metric_logging: cli.disable_metric_logging,
             loopback: false,
             additional_circuits: cli.additional_circuits.clone(),
-            network: cli.network.clone(),
         })
     }
 
@@ -151,12 +149,7 @@ impl ValidatorConfig {
             disable_metric_logging: true,
             loopback: true,
             additional_circuits: cli.additional_circuits.clone(),
-            network: cli.network.clone(),
         }
-    }
-
-    pub fn is_mainnet(&self) -> bool {
-        matches!(self.network.as_str(), "finney" | "mainnet")
     }
 
     pub async fn reconnect_chain_client(&mut self) -> Result<()> {

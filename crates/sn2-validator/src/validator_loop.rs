@@ -156,11 +156,11 @@ impl ValidatorLoop {
                 dsperse_tx.clone(),
                 rwr_tx.clone(),
             );
-            let api_reporting_enabled = config.is_mainnet() || config.proof_api_url.is_some();
+            let api_reporting_enabled = IS_RELEASE_BUILD || config.proof_api_url.is_some();
             if !api_reporting_enabled {
                 info!(
-                    network = %config.network,
-                    "sn2-api reporting disabled for non-mainnet network"
+                    version = SOFTWARE_VERSION,
+                    "sn2-api reporting disabled for non-release build"
                 );
             }
             let uploader = if api_reporting_enabled {
