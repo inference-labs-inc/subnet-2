@@ -59,7 +59,7 @@ jobs:
       - name: Scan testnet container image with Trivy
         if: github.event_name != 'release'
         id: trivy-scan-testnet
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        uses: aquasecurity/trivy-action@0.34.2
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
           format: sarif
@@ -102,7 +102,7 @@ jobs:
       - name: Scan release container image with Trivy
         if: github.event_name == 'release'
         id: trivy-scan-release
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        uses: aquasecurity/trivy-action@0.34.2
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
           format: sarif
