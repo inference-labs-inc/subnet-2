@@ -79,7 +79,15 @@ impl ResponseProcessor {
             .settings
             .get("num_inputs")
             .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+            .map(|n| n as usize)
+            .unwrap_or_else(|| {
+                response
+                    .inputs
+                    .as_ref()
+                    .and_then(|v| v.get("input_data"))
+                    .map(|v| sn2_types::json_tensor::flatten_json_to_f64(v).len())
+                    .unwrap_or(0)
+            });
 
         let expected_inputs: Option<Vec<f64>> = response
             .inputs
