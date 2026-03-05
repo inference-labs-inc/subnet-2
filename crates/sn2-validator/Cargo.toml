@@ -34,3 +34,4 @@ dirs-next = { workspace = true }
 futures-util = { workspace = true }
 dsperse = { workspace = true }
 ndarray = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }

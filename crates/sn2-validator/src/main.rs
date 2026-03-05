@@ -26,6 +26,10 @@ use crate::cli::Cli;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls CryptoProvider");
+
     let cli = Cli::parse();
 
     sn2_types::init_tracing(&cli.log_level);
