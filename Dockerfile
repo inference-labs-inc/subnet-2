@@ -17,7 +17,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 
 ARG SN2_VERSION=dev
-RUN SN2_VERSION=${SN2_VERSION} cargo build --release --bin sn2-validator --bin sn2-miner
+RUN SN2_VERSION=${SN2_VERSION} cargo build --release --locked --bin sn2-validator --bin sn2-miner
 
 FROM --platform=linux/amd64 debian:bookworm-20250224-slim
 

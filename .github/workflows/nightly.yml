@@ -5,9 +5,6 @@ on:
     - cron: '0 5 * * *'
   workflow_dispatch: {}
 
-permissions:
-  contents: read
-
 concurrency:
   group: nightly-publish
   cancel-in-progress: false
@@ -45,12 +42,11 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
           key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-nightly-
 
       - name: Build release binaries
-        run: cargo build --workspace --release
+        run: cargo build --workspace --release --locked
 
       - name: Get year-month for circuit cache key
         run: echo "YEARMONTH=$(date +'%Y-%m')" >> $GITHUB_ENV
@@ -170,6 +166,14 @@ jobs:
             sleep 1
           done
 
+      - name: Shutdown miner
+        run: |
+          kill -INT $MINER_PID
+          for i in $(seq 1 20); do
+            kill -0 $MINER_PID 2>/dev/null || break
+            sleep 1
+          done
+
       - name: Assert scoring
         run: |
           python3 - <<'PYEOF'
@@ -201,101 +205,14 @@ jobs:
           echo "=== METRICS ==="
           curl -sf http://localhost:9090/metrics 2>/dev/null || echo "(unavailable)"
 
-  build-linux:
-    name: Build Linux x86_64
-    runs-on: ubuntu-latest
-    container:
-      image: quay.io/pypa/manylinux_2_28_x86_64
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: testnet
-
-      - name: Install system dependencies
-        run: |
-          dnf install -y clang llvm-devel pkg-config openssl-devel libudev-devel protobuf-compiler python3.12-devel perl-core
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: linux-x86_64-registry-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-x86_64-registry-
-
-      - name: Build release binaries
-        run: |
-          source "$HOME/.cargo/env"
-          cargo build --release --locked --bin sn2-validator --bin sn2-miner
-        env:
-          PYO3_PYTHON: /usr/bin/python3.12
-
-      - name: Rename binaries
-        run: |
-          cp target/release/sn2-validator sn2-validator-linux-x86_64
-          cp target/release/sn2-miner sn2-miner-linux-x86_64
-
-      - uses: actions/upload-artifact@v5
-        with:
-          name: binaries-linux-x86_64
-          path: |
-            sn2-validator-linux-x86_64
-            sn2-miner-linux-x86_64
-
-  build-macos:
-    name: Build macOS aarch64
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: testnet
-
-      - name: Assert aarch64 runner
-        run: |
-          ARCH=$(uname -m)
-          if [ "$ARCH" != "arm64" ]; then
-            echo "FAIL: Expected arm64 runner, got $ARCH" >&2
-            exit 1
-          fi
-
-      - uses: actions/setup-python@v5
-        id: setup-python
-        with:
-          python-version: "3.12"
-
-      - name: Install system dependencies
-        run: brew install protobuf
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: macos-aarch64-registry-${{ hashFiles('Cargo.lock') }}
-          restore-keys: macos-aarch64-registry-
-
-      - name: Build release binaries
-        run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
-        env:
-          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
-
-      - name: Rename binaries
-        run: |
-          cp target/release/sn2-validator sn2-validator-macos-aarch64
-          cp target/release/sn2-miner sn2-miner-macos-aarch64
-
-      - uses: actions/upload-artifact@v5
-        with:
-          name: binaries-macos-aarch64
-          path: |
-            sn2-validator-macos-aarch64
-            sn2-miner-macos-aarch64
+  build:
+    uses: ./.github/workflows/build-binaries.yml
+    with:
+      ref: testnet
 
   publish-nightly:
     name: Publish testnet-nightly
-    needs: [loopback-e2e, build-linux, build-macos]
+    needs: [loopback-e2e, build]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -324,6 +241,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:testnet-nightly
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Scan container image with Trivy
         id: trivy-scan
@@ -351,7 +270,7 @@ jobs:
 
   release-nightly:
     name: Nightly GitHub Release
-    needs: [loopback-e2e, build-linux, build-macos]
+    needs: [loopback-e2e, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write

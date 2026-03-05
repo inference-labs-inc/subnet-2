@@ -1,0 +1,118 @@
+name: Build Platform Binaries
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to check out
+        type: string
+        default: ""
+      release-channel:
+        description: SN2_RELEASE_CHANNEL value (empty or mainnet)
+        type: string
+        default: ""
+      version:
+        description: SN2_VERSION value
+        type: string
+        default: ""
+      macos-runner:
+        description: macOS runner label
+        type: string
+        default: "macos-15"
+
+jobs:
+  build-linux:
+    name: Build Linux x86_64
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install system dependencies
+        run: |
+          dnf install -y clang llvm-devel pkg-config openssl-devel libudev-devel protobuf-compiler python3.12-devel perl-core
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: linux-x86_64-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-x86_64-registry-
+
+      - name: Build release binaries
+        run: |
+          source "$HOME/.cargo/env"
+          cargo build --release --locked --bin sn2-validator --bin sn2-miner
+        env:
+          PYO3_PYTHON: /usr/bin/python3.12
+          SN2_RELEASE_CHANNEL: ${{ inputs.release-channel }}
+          SN2_VERSION: ${{ inputs.version }}
+
+      - name: Rename binaries
+        run: |
+          cp target/release/sn2-validator sn2-validator-linux-x86_64
+          cp target/release/sn2-miner sn2-miner-linux-x86_64
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binaries-linux-x86_64
+          path: |
+            sn2-validator-linux-x86_64
+            sn2-miner-linux-x86_64
+
+  build-macos:
+    name: Build macOS aarch64
+    runs-on: ${{ inputs.macos-runner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Assert aarch64 runner
+        run: |
+          ARCH=$(uname -m)
+          if [ "$ARCH" != "arm64" ]; then
+            echo "FAIL: Expected arm64 runner, got $ARCH" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        id: setup-python
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: brew install protobuf
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: macos-aarch64-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macos-aarch64-registry-
+
+      - name: Build release binaries
+        run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+          SN2_RELEASE_CHANNEL: ${{ inputs.release-channel }}
+          SN2_VERSION: ${{ inputs.version }}
+
+      - name: Rename binaries
+        run: |
+          cp target/release/sn2-validator sn2-validator-macos-aarch64
+          cp target/release/sn2-miner sn2-miner-macos-aarch64
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binaries-macos-aarch64
+          path: |
+            sn2-validator-macos-aarch64
+            sn2-miner-macos-aarch64

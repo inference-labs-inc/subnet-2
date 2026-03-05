@@ -13,6 +13,9 @@ permissions:
   contents: read
   security-events: write
 
+env:
+  CARGO_AUDIT_VERSION: "0.21.2"
+
 jobs:
   cargo-audit:
     name: Cargo Audit
@@ -21,13 +24,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Cache cargo-audit binary
+        id: cache-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ env.CARGO_AUDIT_VERSION }}
+
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        if: steps.cache-audit.outputs.cache-hit != 'true'
+        run: cargo install cargo-audit --version ${{ env.CARGO_AUDIT_VERSION }} --locked
 
       - name: Run cargo audit
         run: cargo audit --json > cargo-audit-results.json
 
       - name: Upload Audit Results
+        if: always()
         uses: actions/upload-artifact@v5
         with:
           name: cargo-audit-results
@@ -46,7 +58,11 @@ jobs:
         run: |
           semgrep --config=auto \
             --json --output=semgrep-results.json \
-            --error || true
+            --error
+
+      - name: Generate SARIF report
+        if: always()
+        run: |
           semgrep --config=auto \
             --sarif --output=semgrep-results.sarif \
             || true
@@ -62,7 +78,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload SARIF results to GitHub
-        if: hashFiles('semgrep-results.sarif') != ''
+        if: always() && hashFiles('semgrep-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep-results.sarif
