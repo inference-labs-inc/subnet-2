@@ -75,7 +75,11 @@ def find_cached_circuit() -> str | None:
         if not entry.name.startswith("model_") or not entry.is_dir():
             continue
         circuit_id = entry.name[6:]
-        if len(circuit_id) != 64 or circuit_id in IGNORED:
+        if (
+            len(circuit_id) != 64
+            or not all(c in "0123456789abcdef" for c in circuit_id)
+            or circuit_id in IGNORED
+        ):
             continue
         metadata_path = entry / CIRCUIT_METADATA_FILENAME
         if not metadata_path.exists():
