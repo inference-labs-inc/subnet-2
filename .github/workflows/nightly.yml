@@ -37,13 +37,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm pkg-config libssl-dev libudev-dev protobuf-compiler
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-nightly-
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
 
       - name: Build release binaries
         run: cargo build --workspace --release --locked
