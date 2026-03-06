@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use jstprove_circuits::onnx::{
-    deserialize_circuit_bn254, flatten_circuit_bn254,
-    verify_and_extract_bn254_with_flat_ref, FlatCircuitBN254,
+    deserialize_circuit_bn254, flatten_circuit_bn254, verify_and_extract_bn254_with_flat_ref,
+    FlatCircuitBN254,
 };
 use jstprove_circuits::runner::main_runner::read_circuit_msgpack;
 
