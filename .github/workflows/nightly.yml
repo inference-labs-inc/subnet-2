@@ -140,8 +140,6 @@ jobs:
           tail -200 /tmp/validator.log || true
           echo "=== MINER LOG (last 100 lines) ==="
           tail -100 /tmp/miner.log || true
-          echo "=== METRICS ==="
-          curl -sf http://localhost:9090/metrics 2>/dev/null || echo "(unavailable)"
 
   build:
     if: github.event_name != 'pull_request'
