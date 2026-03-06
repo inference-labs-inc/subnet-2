@@ -4,10 +4,12 @@ on:
   schedule:
     - cron: '0 5 * * *'
   workflow_dispatch: {}
+  pull_request:
+    types: [labeled]
 
 concurrency:
-  group: nightly-publish
-  cancel-in-progress: false
+  group: nightly-${{ github.event.pull_request.number || 'publish' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -20,13 +22,14 @@ env:
 jobs:
   loopback-e2e:
     name: Loopback E2E
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'test-nightly')
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: testnet
+          ref: ${{ github.event.pull_request.head.sha || 'testnet' }}
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
@@ -206,12 +209,14 @@ jobs:
           curl -sf http://localhost:9090/metrics 2>/dev/null || echo "(unavailable)"
 
   build:
+    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/build-binaries.yml
     with:
       ref: testnet
 
   publish-nightly:
     name: Publish testnet-nightly
+    if: github.event_name != 'pull_request'
     needs: [loopback-e2e, build]
     runs-on: ubuntu-latest
     permissions:
@@ -273,6 +278,7 @@ jobs:
 
   release-nightly:
     name: Nightly GitHub Release
+    if: github.event_name != 'pull_request'
     needs: [loopback-e2e, build]
     runs-on: ubuntu-latest
     permissions:

@@ -20,6 +20,7 @@ from pathlib import Path
 CIRCUIT_API_URL = os.environ.get("CIRCUIT_API_URL", "https://repository.inferencelabs.com")
 CIRCUIT_CACHE_DIR = Path.home() / ".bittensor" / "subnet-2" / "circuit_cache"
 CIRCUIT_METADATA_FILENAME = "circuit_metadata.json"
+USER_AGENT = "sn2-ci/1.0"
 
 IGNORED = {
     "0",
@@ -51,7 +52,7 @@ def _require_https(url: str) -> None:
 
 def fetch_json(url: str) -> dict:
     _require_https(url)
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
 
@@ -59,7 +60,7 @@ def fetch_json(url: str) -> dict:
 def download_file(url: str, dest: Path) -> None:
     _require_https(url)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(url)
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     total = 0
     with urllib.request.urlopen(req, timeout=300) as resp, dest.open("wb") as fh:
         while chunk := resp.read(65536):
