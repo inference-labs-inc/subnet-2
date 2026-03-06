@@ -621,13 +621,6 @@ pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
             extract_dir.display()
         ));
     }
-    if let Err(e) = std::fs::remove_file(&archive) {
-        tracing::warn!(
-            archive = %archive.display(),
-            error = %e,
-            "failed to remove dslice archive after extraction"
-        );
-    }
     Ok(())
 }
 
