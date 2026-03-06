@@ -63,26 +63,40 @@ fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
         }
     }
 
-    let circuit_bytes = if std::path::Path::new(circuit_path).is_dir() {
-        let bundle = read_circuit_msgpack(circuit_path)
-            .map_err(|e| anyhow::anyhow!("reading bundle {circuit_path}: {e}"))?;
-        bundle.circuit
-    } else {
-        std::fs::read(circuit_path).with_context(|| format!("reading {circuit_path}"))?
-    };
+    let load_result = (|| -> Result<Arc<LayeredCircuitBN254>> {
+        let circuit_bytes = if std::path::Path::new(circuit_path).is_dir() {
+            let bundle = read_circuit_msgpack(circuit_path)
+                .map_err(|e| anyhow::anyhow!("reading bundle {circuit_path}: {e}"))?;
+            bundle.circuit
+        } else {
+            std::fs::read(circuit_path).with_context(|| format!("reading {circuit_path}"))?
+        };
 
-    let layered = deserialize_circuit_bn254(&circuit_bytes)
-        .map_err(|e| anyhow::anyhow!("deserializing circuit {circuit_path}: {e}"))?;
+        let layered = deserialize_circuit_bn254(&circuit_bytes)
+            .map_err(|e| anyhow::anyhow!("deserializing circuit {circuit_path}: {e}"))?;
 
-    let arc = Arc::new(layered);
-    let mut cache = CIRCUIT_CACHE.lock().unwrap();
-    info!(
-        path = %circuit_path,
-        size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),
-        "cached deserialized layered circuit"
-    );
-    cache.insert(circuit_path.to_string(), Arc::clone(&arc));
-    Ok(arc)
+        let arc = Arc::new(layered);
+        let mut cache = CIRCUIT_CACHE.lock().unwrap();
+        info!(
+            path = %circuit_path,
+            size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),
+            "cached deserialized layered circuit"
+        );
+        cache.insert(circuit_path.to_string(), Arc::clone(&arc));
+        Ok(arc)
+    })();
+
+    if load_result.is_err() {
+        let mut loading = LOADING_LOCKS.lock().unwrap();
+        if loading
+            .get(circuit_path)
+            .is_some_and(|existing| Arc::ptr_eq(existing, &path_lock))
+        {
+            loading.remove(circuit_path);
+        }
+    }
+
+    load_result
 }
 
 pub struct VerifyResult {
