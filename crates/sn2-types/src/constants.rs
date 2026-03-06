@@ -7,8 +7,8 @@ pub const IS_RELEASE_BUILD: bool = option_env!("SN2_RELEASE_CHANNEL").is_some();
 
 pub const VALIDATOR_REQUEST_TIMEOUT_SECONDS: u64 = 120;
 pub const CIRCUIT_TIMEOUT_SECONDS: u64 = 180;
-pub const MAX_CONCURRENT_REQUESTS: usize = 32;
-pub const MAX_CONCURRENT_VERIFICATIONS: usize = 16;
+pub const MAX_CONCURRENT_REQUESTS: usize = 8;
+pub const MAX_CONCURRENT_VERIFICATIONS: usize = 8;
 pub const WEIGHTS_VERSION: u32 = 11003;
 pub const WEIGHT_RATE_LIMIT_BLOCKS: u64 = 100;
 pub const WEIGHT_UPDATE_POLL_SECS: u64 = 60;
