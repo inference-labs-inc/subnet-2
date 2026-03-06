@@ -54,7 +54,7 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show
 
-      - uses: mozilla/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -76,6 +76,9 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: clang
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+
+      - name: Show sccache stats
+        run: ${SCCACHE_PATH} --show-stats
 
       - name: Rename binaries
         run: |
@@ -120,7 +123,7 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show
 
-      - uses: mozilla/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -136,6 +139,9 @@ jobs:
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
           SN2_RELEASE_CHANNEL: ${{ inputs.release-channel }}
           SN2_VERSION: ${{ inputs.version }}
+
+      - name: Show sccache stats
+        run: ${SCCACHE_PATH} --show-stats
 
       - name: Rename binaries
         run: |
