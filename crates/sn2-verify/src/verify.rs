@@ -67,14 +67,14 @@ fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
 
     let circuit_bytes = if std::path::Path::new(circuit_path).is_dir() {
         let bundle = read_circuit_msgpack(circuit_path)
-            .map_err(|e| anyhow::anyhow!("reading bundle {circuit_path}: {e}"))?;
+            .with_context(|| format!("reading bundle {circuit_path}"))?;
         bundle.circuit
     } else {
         std::fs::read(circuit_path).with_context(|| format!("reading {circuit_path}"))?
     };
 
     let layered = deserialize_circuit_bn254(&circuit_bytes)
-        .map_err(|e| anyhow::anyhow!("deserializing circuit {circuit_path}: {e}"))?;
+        .with_context(|| format!("deserializing circuit {circuit_path}"))?;
 
     let arc = Arc::new(layered);
 
