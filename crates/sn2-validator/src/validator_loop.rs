@@ -27,6 +27,13 @@ use crate::stats_reporter::{DsperseRunReport, DsperseSliceReport, StatsReporter}
 use crate::{metrics_server, metrics_server as metrics};
 use sn2_circuit_store::CircuitStore;
 
+fn event_slice_num(slice_num: &str, is_tile: bool, tile_idx: Option<u32>) -> String {
+    match (is_tile, tile_idx) {
+        (true, Some(idx)) => format!("{slice_num}_tile_{idx}"),
+        _ => slice_num.to_string(),
+    }
+}
+
 enum WeightTaskResult {
     Committed(PendingReveal),
     CommitFailed(String),
@@ -1468,10 +1475,7 @@ impl ValidatorLoop {
                             {
                                 let ev = Arc::clone(ev);
                                 let ruid = ruid.clone();
-                                let event_snum = match (is_tile, tile_idx) {
-                                    (true, Some(idx)) => format!("{snum}_tile_{idx}"),
-                                    _ => snum.clone(),
-                                };
+                                let event_snum = event_slice_num(snum, is_tile, tile_idx);
                                 self.dsperse_emit_tasks.spawn(async move {
                                     ev.emit_proof_received(&ruid, &event_snum, elapsed, uid)
                                         .await;
@@ -1517,10 +1521,7 @@ impl ValidatorLoop {
                         {
                             let ev = Arc::clone(ev);
                             let ruid = ruid.clone();
-                            let event_snum = match (is_tile, tile_idx) {
-                                (true, Some(idx)) => format!("{snum}_tile_{idx}"),
-                                _ => snum.clone(),
-                            };
+                            let event_snum = event_slice_num(snum, is_tile, tile_idx);
                             let vt = response.verification_time.unwrap_or(0.0);
                             self.dsperse_emit_tasks.spawn(async move {
                                 ev.emit_verification_complete(&ruid, &event_snum, vt, false)
@@ -1936,9 +1937,9 @@ impl ValidatorLoop {
         retry_payload: RetryPayload,
         run_uid: &Option<String>,
         slice_num: &Option<String>,
-        _is_tile: bool,
+        is_tile: bool,
         _task_id: Option<&str>,
-        _tile_idx: Option<u32>,
+        tile_idx: Option<u32>,
         external_request_hash: Option<&str>,
         reason: &str,
     ) {
@@ -1996,10 +1997,10 @@ impl ValidatorLoop {
                 if let (Some(ev), Some(snum)) = (&self.dsperse_events, slice_num) {
                     let ev = Arc::clone(ev);
                     let ruid = run_uid.clone();
-                    let snum = snum.clone();
+                    let event_snum = event_slice_num(snum, is_tile, tile_idx);
                     let err = reason.to_string();
                     self.dsperse_emit_tasks.spawn(async move {
-                        ev.emit_slice_failed(&ruid, &snum, &err).await;
+                        ev.emit_slice_failed(&ruid, &event_snum, &err).await;
                     });
                 }
                 warn!(run_uid = %run_uid, "dslice max retries exceeded, removing run");
