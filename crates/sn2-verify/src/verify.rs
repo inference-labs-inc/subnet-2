@@ -4,10 +4,12 @@ use std::sync::{Arc, LazyLock, Mutex};
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 
-use jstprove_circuits::onnx::verify_and_extract_bn254;
+use jstprove_circuits::onnx::{
+    deserialize_circuit_bn254, verify_and_extract_bn254_with_layered, LayeredCircuitBN254,
+};
 use jstprove_circuits::runner::main_runner::read_circuit_msgpack;
 
-static CIRCUIT_CACHE: LazyLock<Mutex<HashMap<String, Arc<Vec<u8>>>>> =
+static CIRCUIT_CACHE: LazyLock<Mutex<HashMap<String, Arc<LayeredCircuitBN254>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 use crate::protocol::{StoreResponse, VerifyAndStoreRequest, VerifyRequest, VerifyResponse};
@@ -21,6 +23,48 @@ pub fn evict_circuit_cache(path_prefix: &str) {
     if evicted > 0 {
         info!(prefix = %path_prefix, evicted, remaining = cache.len(), "evicted circuit cache entries");
     }
+}
+
+pub fn clear_circuit_cache() {
+    let mut cache = CIRCUIT_CACHE.lock().unwrap();
+    let count = cache.len();
+    cache.clear();
+    if count > 0 {
+        info!(cleared = count, "cleared circuit cache");
+    }
+}
+
+fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
+    {
+        let cache = CIRCUIT_CACHE.lock().unwrap();
+        if let Some(cached) = cache.get(circuit_path) {
+            return Ok(Arc::clone(cached));
+        }
+    }
+
+    let circuit_bytes = if std::path::Path::new(circuit_path).is_dir() {
+        let bundle = read_circuit_msgpack(circuit_path)
+            .map_err(|e| anyhow::anyhow!("reading bundle {circuit_path}: {e}"))?;
+        bundle.circuit
+    } else {
+        std::fs::read(circuit_path).with_context(|| format!("reading {circuit_path}"))?
+    };
+
+    let layered = deserialize_circuit_bn254(&circuit_bytes)
+        .map_err(|e| anyhow::anyhow!("deserializing circuit {circuit_path}: {e}"))?;
+
+    info!(
+        path = %circuit_path,
+        size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),
+        "cached deserialized layered circuit"
+    );
+
+    let arc = Arc::new(layered);
+    CIRCUIT_CACHE
+        .lock()
+        .unwrap()
+        .insert(circuit_path.to_string(), Arc::clone(&arc));
+    Ok(arc)
 }
 
 pub struct VerifyResult {
@@ -46,30 +90,12 @@ pub async fn verify_inner(
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         let result = (|| -> Result<VerifyResult> {
-            let circuit_bytes = {
-                let mut cache = CIRCUIT_CACHE.lock().unwrap();
-                if let Some(cached) = cache.get(&circuit_path) {
-                    Arc::clone(cached)
-                } else {
-                    let bytes = if std::path::Path::new(&circuit_path).is_dir() {
-                        let bundle = read_circuit_msgpack(&circuit_path)
-                            .map_err(|e| anyhow::anyhow!("reading bundle {circuit_path}: {e}"))?;
-                        bundle.circuit
-                    } else {
-                        std::fs::read(&circuit_path)
-                            .with_context(|| format!("reading {circuit_path}"))?
-                    };
-                    info!(path = %circuit_path, size_mb = bytes.len() as f64 / (1024.0 * 1024.0), "cached circuit bytes");
-                    let arc = Arc::new(bytes);
-                    cache.insert(circuit_path.clone(), Arc::clone(&arc));
-                    arc
-                }
-            };
+            let layered = get_or_load_layered(&circuit_path)?;
             let witness_bytes = hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
             let proof_bytes = hex::decode(proof_hex.trim()).context("hex-decoding proof")?;
 
-            let result = verify_and_extract_bn254(
-                &circuit_bytes,
+            let result = verify_and_extract_bn254_with_layered(
+                &layered,
                 &witness_bytes,
                 &proof_bytes,
                 num_inputs,
