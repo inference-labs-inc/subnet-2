@@ -90,6 +90,16 @@ jobs:
           curl -sf http://localhost:9090/metrics > /dev/null || \
             (echo "FAIL: Validator metrics endpoint unreachable" && tail -50 /tmp/validator.log && exit 1)
 
+      - name: Assert circuits loaded
+        run: |
+          for i in $(seq 1 30); do
+            grep -q "validator loop starting" /tmp/validator.log && break
+            sleep 1
+          done
+          grep "validator loop starting" /tmp/validator.log || \
+            (echo "FAIL: Validator did not complete circuit loading" && tail -50 /tmp/validator.log && exit 1)
+          grep "circuits loaded" /tmp/validator.log | tail -1
+
       - name: Stability window
         run: sleep 30
 
@@ -108,6 +118,7 @@ jobs:
             (echo "FAIL: No sn2_ metrics found" && exit 1)
 
       - name: Shutdown validator
+        if: always()
         run: |
           kill -INT $VALIDATOR_PID
           for i in $(seq 1 20); do
@@ -118,6 +129,7 @@ jobs:
             (echo "WARN: Validator did not exit on SIGINT, sending SIGKILL" && kill -9 $VALIDATOR_PID) || true
 
       - name: Shutdown miner
+        if: always()
         run: |
           kill -INT $MINER_PID
           for i in $(seq 1 20); do
