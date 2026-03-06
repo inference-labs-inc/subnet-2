@@ -74,6 +74,9 @@ pub struct Cli {
     )]
     pub miner_address: String,
 
+    #[arg(long, default_value_t = sn2_types::MAX_CONCURRENT_VERIFICATIONS)]
+    pub max_concurrent_verifications: usize,
+
     #[arg(long, value_delimiter = ',')]
     pub additional_circuits: Vec<String>,
 }

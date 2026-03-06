@@ -901,7 +901,7 @@ impl ValidatorLoop {
 
     async fn dispatch_requests(&mut self) -> Result<()> {
         let verification_backlog = self.verify_tasks.len() + self.pending_verifications.len();
-        if verification_backlog >= MAX_CONCURRENT_VERIFICATIONS {
+        if verification_backlog >= self.config.max_concurrent_verifications {
             return Ok(());
         }
 
@@ -1353,7 +1353,7 @@ impl ValidatorLoop {
             self.benchmark_in_flight = self.benchmark_in_flight.saturating_sub(1);
         }
 
-        if self.verify_tasks.len() >= MAX_CONCURRENT_VERIFICATIONS {
+        if self.verify_tasks.len() >= self.config.max_concurrent_verifications {
             self.pending_verifications.push_back(result);
             return;
         }
@@ -1362,7 +1362,7 @@ impl ValidatorLoop {
     }
 
     fn drain_pending_verifications(&mut self) {
-        while self.verify_tasks.len() < MAX_CONCURRENT_VERIFICATIONS {
+        while self.verify_tasks.len() < self.config.max_concurrent_verifications {
             match self.pending_verifications.pop_front() {
                 Some(result) => self.spawn_verification(result),
                 None => break,
@@ -2184,6 +2184,7 @@ impl ValidatorLoop {
                 benchmark_circuits = benchmark_count,
                 dsperse_circuits = dsperse_count,
                 max_concurrency = self.config.max_concurrency,
+                max_concurrent_verifications = self.config.max_concurrent_verifications,
                 benchmark_in_flight = self.benchmark_in_flight,
                 "health"
             );
