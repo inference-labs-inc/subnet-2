@@ -44,7 +44,7 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show
 
-      - uses: mozilla/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
+      - uses: mozilla/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -95,7 +95,7 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show
 
-      - uses: mozilla/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
+      - uses: mozilla/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -157,7 +157,7 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show
 
-      - uses: mozilla/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
+      - uses: mozilla/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:

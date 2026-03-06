@@ -65,8 +65,7 @@ pub async fn verify_inner(
                     arc
                 }
             };
-            let witness_bytes =
-                hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
+            let witness_bytes = hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
             let proof_bytes = hex::decode(proof_hex.trim()).context("hex-decoding proof")?;
 
             let result = verify_and_extract_bn254(
