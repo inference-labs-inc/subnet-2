@@ -294,7 +294,7 @@ jobs:
           cd artifacts
           find . -type f -name 'sn2-*' -exec cp {} ../ \;
           cd ..
-          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
+          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-linux-aarch64 sn2-miner-linux-aarch64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
 
       - name: Set build timestamp
         id: ts
@@ -314,6 +314,8 @@ jobs:
           files: |
             sn2-validator-linux-x86_64
             sn2-miner-linux-x86_64
+            sn2-validator-linux-aarch64
+            sn2-miner-linux-aarch64
             sn2-validator-macos-aarch64
             sn2-miner-macos-aarch64
             SHA256SUMS

@@ -35,7 +35,7 @@ jobs:
           cd artifacts
           find . -type f -name 'sn2-*' -exec cp {} ../ \;
           cd ..
-          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
+          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-linux-aarch64 sn2-miner-linux-aarch64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
@@ -44,6 +44,8 @@ jobs:
           files: |
             sn2-validator-linux-x86_64
             sn2-miner-linux-x86_64
+            sn2-validator-linux-aarch64
+            sn2-miner-linux-aarch64
             sn2-validator-macos-aarch64
             sn2-miner-macos-aarch64
             SHA256SUMS
@@ -71,7 +73,7 @@ jobs:
           cd artifacts
           find . -type f -name 'sn2-*' -exec cp {} ../ \;
           cd ..
-          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
+          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-linux-aarch64 sn2-miner-linux-aarch64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
 
       - name: Create Testnet Release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
@@ -85,6 +87,8 @@ jobs:
           files: |
             sn2-validator-linux-x86_64
             sn2-miner-linux-x86_64
+            sn2-validator-linux-aarch64
+            sn2-miner-linux-aarch64
             sn2-validator-macos-aarch64
             sn2-miner-macos-aarch64
             SHA256SUMS
