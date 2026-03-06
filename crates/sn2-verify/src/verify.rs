@@ -12,6 +12,9 @@ use jstprove_circuits::runner::main_runner::read_circuit_msgpack;
 static CIRCUIT_CACHE: LazyLock<Mutex<HashMap<String, Arc<LayeredCircuitBN254>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+static LOADING_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 use crate::protocol::{StoreResponse, VerifyAndStoreRequest, VerifyRequest, VerifyResponse};
 use crate::store::{StoredTile, TileStore};
 
@@ -23,6 +26,10 @@ pub fn evict_circuit_cache(path_prefix: &str) {
     if evicted > 0 {
         info!(prefix = %path_prefix, evicted, remaining = cache.len(), "evicted circuit cache entries");
     }
+    LOADING_LOCKS
+        .lock()
+        .unwrap()
+        .retain(|k, _| !k.starts_with(path_prefix));
 }
 
 pub fn clear_circuit_cache() {
@@ -32,9 +39,23 @@ pub fn clear_circuit_cache() {
     if count > 0 {
         info!(cleared = count, "cleared circuit cache");
     }
+    LOADING_LOCKS.lock().unwrap().clear();
 }
 
 fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
+    {
+        let cache = CIRCUIT_CACHE.lock().unwrap();
+        if let Some(cached) = cache.get(circuit_path) {
+            return Ok(Arc::clone(cached));
+        }
+    }
+
+    let path_lock = {
+        let mut loading = LOADING_LOCKS.lock().unwrap();
+        Arc::clone(loading.entry(circuit_path.to_string()).or_default())
+    };
+    let _guard = path_lock.lock().unwrap();
+
     {
         let cache = CIRCUIT_CACHE.lock().unwrap();
         if let Some(cached) = cache.get(circuit_path) {
@@ -55,9 +76,6 @@ fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
 
     let arc = Arc::new(layered);
     let mut cache = CIRCUIT_CACHE.lock().unwrap();
-    if let Some(existing) = cache.get(circuit_path) {
-        return Ok(Arc::clone(existing));
-    }
     info!(
         path = %circuit_path,
         size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),
