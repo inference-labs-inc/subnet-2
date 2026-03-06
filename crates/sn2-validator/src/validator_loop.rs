@@ -1468,12 +1468,16 @@ impl ValidatorLoop {
                             {
                                 let ev = Arc::clone(ev);
                                 let ruid = ruid.clone();
-                                let snum = snum.clone();
+                                let event_snum = match (is_tile, tile_idx) {
+                                    (true, Some(idx)) => format!("{snum}_tile_{idx}"),
+                                    _ => snum.clone(),
+                                };
                                 self.dsperse_emit_tasks.spawn(async move {
-                                    ev.emit_proof_received(&ruid, &snum, elapsed, uid).await;
+                                    ev.emit_proof_received(&ruid, &event_snum, elapsed, uid)
+                                        .await;
                                     ev.emit_verification_complete(
                                         &ruid,
-                                        &snum,
+                                        &event_snum,
                                         verification_time,
                                         true,
                                     )
@@ -1513,10 +1517,14 @@ impl ValidatorLoop {
                         {
                             let ev = Arc::clone(ev);
                             let ruid = ruid.clone();
-                            let snum = snum.clone();
+                            let event_snum = match (is_tile, tile_idx) {
+                                (true, Some(idx)) => format!("{snum}_tile_{idx}"),
+                                _ => snum.clone(),
+                            };
                             let vt = response.verification_time.unwrap_or(0.0);
                             self.dsperse_emit_tasks.spawn(async move {
-                                ev.emit_verification_complete(&ruid, &snum, vt, false).await;
+                                ev.emit_verification_complete(&ruid, &event_snum, vt, false)
+                                    .await;
                             });
                         }
                     }
