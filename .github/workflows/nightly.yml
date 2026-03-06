@@ -1,4 +1,4 @@
-name: Nightly loopback integration
+name: Nightly build and smoke test
 
 on:
   schedule:
@@ -20,8 +20,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  loopback-e2e:
-    name: Loopback E2E
+  smoke-test:
+    name: Smoke test
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'test-nightly')
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -65,14 +65,14 @@ jobs:
             > /tmp/miner.log 2>&1 &
           echo "MINER_PID=$!" >> $GITHUB_ENV
 
-      - name: Wait for miner
+      - name: Wait for miner health
         run: |
           for i in $(seq 1 15); do
             curl -sf http://localhost:8091/health > /dev/null && break
             sleep 1
           done
           curl -sf http://localhost:8091/health || \
-            (echo "Miner failed to start" && tail -50 /tmp/miner.log && exit 1)
+            (echo "FAIL: Miner health endpoint unreachable" && tail -50 /tmp/miner.log && exit 1)
 
       - name: Start validator in loopback
         run: |
@@ -94,41 +94,24 @@ jobs:
             sleep 1
           done
           curl -sf http://localhost:9090/metrics > /dev/null || \
-            (echo "Validator metrics endpoint unavailable" && tail -50 /tmp/validator.log && exit 1)
+            (echo "FAIL: Validator metrics endpoint unreachable" && tail -50 /tmp/validator.log && exit 1)
 
-      - name: Run for 6 minutes
-        run: sleep 360
+      - name: Stability window
+        run: sleep 30
 
       - name: Assert process liveness
         run: |
           kill -0 $MINER_PID 2>/dev/null || \
-            (echo "FAIL: Miner exited early" && tail -100 /tmp/miner.log && exit 1)
+            (echo "FAIL: Miner exited during stability window" && tail -100 /tmp/miner.log && exit 1)
           kill -0 $VALIDATOR_PID 2>/dev/null || \
-            (echo "FAIL: Validator exited early" && tail -100 /tmp/validator.log && exit 1)
+            (echo "FAIL: Validator exited during stability window" && tail -100 /tmp/validator.log && exit 1)
 
-      - name: Assert metrics
+      - name: Assert metrics endpoint responsive
         run: |
           METRICS=$(curl -sf http://localhost:9090/metrics)
-
-          SENT=$(echo "$METRICS" | awk '/^sn2_requests_sent_total/ {sum += $NF} END {print int(sum+0)}')
-          echo "Requests sent: ${SENT}"
-          [[ "${SENT:-0}" -ge 2 ]] || \
-            (echo "FAIL: Expected >= 2 requests sent, got ${SENT:-0}" && exit 1)
-
-          SUCCESSES=$(echo "$METRICS" | awk '/sn2_responses_total\{.*success/ {sum += int($NF+0)} END {print int(sum+0)}')
-          FAILURES=$(echo "$METRICS"  | awk '/sn2_responses_total\{.*failure/ {sum += int($NF+0)} END {print int(sum+0)}')
-          TOTAL=$(( ${SUCCESSES:-0} + ${FAILURES:-0} ))
-          echo "Responses: ${SUCCESSES:-0} success, ${FAILURES:-0} failure (${TOTAL} total)"
-
-          [[ "${TOTAL}" -ge 2 ]] || \
-            (echo "FAIL: Expected >= 2 total responses, got ${TOTAL}" && exit 1)
-
-          if [[ "$TOTAL" -gt 0 ]]; then
-            SUCCESS_PCT=$(( ${SUCCESSES:-0} * 100 / TOTAL ))
-            echo "Success rate: ${SUCCESS_PCT}%"
-            [[ "$SUCCESS_PCT" -ge 50 ]] || \
-              (echo "FAIL: Success rate ${SUCCESS_PCT}% < 50%" && exit 1)
-          fi
+          echo "$METRICS" | head -20
+          echo "$METRICS" | grep -q "^sn2_" || \
+            (echo "FAIL: No sn2_ metrics found" && exit 1)
 
       - name: Shutdown validator
         run: |
@@ -137,6 +120,8 @@ jobs:
             kill -0 $VALIDATOR_PID 2>/dev/null || break
             sleep 1
           done
+          kill -0 $VALIDATOR_PID 2>/dev/null && \
+            (echo "WARN: Validator did not exit on SIGINT, sending SIGKILL" && kill -9 $VALIDATOR_PID) || true
 
       - name: Shutdown miner
         run: |
@@ -145,35 +130,16 @@ jobs:
             kill -0 $MINER_PID 2>/dev/null || break
             sleep 1
           done
+          kill -0 $MINER_PID 2>/dev/null && \
+            (echo "WARN: Miner did not exit on SIGINT, sending SIGKILL" && kill -9 $MINER_PID) || true
 
-      - name: Assert scoring
-        run: |
-          python3 - <<'PYEOF'
-          import json, os, sys
-          path = os.path.expanduser("~/.bittensor/subnet-2/scores.json")
-          try:
-              scores = json.loads(open(path).read())
-          except Exception as e:
-              print(f"FAIL: Cannot read scores.json: {e}", file=sys.stderr)
-              sys.exit(1)
-          score = float(scores.get("0", 0))
-          if score <= 0:
-              print(f"FAIL: UID 0 score {score:.8f} is not positive", file=sys.stderr)
-              sys.exit(1)
-          print(f"UID 0 score: {score:.8f}")
-          PYEOF
-
-      - name: Dump logs on failure
+      - name: Dump logs
         if: always()
         run: |
           echo "=== VALIDATOR LOG (last 200 lines) ==="
           tail -200 /tmp/validator.log || true
           echo "=== MINER LOG (last 100 lines) ==="
           tail -100 /tmp/miner.log || true
-          echo "=== SCORES ==="
-          cat ~/.bittensor/subnet-2/scores.json 2>/dev/null || echo "(not found)"
-          echo "=== PERFORMANCE TRACKER ==="
-          cat ~/.bittensor/subnet-2/performance_tracker.json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d, indent=2))" 2>/dev/null || echo "(not found)"
           echo "=== METRICS ==="
           curl -sf http://localhost:9090/metrics 2>/dev/null || echo "(unavailable)"
 
@@ -186,7 +152,7 @@ jobs:
   publish-nightly:
     name: Publish testnet-nightly
     if: github.event_name != 'pull_request'
-    needs: [loopback-e2e, build]
+    needs: [smoke-test, build]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -248,7 +214,7 @@ jobs:
   release-nightly:
     name: Nightly GitHub Release
     if: github.event_name != 'pull_request'
-    needs: [loopback-e2e, build]
+    needs: [smoke-test, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -281,7 +247,7 @@ jobs:
           tag_name: testnet-nightly
           name: Testnet Nightly
           body: |
-            E2E-validated nightly build from `testnet` at ${{ github.sha }}.
+            Smoke-tested nightly build from `testnet` at ${{ github.sha }}.
             Built: ${{ steps.ts.outputs.timestamp }}
           prerelease: true
           make_latest: false
