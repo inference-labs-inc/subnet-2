@@ -550,24 +550,38 @@ impl ValidatorLoop {
                     }
                 };
                 let (output_data, output_shape) = if slice_info.named_inputs.len() > 1 {
-                    let inputs: Vec<(&str, Vec<f64>, Vec<usize>)> = slice_info
+                    let inputs: Vec<(String, Vec<f64>, Vec<usize>)> = slice_info
                         .named_inputs
                         .iter()
                         .map(|(name, arr)| {
                             (
-                                name.as_str(),
+                                name.clone(),
                                 arr.iter().copied().collect(),
                                 arr.shape().to_vec(),
                             )
                         })
                         .collect();
-                    match dsperse::backend::onnx::run_inference_multi(
-                        std::path::Path::new(&onnx_path),
-                        &inputs,
-                    ) {
-                        Ok(result) => result,
-                        Err(e) => {
+                    let onnx = onnx_path.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        let refs: Vec<(&str, Vec<f64>, Vec<usize>)> = inputs
+                            .iter()
+                            .map(|(n, d, s)| (n.as_str(), d.clone(), s.clone()))
+                            .collect();
+                        dsperse::backend::onnx::run_inference_multi(
+                            std::path::Path::new(&onnx),
+                            &refs,
+                        )
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => {
                             warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX multi-input inference failed");
+                            self.teardown_run(run_uid).await;
+                            return;
+                        }
+                        Err(e) => {
+                            warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX multi-input inference task panicked");
                             self.teardown_run(run_uid).await;
                             return;
                         }
@@ -575,14 +589,24 @@ impl ValidatorLoop {
                 } else {
                     let input_flat: Vec<f64> = slice_info.input_tensor.iter().copied().collect();
                     let input_shape: Vec<usize> = slice_info.input_tensor.shape().to_vec();
-                    match dsperse::backend::onnx::run_inference(
-                        std::path::Path::new(&onnx_path),
-                        &input_flat,
-                        &input_shape,
-                    ) {
-                        Ok(result) => result,
-                        Err(e) => {
+                    let onnx = onnx_path.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        dsperse::backend::onnx::run_inference(
+                            std::path::Path::new(&onnx),
+                            &input_flat,
+                            &input_shape,
+                        )
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => {
                             warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference failed");
+                            self.teardown_run(run_uid).await;
+                            return;
+                        }
+                        Err(e) => {
+                            warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference task panicked");
                             self.teardown_run(run_uid).await;
                             return;
                         }
