@@ -46,6 +46,7 @@ pub struct NextSliceInfo {
     pub onnx_path: Option<String>,
     pub circuit_path: Option<String>,
     pub input_tensor: ndarray::ArrayD<f64>,
+    pub named_inputs: Vec<(String, ndarray::ArrayD<f64>)>,
     pub tiling: Option<TilingInfo>,
 }
 
@@ -174,6 +175,7 @@ impl IncrementalRunManager {
             onnx_path: work.onnx_path,
             circuit_path: work.circuit_path,
             input_tensor: work.input,
+            named_inputs: work.named_inputs,
             tiling: work.tiling,
         }))
     }
@@ -305,7 +307,7 @@ impl IncrementalRunManager {
             slice_id: slice_id.to_string(),
             output: output_tensor,
             execution_info: ExecutionInfo {
-                method: ExecutionMethod::JstproveGenWitness,
+                method: ExecutionMethod::OnnxOnly,
                 success: true,
                 error: None,
                 witness_file: None,

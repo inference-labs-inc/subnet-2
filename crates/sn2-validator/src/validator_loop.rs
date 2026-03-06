@@ -549,18 +549,43 @@ impl ValidatorLoop {
                         return;
                     }
                 };
-                let input_flat: Vec<f64> = slice_info.input_tensor.iter().copied().collect();
-                let input_shape: Vec<usize> = slice_info.input_tensor.shape().to_vec();
-                let (output_data, output_shape) = match dsperse::backend::onnx::run_inference(
-                    std::path::Path::new(&onnx_path),
-                    &input_flat,
-                    &input_shape,
-                ) {
-                    Ok(result) => result,
-                    Err(e) => {
-                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference failed");
-                        self.teardown_run(run_uid).await;
-                        return;
+                let (output_data, output_shape) = if slice_info.named_inputs.len() > 1 {
+                    let inputs: Vec<(&str, Vec<f64>, Vec<usize>)> = slice_info
+                        .named_inputs
+                        .iter()
+                        .map(|(name, arr)| {
+                            (
+                                name.as_str(),
+                                arr.iter().copied().collect(),
+                                arr.shape().to_vec(),
+                            )
+                        })
+                        .collect();
+                    match dsperse::backend::onnx::run_inference_multi(
+                        std::path::Path::new(&onnx_path),
+                        &inputs,
+                    ) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX multi-input inference failed");
+                            self.teardown_run(run_uid).await;
+                            return;
+                        }
+                    }
+                } else {
+                    let input_flat: Vec<f64> = slice_info.input_tensor.iter().copied().collect();
+                    let input_shape: Vec<usize> = slice_info.input_tensor.shape().to_vec();
+                    match dsperse::backend::onnx::run_inference(
+                        std::path::Path::new(&onnx_path),
+                        &input_flat,
+                        &input_shape,
+                    ) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference failed");
+                            self.teardown_run(run_uid).await;
+                            return;
+                        }
                     }
                 };
                 let output_tensor = match ndarray::ArrayD::from_shape_vec(
