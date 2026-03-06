@@ -164,7 +164,7 @@ jobs:
           PYEOF
 
       - name: Dump logs on failure
-        if: failure()
+        if: always()
         run: |
           echo "=== VALIDATOR LOG (last 200 lines) ==="
           tail -200 /tmp/validator.log || true
