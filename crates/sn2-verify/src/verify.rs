@@ -53,17 +53,17 @@ fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
     let layered = deserialize_circuit_bn254(&circuit_bytes)
         .map_err(|e| anyhow::anyhow!("deserializing circuit {circuit_path}: {e}"))?;
 
+    let arc = Arc::new(layered);
+    let mut cache = CIRCUIT_CACHE.lock().unwrap();
+    if let Some(existing) = cache.get(circuit_path) {
+        return Ok(Arc::clone(existing));
+    }
     info!(
         path = %circuit_path,
         size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),
         "cached deserialized layered circuit"
     );
-
-    let arc = Arc::new(layered);
-    CIRCUIT_CACHE
-        .lock()
-        .unwrap()
-        .insert(circuit_path.to_string(), Arc::clone(&arc));
+    cache.insert(circuit_path.to_string(), Arc::clone(&arc));
     Ok(arc)
 }
 
