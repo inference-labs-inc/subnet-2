@@ -71,6 +71,7 @@ jobs:
           PYO3_PYTHON: python3
           SN2_RELEASE_CHANNEL: ${{ inputs.release-channel }}
           SN2_VERSION: ${{ inputs.version }}
+          OPENSSL_NO_VENDOR: "1"
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
 
