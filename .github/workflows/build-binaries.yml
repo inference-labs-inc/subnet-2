@@ -46,8 +46,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm pkg-config libssl-dev libudev-dev protobuf-compiler python3-dev mold
-          clang --version
+          sudo apt-get install -y pkg-config libssl-dev libudev-dev protobuf-compiler python3-dev mold
           mold --version
           protoc --version
 
@@ -72,9 +71,7 @@ jobs:
           PYO3_PYTHON: python3
           SN2_RELEASE_CHANNEL: ${{ inputs.release-channel }}
           SN2_VERSION: ${{ inputs.version }}
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: clang
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
 
       - name: Show sccache stats
