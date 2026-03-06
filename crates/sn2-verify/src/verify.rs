@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::{Context, Result};
@@ -15,10 +16,13 @@ static CIRCUIT_CACHE: LazyLock<Mutex<HashMap<String, Arc<LayeredCircuitBN254>>>>
 static LOADING_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+static EVICTION_GEN: AtomicU64 = AtomicU64::new(0);
+
 use crate::protocol::{StoreResponse, VerifyAndStoreRequest, VerifyRequest, VerifyResponse};
 use crate::store::{StoredTile, TileStore};
 
 pub fn evict_circuit_cache(path_prefix: &str) {
+    EVICTION_GEN.fetch_add(1, Ordering::SeqCst);
     let mut cache = CIRCUIT_CACHE.lock().unwrap();
     let before = cache.len();
     cache.retain(|k, _| !k.starts_with(path_prefix));
@@ -26,20 +30,16 @@ pub fn evict_circuit_cache(path_prefix: &str) {
     if evicted > 0 {
         info!(prefix = %path_prefix, evicted, remaining = cache.len(), "evicted circuit cache entries");
     }
-    LOADING_LOCKS
-        .lock()
-        .unwrap()
-        .retain(|k, _| !k.starts_with(path_prefix));
 }
 
 pub fn clear_circuit_cache() {
+    EVICTION_GEN.fetch_add(1, Ordering::SeqCst);
     let mut cache = CIRCUIT_CACHE.lock().unwrap();
     let count = cache.len();
     cache.clear();
     if count > 0 {
         info!(cleared = count, "cleared circuit cache");
     }
-    LOADING_LOCKS.lock().unwrap().clear();
 }
 
 fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
@@ -63,19 +63,22 @@ fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
         }
     }
 
-    let load_result = (|| -> Result<Arc<LayeredCircuitBN254>> {
-        let circuit_bytes = if std::path::Path::new(circuit_path).is_dir() {
-            let bundle = read_circuit_msgpack(circuit_path)
-                .map_err(|e| anyhow::anyhow!("reading bundle {circuit_path}: {e}"))?;
-            bundle.circuit
-        } else {
-            std::fs::read(circuit_path).with_context(|| format!("reading {circuit_path}"))?
-        };
+    let gen_before = EVICTION_GEN.load(Ordering::SeqCst);
 
-        let layered = deserialize_circuit_bn254(&circuit_bytes)
-            .map_err(|e| anyhow::anyhow!("deserializing circuit {circuit_path}: {e}"))?;
+    let circuit_bytes = if std::path::Path::new(circuit_path).is_dir() {
+        let bundle = read_circuit_msgpack(circuit_path)
+            .map_err(|e| anyhow::anyhow!("reading bundle {circuit_path}: {e}"))?;
+        bundle.circuit
+    } else {
+        std::fs::read(circuit_path).with_context(|| format!("reading {circuit_path}"))?
+    };
 
-        let arc = Arc::new(layered);
+    let layered = deserialize_circuit_bn254(&circuit_bytes)
+        .map_err(|e| anyhow::anyhow!("deserializing circuit {circuit_path}: {e}"))?;
+
+    let arc = Arc::new(layered);
+
+    if EVICTION_GEN.load(Ordering::SeqCst) == gen_before {
         let mut cache = CIRCUIT_CACHE.lock().unwrap();
         info!(
             path = %circuit_path,
@@ -83,20 +86,14 @@ fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
             "cached deserialized layered circuit"
         );
         cache.insert(circuit_path.to_string(), Arc::clone(&arc));
-        Ok(arc)
-    })();
-
-    if load_result.is_err() {
-        let mut loading = LOADING_LOCKS.lock().unwrap();
-        if loading
-            .get(circuit_path)
-            .is_some_and(|existing| Arc::ptr_eq(existing, &path_lock))
-        {
-            loading.remove(circuit_path);
-        }
+    } else {
+        info!(
+            path = %circuit_path,
+            "eviction occurred during load, skipping cache insert"
+        );
     }
 
-    load_result
+    Ok(arc)
 }
 
 pub struct VerifyResult {
