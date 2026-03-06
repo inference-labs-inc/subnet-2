@@ -2677,4 +2677,17 @@ mod tests {
         assert!(is_valid_ip("100.63.255.255"));
         assert!(is_valid_ip("100.128.0.1"));
     }
+
+    #[test]
+    fn event_slice_num_plain() {
+        assert_eq!(event_slice_num("slice_0", false, None), "slice_0");
+        assert_eq!(event_slice_num("slice_3", false, Some(2)), "slice_3");
+        assert_eq!(event_slice_num("slice_0", true, None), "slice_0");
+    }
+
+    #[test]
+    fn event_slice_num_tiled() {
+        assert_eq!(event_slice_num("slice_0", true, Some(0)), "slice_0_tile_0");
+        assert_eq!(event_slice_num("slice_2", true, Some(7)), "slice_2_tile_7");
+    }
 }
