@@ -31,10 +31,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || 'testnet' }}
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -50,42 +46,6 @@ jobs:
 
       - name: Build release binaries
         run: cargo build --workspace --release --locked
-
-      - name: Get year-month for circuit cache key
-        run: echo "YEARMONTH=$(date +'%Y-%m')" >> $GITHUB_ENV
-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.bittensor/subnet-2/circuit_cache
-          key: circuit-${{ runner.os }}-${{ env.YEARMONTH }}
-          restore-keys: circuit-${{ runner.os }}-
-
-      - name: Seed test circuit
-        id: seed
-        run: |
-          CIRCUIT_ID=$(python tools/ci_loopback_seed.py)
-          echo "circuit_id=${CIRCUIT_ID}" >> $GITHUB_OUTPUT
-          echo "Seeded circuit: ${CIRCUIT_ID}"
-
-      - name: Start mock circuit API
-        run: python tools/mock_circuit_api.py 18080 &
-
-      - name: Wait for mock circuit API
-        run: |
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:18080/circuits > /dev/null && break
-            sleep 1
-          done
-          curl -sf http://localhost:18080/circuits > /dev/null || \
-            (echo "Mock API failed to start" && exit 1)
-
-      - name: Activate test circuit
-        run: |
-          RESULT=$(curl -sf -X POST \
-            "http://localhost:18080/admin/activate/${{ steps.seed.outputs.circuit_id }}")
-          echo "Activate response: $RESULT"
-          echo "$RESULT" | python3 -c \
-            "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'activated' in d else 1)"
 
       - name: Start miner in loopback
         run: |
@@ -111,7 +71,7 @@ jobs:
           ./target/release/sn2-validator \
             --loopback \
             --miner-address 127.0.0.1:8091 \
-            --circuit-api-url http://localhost:18080 \
+            --circuit-api-url https://repository.inferencelabs.com \
             --metrics-port 9090 \
             --max-concurrency 4 \
             --log-level info \

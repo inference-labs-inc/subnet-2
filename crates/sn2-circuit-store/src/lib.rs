@@ -40,6 +40,7 @@ impl CircuitStore {
             cache_dir: PathBuf::from(cache_dir),
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
+                .user_agent(concat!("sn2-circuit-store/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .unwrap_or_default(),
             loopback,
