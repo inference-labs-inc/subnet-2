@@ -6,11 +6,12 @@ use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use jstprove_circuits::onnx::{
-    deserialize_circuit_bn254, verify_and_extract_bn254_with_layered, LayeredCircuitBN254,
+    deserialize_circuit_bn254, flatten_circuit_bn254, verify_and_extract_bn254_with_flat_ref,
+    FlatCircuitBN254,
 };
 use jstprove_circuits::runner::main_runner::read_circuit_msgpack;
 
-static CIRCUIT_CACHE: LazyLock<Mutex<HashMap<String, Arc<LayeredCircuitBN254>>>> =
+static CIRCUIT_CACHE: LazyLock<Mutex<HashMap<String, Arc<FlatCircuitBN254>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 static LOADING_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
@@ -42,7 +43,7 @@ pub fn clear_circuit_cache() {
     }
 }
 
-fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
+fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
     {
         let cache = CIRCUIT_CACHE.lock().unwrap();
         if let Some(cached) = cache.get(circuit_path) {
@@ -76,14 +77,17 @@ fn get_or_load_layered(circuit_path: &str) -> Result<Arc<LayeredCircuitBN254>> {
     let layered = deserialize_circuit_bn254(&circuit_bytes)
         .with_context(|| format!("deserializing circuit {circuit_path}"))?;
 
-    let arc = Arc::new(layered);
+    let flat = flatten_circuit_bn254(&layered);
+    drop(layered);
+
+    let arc = Arc::new(flat);
 
     if EVICTION_GEN.load(Ordering::SeqCst) == gen_before {
         let mut cache = CIRCUIT_CACHE.lock().unwrap();
         info!(
             path = %circuit_path,
             size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),
-            "cached deserialized layered circuit"
+            "cached flattened circuit"
         );
         cache.insert(circuit_path.to_string(), Arc::clone(&arc));
     } else {
@@ -117,12 +121,12 @@ pub async fn verify_inner(
     let expected_inputs = expected_inputs.clone();
 
     tokio::task::spawn_blocking(move || {
-        let layered = get_or_load_layered(&circuit_path)?;
+        let cached = get_or_load_flat(&circuit_path)?;
         let witness_bytes = hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
         let proof_bytes = hex::decode(proof_hex.trim()).context("hex-decoding proof")?;
 
-        let result = verify_and_extract_bn254_with_layered(
-            &layered,
+        let result = verify_and_extract_bn254_with_flat_ref(
+            &cached,
             &witness_bytes,
             &proof_bytes,
             num_inputs,

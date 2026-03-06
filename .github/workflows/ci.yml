@@ -33,13 +33,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm pkg-config libssl-dev libudev-dev protobuf-compiler
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-registry-
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
 
       - run: cargo clippy --workspace --locked -- -D warnings
 
@@ -59,13 +53,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm pkg-config libssl-dev libudev-dev protobuf-compiler
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-registry-
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
 
       - run: cargo test --workspace --locked
 
