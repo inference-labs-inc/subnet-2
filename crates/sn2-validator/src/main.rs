@@ -1,5 +1,9 @@
 #![feature(ip)]
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 mod cli;
 mod config;
 mod dsperse_events;

@@ -52,3 +52,4 @@ openssl = { version = "0.10", features = ["vendored"] }
 dsperse = { git = "https://github.com/inference-labs-inc/dsperse", rev = "d3195a1" }
 ndarray = { version = "0.16", features = ["serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+tikv-jemallocator = "0.6"
