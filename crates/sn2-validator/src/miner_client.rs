@@ -256,8 +256,7 @@ impl MinerQueryClient {
         let stats = match self.lightning.get_connection_stats().await {
             Ok(s) => s,
             Err(e) => {
-                warn!(error = %e, "failed to read connection stats for transport seeding");
-                self.clear_transport_cache();
+                warn!(error = %e, "failed to read connection stats, preserving existing cache");
                 return;
             }
         };
