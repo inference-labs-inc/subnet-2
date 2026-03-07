@@ -50,6 +50,40 @@ impl WeightsSetter {
         Ok(client.blocks().at_latest().await?.number() as u64)
     }
 
+    pub async fn query_commit_params(
+        &self,
+        client: &OnlineClient<PolkadotConfig>,
+    ) -> Result<(u64, u64, u64)> {
+        let block = client.blocks().at_latest().await?;
+        let current_block = block.number() as u64;
+        let storage = client.storage().at(block.reference());
+
+        let tempo_query = subxt::dynamic::storage(
+            "SubtensorModule",
+            "Tempo",
+            vec![Value::from(self.netuid as u64)],
+        );
+        let reveal_query = subxt::dynamic::storage(
+            "SubtensorModule",
+            "RevealPeriodEpochs",
+            vec![Value::from(self.netuid as u64)],
+        );
+
+        let (tempo_res, reveal_res) =
+            tokio::join!(storage.fetch(&tempo_query), storage.fetch(&reveal_query));
+
+        let tempo = match tempo_res? {
+            Some(val) => val.to_value()?.as_u128().unwrap_or(360) as u64,
+            None => 360,
+        };
+        let reveal_period = match reveal_res? {
+            Some(val) => val.to_value()?.as_u128().unwrap_or(1) as u64,
+            None => 1,
+        };
+
+        Ok((tempo, reveal_period, current_block))
+    }
+
     pub fn generate_timelocked_commit(
         &self,
         tempo: u64,

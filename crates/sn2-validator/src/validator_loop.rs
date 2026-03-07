@@ -36,7 +36,7 @@ fn event_slice_num(slice_num: &str, is_tile: bool, tile_idx: Option<u32>) -> Str
 
 enum WeightTaskResult {
     CommitSuccess,
-    CommitFailed(String),
+    CommitFailed(anyhow::Error),
 }
 
 enum RetryPayload {
@@ -2028,7 +2028,13 @@ impl ValidatorLoop {
                         info!("timelocked weights committed, chain will auto-reveal at epoch boundary");
                     }
                     Ok(WeightTaskResult::CommitFailed(e)) => {
-                        warn!(error = %e, "weight commit failed");
+                        if sn2_chain::is_rpc_disconnect(&e) {
+                            warn!(error = ?e, "chain RPC disconnected during weight commit, reconnecting");
+                            if let Err(re) = self.config.reconnect_chain_client().await {
+                                warn!(error = ?re, "chain reconnect failed after weight commit RPC disconnect");
+                            }
+                        }
+                        warn!(error = ?e, "weight commit failed");
                     }
                     Err(e) => {
                         warn!(error = %e, "weight task panicked");
@@ -2388,14 +2394,10 @@ impl ValidatorLoop {
         let version_key = WEIGHTS_VERSION as u64;
         let hotkey_bytes = wallet.hotkey_public_bytes()?.to_vec();
 
-        let (tempo, reveal_period, current_block) = tokio::join!(
-            self.weights_setter.query_tempo(chain_client),
-            self.weights_setter.query_reveal_period(chain_client),
-            self.weights_setter.current_block(chain_client),
-        );
-        let tempo = tempo?;
-        let reveal_period = reveal_period?;
-        let current_block = current_block?;
+        let (tempo, reveal_period, current_block) = self
+            .weights_setter
+            .query_commit_params(chain_client)
+            .await?;
 
         let (ct_bytes, reveal_round) = self.weights_setter.generate_timelocked_commit(
             tempo,
@@ -2431,7 +2433,7 @@ impl ValidatorLoop {
                 .await
             {
                 Ok(()) => WeightTaskResult::CommitSuccess,
-                Err(e) => WeightTaskResult::CommitFailed(e.to_string()),
+                Err(e) => WeightTaskResult::CommitFailed(e),
             }
         });
 
@@ -2453,7 +2455,7 @@ impl ValidatorLoop {
                     info!("timelocked weight commit succeeded during shutdown");
                 }
                 Ok(WeightTaskResult::CommitFailed(e)) => {
-                    warn!(error = %e, "weight commit failed during shutdown");
+                    warn!(error = ?e, "weight commit failed during shutdown");
                 }
                 Err(e) => {
                     warn!(error = %e, "weight task panicked during shutdown");
