@@ -36,7 +36,6 @@ jobs:
             runner: ubuntu-22.04-arm
     env:
       SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: ${{ hashFiles('Cargo.lock') }}
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"
     steps:
@@ -66,6 +65,7 @@ jobs:
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
         env:
+          SCCACHE_GHA_VERSION: ${{ hashFiles('Cargo.lock') }}
           PYO3_PYTHON: python3
           SN2_RELEASE_CHANNEL: ${{ inputs.release-channel }}
           SN2_VERSION: ${{ inputs.version }}
@@ -93,7 +93,6 @@ jobs:
     runs-on: ${{ inputs.macos-runner }}
     env:
       SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: ${{ hashFiles('Cargo.lock') }}
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"
     steps:
@@ -132,6 +131,7 @@ jobs:
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
         env:
+          SCCACHE_GHA_VERSION: ${{ hashFiles('Cargo.lock') }}
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
           SN2_RELEASE_CHANNEL: ${{ inputs.release-channel }}
           SN2_VERSION: ${{ inputs.version }}
