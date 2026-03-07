@@ -36,6 +36,7 @@ jobs:
             runner: ubuntu-22.04-arm
     env:
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: ${{ hashFiles('Cargo.lock') }}
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"
     steps:
@@ -61,9 +62,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: linux-registry-${{ hashFiles('Cargo.lock') }}-${{ matrix.arch }}
-          restore-keys: |
-            linux-registry-${{ hashFiles('Cargo.lock') }}-
-            linux-registry-
 
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
@@ -95,6 +93,7 @@ jobs:
     runs-on: ${{ inputs.macos-runner }}
     env:
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: ${{ hashFiles('Cargo.lock') }}
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"
     steps:
@@ -129,7 +128,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: macos-aarch64-registry-${{ hashFiles('Cargo.lock') }}
-          restore-keys: macos-aarch64-registry-
 
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
