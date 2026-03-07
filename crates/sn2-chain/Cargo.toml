@@ -20,3 +20,4 @@ semver = { workspace = true }
 openssl = { workspace = true }
 futures-util = { workspace = true }
 parity-scale-codec = { version = "3", features = ["derive"] }
+bittensor-drand = { workspace = true }

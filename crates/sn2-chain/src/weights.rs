@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use parity_scale_codec::Encode;
-use sp_core::hashing::blake2_256;
 use subxt::dynamic::Value;
 use subxt::tx::Signer;
 use subxt::{OnlineClient, PolkadotConfig};
@@ -10,13 +8,7 @@ use tracing::info;
 
 use crate::wallet::Wallet;
 
-pub struct PendingReveal {
-    pub uids: Vec<u16>,
-    pub values: Vec<u16>,
-    pub salt: Vec<u16>,
-    pub version_key: u64,
-    pub commit_block: u64,
-}
+const BLOCK_TIME: f64 = 12.0;
 
 #[derive(Clone)]
 pub struct WeightsSetter {
@@ -26,18 +18,6 @@ pub struct WeightsSetter {
 impl WeightsSetter {
     pub fn new(netuid: u16) -> Self {
         Self { netuid }
-    }
-
-    pub fn compute_commit_hash(
-        hotkey_account: &subxt::utils::AccountId32,
-        netuid: u16,
-        uids: &[u16],
-        values: &[u16],
-        salt: &[u16],
-        version_key: u64,
-    ) -> [u8; 32] {
-        let payload = (hotkey_account.0, netuid, uids, values, salt, version_key).encode();
-        blake2_256(&payload)
     }
 
     pub async fn query_tempo(&self, client: &OnlineClient<PolkadotConfig>) -> Result<u64> {
@@ -70,81 +50,45 @@ impl WeightsSetter {
         Ok(client.blocks().at_latest().await?.number() as u64)
     }
 
-    pub fn get_reveal_blocks(
-        netuid: u16,
+    pub fn generate_timelocked_commit(
+        &self,
         tempo: u64,
         reveal_period: u64,
-        commit_block: u64,
-    ) -> (u64, u64) {
-        let tempo_plus_one = tempo + 1;
-        let netuid_offset = netuid as u64 + 1;
-        let commit_epoch = (commit_block + netuid_offset) / tempo_plus_one;
-        let reveal_epoch = commit_epoch + reveal_period;
-        let first_reveal_block = reveal_epoch * tempo_plus_one - netuid_offset;
-        let last_reveal_block = first_reveal_block + tempo;
-        (first_reveal_block, last_reveal_block)
-    }
-
-    pub async fn commit_weights(
-        &self,
-        client: &OnlineClient<PolkadotConfig>,
-        wallet: &Arc<Wallet>,
-        commit_hash: &[u8; 32],
-    ) -> Result<u64> {
-        let tx = subxt::dynamic::tx(
-            "SubtensorModule",
-            "commit_weights",
-            vec![
-                Value::from(self.netuid as u64),
-                Value::from_bytes(commit_hash),
-            ],
-        );
-
-        let signer = SubxtSr25519Signer::new(wallet)?;
-
-        let result = client
-            .tx()
-            .sign_and_submit_then_watch_default(&tx, &signer)
-            .await
-            .context("submitting commit_weights")?
-            .wait_for_finalized_success()
-            .await
-            .context("commit_weights finalization")?;
-
-        let block = client.blocks().at_latest().await?.number() as u64;
-        info!(block = block, hash = %result.extrinsic_hash(), "weights committed");
-        Ok(block)
-    }
-
-    pub async fn reveal_weights(
-        &self,
-        client: &OnlineClient<PolkadotConfig>,
-        wallet: &Arc<Wallet>,
-        uids: &[u16],
-        values: &[u16],
-        salt: &[u16],
+        current_block: u64,
+        hotkey_bytes: Vec<u8>,
+        uids: Vec<u16>,
+        values: Vec<u16>,
         version_key: u64,
+    ) -> Result<(Vec<u8>, u64)> {
+        bittensor_drand::generate_commit(
+            uids,
+            values,
+            version_key,
+            tempo,
+            current_block,
+            self.netuid,
+            reveal_period,
+            BLOCK_TIME,
+            hotkey_bytes,
+        )
+        .map_err(|(_, msg)| anyhow::anyhow!("tlock encryption failed: {msg}"))
+    }
+
+    pub async fn commit_timelocked_weights(
+        &self,
+        client: &OnlineClient<PolkadotConfig>,
+        wallet: &Arc<Wallet>,
+        commit_bytes: Vec<u8>,
+        reveal_round: u64,
     ) -> Result<()> {
-        anyhow::ensure!(
-            uids.len() == values.len(),
-            "reveal_weights: length mismatch uids={} values={}",
-            uids.len(),
-            values.len(),
-        );
-
-        let uid_vals: Vec<Value> = uids.iter().map(|&u| Value::from(u as u64)).collect();
-        let weight_vals: Vec<Value> = values.iter().map(|&w| Value::from(w as u64)).collect();
-        let salt_vals: Vec<Value> = salt.iter().map(|&s| Value::from(s as u64)).collect();
-
         let tx = subxt::dynamic::tx(
             "SubtensorModule",
-            "reveal_weights",
+            "commit_timelocked_weights",
             vec![
                 Value::from(self.netuid as u64),
-                Value::unnamed_composite(uid_vals),
-                Value::unnamed_composite(weight_vals),
-                Value::unnamed_composite(salt_vals),
-                Value::from(version_key),
+                Value::from_bytes(&commit_bytes),
+                Value::from(reveal_round),
+                Value::from(4u64),
             ],
         );
 
@@ -154,12 +98,16 @@ impl WeightsSetter {
             .tx()
             .sign_and_submit_then_watch_default(&tx, &signer)
             .await
-            .context("submitting reveal_weights")?
+            .context("submitting commit_timelocked_weights")?
             .wait_for_finalized_success()
             .await
-            .context("reveal_weights finalization")?;
+            .context("commit_timelocked_weights finalization")?;
 
-        info!(block = %result.extrinsic_hash(), "weights revealed");
+        info!(
+            hash = %result.extrinsic_hash(),
+            reveal_round = reveal_round,
+            "timelocked weights committed"
+        );
         Ok(())
     }
 
@@ -226,41 +174,115 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_reveal_blocks_basic_calculation() {
-        let commit_block = 1000u64;
-        let (first, last) = WeightsSetter::get_reveal_blocks(2, 360, 1, commit_block);
-        assert_eq!(first, 1080);
-        assert_eq!(last, 1440);
+    fn generate_timelocked_commit_produces_ciphertext() {
+        let setter = WeightsSetter::new(2);
+        let (ct, round) = setter
+            .generate_timelocked_commit(
+                360,
+                1,
+                1000,
+                vec![1u8; 32],
+                vec![1, 2, 3],
+                vec![100, 200, 300],
+                11003,
+            )
+            .expect("tlock encryption should succeed");
+        assert!(!ct.is_empty());
+        assert!(round > 0);
+    }
+
+    #[test]
+    fn generate_timelocked_commit_different_inputs_differ() {
+        let setter = WeightsSetter::new(2);
+        let (ct1, _) = setter
+            .generate_timelocked_commit(
+                360,
+                1,
+                1000,
+                vec![1u8; 32],
+                vec![1, 2],
+                vec![100, 200],
+                11003,
+            )
+            .unwrap();
+        let (ct2, _) = setter
+            .generate_timelocked_commit(
+                360,
+                1,
+                1000,
+                vec![1u8; 32],
+                vec![1, 3],
+                vec![100, 200],
+                11003,
+            )
+            .unwrap();
+        assert_ne!(ct1, ct2);
+    }
+
+    #[test]
+    fn generate_timelocked_commit_different_netuids_differ() {
+        let setter1 = WeightsSetter::new(1);
+        let setter2 = WeightsSetter::new(2);
+        let args = (
+            360u64,
+            1u64,
+            1000u64,
+            vec![1u8; 32],
+            vec![1u16, 2],
+            vec![100u16, 200],
+            11003u64,
+        );
+        let (_, round1) = setter1
+            .generate_timelocked_commit(
+                args.0,
+                args.1,
+                args.2,
+                args.3.clone(),
+                args.4.clone(),
+                args.5.clone(),
+                args.6,
+            )
+            .unwrap();
+        let (_, round2) = setter2
+            .generate_timelocked_commit(args.0, args.1, args.2, args.3, args.4, args.5, args.6)
+            .unwrap();
+        assert_ne!(round1, round2);
+    }
+
+    #[test]
+    fn generate_timelocked_commit_reveal_round_increases_with_reveal_period() {
+        let setter = WeightsSetter::new(2);
+        let (_, round_1epoch) = setter
+            .generate_timelocked_commit(360, 1, 1000, vec![1u8; 32], vec![1], vec![100], 11003)
+            .unwrap();
+        let (_, round_3epochs) = setter
+            .generate_timelocked_commit(360, 3, 1000, vec![1u8; 32], vec![1], vec![100], 11003)
+            .unwrap();
         assert!(
-            commit_block < first,
-            "commit block must precede reveal window"
+            round_3epochs > round_1epoch,
+            "longer reveal period should produce later drand round"
         );
     }
 
     #[test]
-    fn compute_commit_hash_deterministic() {
-        let account = subxt::utils::AccountId32::from([1u8; 32]);
-        let h1 = WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[42], 1);
-        let h2 = WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[42], 1);
-        assert_eq!(h1, h2);
+    fn generate_timelocked_commit_empty_weights() {
+        let setter = WeightsSetter::new(2);
+        let (ct, round) = setter
+            .generate_timelocked_commit(360, 1, 1000, vec![1u8; 32], vec![], vec![], 11003)
+            .unwrap();
+        assert!(!ct.is_empty());
+        assert!(round > 0);
     }
 
     #[test]
-    fn compute_commit_hash_varies_with_each_field() {
-        let account = subxt::utils::AccountId32::from([1u8; 32]);
-        let account2 = subxt::utils::AccountId32::from([2u8; 32]);
-        let base = WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[42], 1);
-
-        let cases: Vec<[u8; 32]> = vec![
-            WeightsSetter::compute_commit_hash(&account2, 2, &[1, 2], &[100, 200], &[42], 1),
-            WeightsSetter::compute_commit_hash(&account, 3, &[1, 2], &[100, 200], &[42], 1),
-            WeightsSetter::compute_commit_hash(&account, 2, &[1, 3], &[100, 200], &[42], 1),
-            WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 201], &[42], 1),
-            WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[99], 1),
-            WeightsSetter::compute_commit_hash(&account, 2, &[1, 2], &[100, 200], &[42], 2),
-        ];
-        for (i, h) in cases.iter().enumerate() {
-            assert_ne!(&base, h, "variation {i} should produce a different hash");
-        }
+    fn generate_timelocked_commit_large_uid_set() {
+        let setter = WeightsSetter::new(2);
+        let uids: Vec<u16> = (0..256).collect();
+        let values: Vec<u16> = (0..256).map(|i| (i * 100) as u16).collect();
+        let (ct, round) = setter
+            .generate_timelocked_commit(360, 1, 50000, vec![2u8; 32], uids, values, 11003)
+            .unwrap();
+        assert!(!ct.is_empty());
+        assert!(round > 0);
     }
 }

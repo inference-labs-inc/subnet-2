@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use btlightning::QuicAxonInfo;
-use sn2_chain::{PendingReveal, WeightsSetter};
+use sn2_chain::WeightsSetter;
 use sn2_types::*;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{watch, Notify, RwLock};
@@ -35,10 +35,8 @@ fn event_slice_num(slice_num: &str, is_tile: bool, tile_idx: Option<u32>) -> Str
 }
 
 enum WeightTaskResult {
-    Committed(PendingReveal),
+    CommitSuccess,
     CommitFailed(String),
-    Revealed,
-    RevealFailed(String),
 }
 
 enum RetryPayload {
@@ -107,7 +105,6 @@ pub struct ValidatorLoop {
     proof_uploader: Option<Arc<ProofUploader>>,
     benchmark_in_flight: usize,
     upload_tasks: JoinSet<()>,
-    pending_reveal: Option<PendingReveal>,
     weight_tasks: JoinSet<WeightTaskResult>,
     dsperse_benchmark_backoff_until: Instant,
     stats_reporter: Option<StatsReporter>,
@@ -251,7 +248,6 @@ impl ValidatorLoop {
             proof_uploader,
             benchmark_in_flight: 0,
             upload_tasks: JoinSet::new(),
-            pending_reveal: None,
             weight_tasks: JoinSet::new(),
             dsperse_benchmark_backoff_until: now,
             stats_reporter,
@@ -2026,23 +2022,13 @@ impl ValidatorLoop {
         if !self.config.loopback {
             while let Some(result) = self.weight_tasks.try_join_next() {
                 match result {
-                    Ok(WeightTaskResult::Committed(pending)) => {
-                        info!(
-                            commit_block = pending.commit_block,
-                            "weight commit submitted, awaiting reveal window"
-                        );
-                        self.pending_reveal = Some(pending);
+                    Ok(WeightTaskResult::CommitSuccess) => {
+                        self.performance_tracker.save();
+                        metrics::record_weight_update();
+                        info!("timelocked weights committed, chain will auto-reveal at epoch boundary");
                     }
                     Ok(WeightTaskResult::CommitFailed(e)) => {
                         warn!(error = %e, "weight commit failed");
-                    }
-                    Ok(WeightTaskResult::Revealed) => {
-                        self.performance_tracker.save();
-                        metrics::record_weight_update();
-                        info!("weights revealed on chain");
-                    }
-                    Ok(WeightTaskResult::RevealFailed(e)) => {
-                        warn!(error = %e, "weight reveal failed");
                     }
                     Err(e) => {
                         warn!(error = %e, "weight task panicked");
@@ -2055,24 +2041,10 @@ impl ValidatorLoop {
                 self.last_metagraph_sync = now;
             }
 
-            let weight_op_in_flight = !self.weight_tasks.is_empty();
-
-            if self.pending_reveal.is_some() && !weight_op_in_flight {
-                if let Err(e) = self.try_reveal_weights().await {
-                    if sn2_chain::is_rpc_disconnect(&e) {
-                        warn!(error = ?e, "chain RPC disconnected during weight reveal, reconnecting");
-                        if let Err(re) = self.config.reconnect_chain_client().await {
-                            warn!(error = ?re, "chain reconnect failed after weight reveal RPC disconnect");
-                        }
-                    }
-                    warn!(error = ?e, "weight reveal failed, will retry next cycle");
-                }
-            }
-
             if now.duration_since(self.last_weight_update)
                 > Duration::from_secs(WEIGHT_UPDATE_POLL_SECS)
             {
-                if self.pending_reveal.is_none() && !weight_op_in_flight {
+                if self.weight_tasks.is_empty() {
                     match self.update_weights().await {
                         Ok(()) => {}
                         Err(e) => {
@@ -2353,85 +2325,6 @@ impl ValidatorLoop {
         Ok(())
     }
 
-    async fn try_reveal_weights(&mut self) -> Result<()> {
-        let reveal = match &self.pending_reveal {
-            Some(r) => r,
-            None => return Ok(()),
-        };
-
-        let chain_client = self
-            .config
-            .chain_client
-            .as_ref()
-            .context("try_reveal_weights requires chain_client")?;
-
-        let (tempo, reveal_period, current_block) = tokio::join!(
-            self.weights_setter.query_tempo(chain_client),
-            self.weights_setter.query_reveal_period(chain_client),
-            self.weights_setter.current_block(chain_client),
-        );
-        let tempo = tempo?;
-        let reveal_period = reveal_period?;
-        let current_block = current_block?;
-
-        let (first_reveal, last_reveal) = WeightsSetter::get_reveal_blocks(
-            self.config.netuid,
-            tempo,
-            reveal_period,
-            reveal.commit_block,
-        );
-
-        if current_block < first_reveal {
-            return Ok(());
-        }
-
-        if current_block > last_reveal {
-            warn!(
-                commit_block = reveal.commit_block,
-                first_reveal = first_reveal,
-                last_reveal = last_reveal,
-                current_block = current_block,
-                "reveal window expired, discarding pending commit"
-            );
-            self.pending_reveal = None;
-            return Ok(());
-        }
-
-        let Some(reveal) = self.pending_reveal.take() else {
-            return Ok(());
-        };
-        let setter = self.weights_setter.clone();
-        let client = self
-            .config
-            .chain_client
-            .clone()
-            .context("try_reveal_weights requires chain_client")?;
-        let wallet = self
-            .config
-            .wallet
-            .clone()
-            .context("try_reveal_weights requires wallet")?;
-
-        self.weight_tasks.spawn(async move {
-            match setter
-                .reveal_weights(
-                    &client,
-                    &wallet,
-                    &reveal.uids,
-                    &reveal.values,
-                    &reveal.salt,
-                    reveal.version_key,
-                )
-                .await
-            {
-                Ok(()) => WeightTaskResult::Revealed,
-                Err(e) => WeightTaskResult::RevealFailed(e.to_string()),
-            }
-        });
-
-        Ok(())
-    }
-
     async fn update_weights(&mut self) -> Result<()> {
         let chain_client = self
             .config
@@ -2492,19 +2385,32 @@ impl ValidatorLoop {
             return Ok(());
         }
 
-        let salt: Vec<u16> = (0..weight_uids.len())
-            .map(|_| rand::Rng::gen(&mut rand::thread_rng()))
-            .collect();
         let version_key = WEIGHTS_VERSION as u64;
+        let hotkey_bytes = wallet.hotkey_public_bytes()?.to_vec();
 
-        let hotkey_account = wallet.hotkey_account_id()?;
-        let hash = WeightsSetter::compute_commit_hash(
-            &hotkey_account,
-            self.config.netuid,
-            &weight_uids,
-            &weights,
-            &salt,
+        let (tempo, reveal_period, current_block) = tokio::join!(
+            self.weights_setter.query_tempo(chain_client),
+            self.weights_setter.query_reveal_period(chain_client),
+            self.weights_setter.current_block(chain_client),
+        );
+        let tempo = tempo?;
+        let reveal_period = reveal_period?;
+        let current_block = current_block?;
+
+        let (ct_bytes, reveal_round) = self.weights_setter.generate_timelocked_commit(
+            tempo,
+            reveal_period,
+            current_block,
+            hotkey_bytes,
+            weight_uids,
+            weights,
             version_key,
+        )?;
+
+        info!(
+            reveal_round = reveal_round,
+            ct_len = ct_bytes.len(),
+            "tlock encryption complete, submitting commit"
         );
 
         let setter = self.weights_setter.clone();
@@ -2520,19 +2426,15 @@ impl ValidatorLoop {
             .context("update_weights requires wallet")?;
 
         self.weight_tasks.spawn(async move {
-            match setter.commit_weights(&client, &wallet, &hash).await {
-                Ok(commit_block) => WeightTaskResult::Committed(PendingReveal {
-                    uids: weight_uids,
-                    values: weights,
-                    salt,
-                    version_key,
-                    commit_block,
-                }),
+            match setter
+                .commit_timelocked_weights(&client, &wallet, ct_bytes, reveal_round)
+                .await
+            {
+                Ok(()) => WeightTaskResult::CommitSuccess,
                 Err(e) => WeightTaskResult::CommitFailed(e.to_string()),
             }
         });
 
-        info!("weight commit spawned");
         Ok(())
     }
 
@@ -2547,17 +2449,11 @@ impl ValidatorLoop {
         info!("draining in-flight weight tasks");
         while let Some(result) = self.weight_tasks.join_next().await {
             match result {
-                Ok(WeightTaskResult::Committed(pending)) => {
-                    self.pending_reveal = Some(pending);
+                Ok(WeightTaskResult::CommitSuccess) => {
+                    info!("timelocked weight commit succeeded during shutdown");
                 }
                 Ok(WeightTaskResult::CommitFailed(e)) => {
                     warn!(error = %e, "weight commit failed during shutdown");
-                }
-                Ok(WeightTaskResult::Revealed) => {
-                    info!("weights revealed during shutdown");
-                }
-                Ok(WeightTaskResult::RevealFailed(e)) => {
-                    warn!(error = %e, "weight reveal failed during shutdown");
                 }
                 Err(e) => {
                     warn!(error = %e, "weight task panicked during shutdown");
