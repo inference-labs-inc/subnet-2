@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use subxt::dynamic::Value;
@@ -9,6 +10,8 @@ use tracing::info;
 use crate::wallet::Wallet;
 
 const BLOCK_TIME: f64 = 12.0;
+const TX_SUBMIT_TIMEOUT: Duration = Duration::from_secs(30);
+const TX_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Clone)]
 pub struct WeightsSetter {
@@ -128,14 +131,21 @@ impl WeightsSetter {
 
         let signer = SubxtSr25519Signer::new(wallet)?;
 
-        let result = client
-            .tx()
-            .sign_and_submit_then_watch_default(&tx, &signer)
-            .await
-            .context("submitting commit_timelocked_weights")?
-            .wait_for_finalized_success()
-            .await
-            .context("commit_timelocked_weights finalization")?;
+        let progress = tokio::time::timeout(
+            TX_SUBMIT_TIMEOUT,
+            client.tx().sign_and_submit_then_watch_default(&tx, &signer),
+        )
+        .await
+        .context("commit_timelocked_weights submit timed out")?
+        .context("submitting commit_timelocked_weights")?;
+
+        let result = tokio::time::timeout(
+            TX_FINALIZATION_TIMEOUT,
+            progress.wait_for_finalized_success(),
+        )
+        .await
+        .context("commit_timelocked_weights finalization timed out")?
+        .context("commit_timelocked_weights finalization")?;
 
         info!(
             hash = %result.extrinsic_hash(),
