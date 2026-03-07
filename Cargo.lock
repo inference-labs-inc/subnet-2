@@ -1354,7 +1354,7 @@ checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 [[package]]
 name = "bittensor-drand"
 version = "1.3.0"
-source = "git+https://github.com/inference-labs-inc/bittensor-drand.git?rev=c66726b#c66726b620b0222a9102b1145413a9ed9869eeb1"
+source = "git+https://github.com/inference-labs-inc/bittensor-drand.git?rev=e55ed98#e55ed98110e22f7d04e58b68f2337f8d24d87abb"
 dependencies = [
  "ark-serialize 0.4.2",
  "hex",
