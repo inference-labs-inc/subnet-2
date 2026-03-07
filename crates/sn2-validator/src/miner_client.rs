@@ -164,7 +164,6 @@ impl MinerQueryClient {
 
         let start = Instant::now();
         let response = req.send().await.context("HTTP query to miner")?;
-        let elapsed = start.elapsed().as_secs_f64();
 
         if !response.status().is_success() {
             let status = response.status();
@@ -177,6 +176,7 @@ impl MinerQueryClient {
         }
 
         let body: serde_json::Value = response.json().await.context("parsing miner response")?;
+        let elapsed = start.elapsed().as_secs_f64();
         Ok((body, elapsed))
     }
 
