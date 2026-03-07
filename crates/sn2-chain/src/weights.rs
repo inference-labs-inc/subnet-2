@@ -12,6 +12,7 @@ use crate::wallet::Wallet;
 const BLOCK_TIME: f64 = 12.0;
 const TX_SUBMIT_TIMEOUT: Duration = Duration::from_secs(30);
 const TX_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(180);
+const COMMIT_REVEAL_VERSION: u64 = 4;
 
 #[derive(Clone)]
 pub struct WeightsSetter {
@@ -125,7 +126,7 @@ impl WeightsSetter {
                 Value::from(self.netuid as u64),
                 Value::from_bytes(&commit_bytes),
                 Value::from(reveal_round),
-                Value::from(4u64),
+                Value::from(COMMIT_REVEAL_VERSION),
             ],
         );
 
