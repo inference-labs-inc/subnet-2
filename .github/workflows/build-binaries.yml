@@ -14,10 +14,6 @@ on:
         description: SN2_RELEASE_CHANNEL value (empty or mainnet)
         type: string
         default: ""
-      version:
-        description: SN2_VERSION value
-        type: string
-        default: ""
       macos-runner:
         description: macOS runner label
         type: string
@@ -62,13 +58,28 @@ jobs:
             ~/.cargo/git
           key: linux-registry-${{ hashFiles('Cargo.lock') }}-${{ matrix.arch }}
 
+      - name: Set crate versions
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: inference-labs-inc/set-toml-version@ff9a4b64df4ce91067737822d2811a69597bf688 # v1
+        with:
+          files: |
+            crates/sn2-types/Cargo.toml
+            crates/sn2-chain/Cargo.toml
+            crates/sn2-verify/Cargo.toml
+            crates/sn2-circuit-store/Cargo.toml
+            crates/sn2-validator/Cargo.toml
+            crates/sn2-miner/Cargo.toml
+
+      - name: Sync lockfile after version injection
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cargo update -w
+
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
         env:
           SCCACHE_GHA_VERSION: ${{ hashFiles('Cargo.lock') }}
           PYO3_PYTHON: python3
           SN2_RELEASE_CHANNEL: ${{ inputs.release-channel }}
-          SN2_VERSION: ${{ inputs.version }}
           OPENSSL_NO_VENDOR: "1"
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
@@ -128,13 +139,28 @@ jobs:
             ~/.cargo/git
           key: macos-aarch64-registry-${{ hashFiles('Cargo.lock') }}
 
+      - name: Set crate versions
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: inference-labs-inc/set-toml-version@ff9a4b64df4ce91067737822d2811a69597bf688 # v1
+        with:
+          files: |
+            crates/sn2-types/Cargo.toml
+            crates/sn2-chain/Cargo.toml
+            crates/sn2-verify/Cargo.toml
+            crates/sn2-circuit-store/Cargo.toml
+            crates/sn2-validator/Cargo.toml
+            crates/sn2-miner/Cargo.toml
+
+      - name: Sync lockfile after version injection
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cargo update -w
+
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
         env:
           SCCACHE_GHA_VERSION: ${{ hashFiles('Cargo.lock') }}
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
           SN2_RELEASE_CHANNEL: ${{ inputs.release-channel }}
-          SN2_VERSION: ${{ inputs.version }}
 
       - name: Show sccache stats
         run: ${SCCACHE_PATH} --show-stats

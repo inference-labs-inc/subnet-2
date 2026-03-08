@@ -26,8 +26,14 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 
-ARG SN2_VERSION=dev
-RUN SN2_VERSION=${SN2_VERSION} cargo build --release --locked --bin sn2-validator --bin sn2-miner
+ARG SN2_VERSION=""
+RUN if [ -n "${SN2_VERSION}" ]; then \
+      for f in crates/*/Cargo.toml; do \
+        sed -i "s/^version\.workspace = true$/version = \"${SN2_VERSION}\"/" "$f"; \
+      done && \
+      cargo update -w; \
+    fi && \
+    cargo build --release --locked --bin sn2-validator --bin sn2-miner
 
 FROM --platform=linux/amd64 debian:bookworm-20250224-slim
 

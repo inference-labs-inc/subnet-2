@@ -1,7 +1,4 @@
-pub const SOFTWARE_VERSION: &str = match option_env!("SN2_VERSION") {
-    Some(v) => v,
-    None => env!("CARGO_PKG_VERSION"),
-};
+pub const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const IS_RELEASE_BUILD: bool = option_env!("SN2_RELEASE_CHANNEL").is_some();
 
