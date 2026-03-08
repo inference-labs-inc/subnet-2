@@ -189,6 +189,7 @@ impl MinerQueryClient {
         body: &serde_json::Value,
         timeout_secs: f64,
     ) -> Result<(serde_json::Value, f64)> {
+        let wall_start = Instant::now();
         let addr = format!("{ip}:{port}");
         let pref = self.get_transport(hotkey);
 
@@ -214,7 +215,7 @@ impl MinerQueryClient {
             .await
         {
             Ok((resp, elapsed)) => {
-                info!(addr = %addr, transport = "quic", synapse = synapse_type, elapsed, "miner query completed");
+                info!(addr = %addr, transport = "quic", pref = ?pref, synapse = synapse_type, elapsed, "miner query completed");
                 Ok((resp, elapsed))
             }
             Err(e) if is_connection_error(&e) => {
@@ -225,11 +226,12 @@ impl MinerQueryClient {
                     "QUIC connection failed, falling back to HTTP"
                 );
                 let headers = self.build_signing_headers(body, hotkey)?;
-                let (resp, elapsed) = self
+                let (resp, _) = self
                     .query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
                     .await?;
-                info!(addr = %addr, transport = "http-fallback", synapse = synapse_type, elapsed, "miner query completed");
-                Ok((resp, elapsed))
+                let wall_elapsed = wall_start.elapsed().as_secs_f64();
+                info!(addr = %addr, transport = "http-fallback", pref = ?pref, synapse = synapse_type, elapsed = wall_elapsed, "miner query completed");
+                Ok((resp, wall_elapsed))
             }
             Err(e) => Err(e),
         }
