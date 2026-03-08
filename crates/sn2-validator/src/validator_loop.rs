@@ -268,9 +268,10 @@ impl ValidatorLoop {
 
         if !self.config.loopback {
             let mut client = self.miner_client.write().await;
-            if let Err(e) = client.init_quic().await {
-                warn!(error = %e, "QUIC endpoint init failed, QUIC queries will be unavailable");
-            }
+            client
+                .init_quic()
+                .await
+                .context("initializing QUIC endpoint")?;
         }
 
         info!(
