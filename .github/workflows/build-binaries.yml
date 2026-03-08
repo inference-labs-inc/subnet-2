@@ -59,7 +59,7 @@ jobs:
           key: linux-registry-${{ hashFiles('Cargo.lock') }}-${{ matrix.arch }}
 
       - name: Set crate versions
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(inputs.ref || github.ref, 'refs/tags/')
         uses: inference-labs-inc/set-toml-version@ff9a4b64df4ce91067737822d2811a69597bf688 # v1
         with:
           files: |
@@ -71,7 +71,7 @@ jobs:
             crates/sn2-miner/Cargo.toml
 
       - name: Sync lockfile after version injection
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(inputs.ref || github.ref, 'refs/tags/')
         run: cargo update -w
 
       - name: Build release binaries
@@ -140,7 +140,7 @@ jobs:
           key: macos-aarch64-registry-${{ hashFiles('Cargo.lock') }}
 
       - name: Set crate versions
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(inputs.ref || github.ref, 'refs/tags/')
         uses: inference-labs-inc/set-toml-version@ff9a4b64df4ce91067737822d2811a69597bf688 # v1
         with:
           files: |
@@ -152,7 +152,7 @@ jobs:
             crates/sn2-miner/Cargo.toml
 
       - name: Sync lockfile after version injection
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(inputs.ref || github.ref, 'refs/tags/')
         run: cargo update -w
 
       - name: Build release binaries

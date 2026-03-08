@@ -27,9 +27,10 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 
 ARG SN2_VERSION=""
-RUN if [ -n "${SN2_VERSION}" ]; then \
+RUN CARGO_VERSION="${SN2_VERSION#v}" && \
+    if echo "${CARGO_VERSION}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then \
       for f in crates/*/Cargo.toml; do \
-        sed -i "s/^version\.workspace = true$/version = \"${SN2_VERSION}\"/" "$f"; \
+        sed -i "s/^version\.workspace = true$/version = \"${CARGO_VERSION}\"/" "$f"; \
       done && \
       cargo update -w; \
     fi && \
