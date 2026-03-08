@@ -1189,6 +1189,7 @@ impl ValidatorLoop {
                 };
 
                 let client = Arc::clone(&self.miner_client);
+                let is_loopback = self.config.loopback;
 
                 let task_slice_num = slice_num.clone();
                 let task_run_uid = run_uid.clone();
@@ -1204,9 +1205,18 @@ impl ValidatorLoop {
                     let tokio_task_id = tokio::task::id();
 
                     let guard = client.read().await;
-                    let query_result = guard
-                        .query_miner_adaptive(&ip, port, &hotkey, synapse_name, &body, timeout)
-                        .await;
+                    let query_result = if is_loopback {
+                        let headers = guard
+                            .build_signing_headers(&body, &hotkey)
+                            .unwrap_or_default();
+                        guard
+                            .query_miner_http(&ip, port, synapse_name, &body, &headers, timeout)
+                            .await
+                    } else {
+                        guard
+                            .query_miner(&ip, port, &hotkey, synapse_name, &body, timeout)
+                            .await
+                    };
                     drop(guard);
 
                     let outcome = match query_result {
@@ -2311,21 +2321,14 @@ impl ValidatorLoop {
             .collect();
 
         if !quic_miners.is_empty() {
+            let mut client = self.miner_client.write().await;
+            if let Err(e) = client
+                .lightning_mut()
+                .update_miner_registry(quic_miners.clone())
+                .await
             {
-                let mut client = self.miner_client.write().await;
-                if let Err(e) = client
-                    .lightning_mut()
-                    .update_miner_registry(quic_miners.clone())
-                    .await
-                {
-                    warn!(error = %e, "updating QUIC miner connections");
-                }
+                warn!(error = %e, "updating QUIC miner connections");
             }
-            let client = self.miner_client.read().await;
-            client.seed_transport_cache(&quic_miners).await;
-        } else {
-            let client = self.miner_client.read().await;
-            client.clear_transport_cache();
         }
 
         Ok(())

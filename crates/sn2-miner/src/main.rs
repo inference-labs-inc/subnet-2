@@ -91,8 +91,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let http_port = cli.axon_port;
-    let quic_port = cli.quic_port.unwrap_or(cli.axon_port);
+    let quic_port = cli.axon_port;
     anyhow::ensure!(quic_port != 0, "QUIC port must be non-zero");
 
     let dsperse = dsperse::DSperseClient::new();
@@ -101,27 +100,6 @@ async fn main() -> Result<()> {
 
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
-
-    let disable_blacklist = cli.disable_blacklist;
-
-    let http_handle = {
-        let handlers = handlers.clone();
-        let hotkey_ss58 = wallet.hotkey_ss58().to_string();
-        let axon_host = cli.axon_host.clone();
-        let meta = metagraph.clone();
-        tokio::spawn(async move {
-            http_server::run_http_server(
-                &axon_host,
-                http_port,
-                handlers,
-                &hotkey_ss58,
-                meta,
-                disable_blacklist,
-                false,
-            )
-            .await
-        })
-    };
 
     let handler_timeout = cli.handler_timeout;
     let quic_handle = {
@@ -157,7 +135,6 @@ async fn main() -> Result<()> {
 
     info!(
         hotkey = %wallet.hotkey_ss58(),
-        http_port = http_port,
         quic_port = quic_port,
         "miner running"
     );
@@ -186,9 +163,6 @@ async fn main() -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
 
     tokio::select! {
-        r = http_handle => {
-            r?.context("HTTP server")?;
-        }
         r = quic_handle => {
             r?.context("QUIC server")?;
         }

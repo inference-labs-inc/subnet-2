@@ -1,5 +1,4 @@
 pub mod codec;
-pub mod http_client;
 pub mod miner_response;
 pub mod protocol;
 pub mod reconstruct;

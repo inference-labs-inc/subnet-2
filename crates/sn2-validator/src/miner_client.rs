@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use btlightning::{LightningClient, LightningError, QuicAxonInfo, QuicRequest, Signer};
+use btlightning::{LightningClient, QuicAxonInfo, QuicRequest, Signer};
 use sha2::{Digest, Sha256};
 use sn2_chain::Wallet;
-use tracing::{info, warn};
+use tracing::info;
 
 struct WalletSigner(Arc<Wallet>);
 
@@ -18,18 +18,10 @@ impl Signer for WalletSigner {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum TransportPreference {
-    Unknown,
-    Quic,
-    HttpOnly,
-}
-
 pub struct MinerQueryClient {
     lightning: LightningClient,
     http: reqwest::Client,
     wallet: Option<Arc<Wallet>>,
-    transport_cache: Mutex<HashMap<String, (TransportPreference, String)>>,
 }
 
 impl MinerQueryClient {
@@ -46,7 +38,6 @@ impl MinerQueryClient {
             lightning,
             http,
             wallet: Some(wallet),
-            transport_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -61,7 +52,6 @@ impl MinerQueryClient {
             lightning,
             http,
             wallet: None,
-            transport_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -110,6 +100,31 @@ impl MinerQueryClient {
 
     pub fn lightning_mut(&mut self) -> &mut LightningClient {
         &mut self.lightning
+    }
+
+    pub async fn query_miner(
+        &self,
+        ip: &str,
+        port: u16,
+        hotkey: &str,
+        synapse_type: &str,
+        body: &serde_json::Value,
+        timeout_secs: f64,
+    ) -> Result<(serde_json::Value, f64)> {
+        let axon = QuicAxonInfo::new(hotkey.to_string(), ip.to_string(), port, 4);
+        let data: HashMap<String, serde_json::Value> =
+            serde_json::from_value(body.clone()).context("deserializing QUIC payload")?;
+        let (resp, elapsed) = self
+            .query_miner_quic(&axon, synapse_type, data, timeout_secs)
+            .await?;
+        info!(
+            addr = %format!("{ip}:{port}"),
+            transport = "quic",
+            synapse = synapse_type,
+            elapsed,
+            "miner query completed"
+        );
+        Ok((resp, elapsed))
     }
 
     pub async fn query_miner_quic(
@@ -178,208 +193,5 @@ impl MinerQueryClient {
         let body: serde_json::Value = response.json().await.context("parsing miner response")?;
         let elapsed = start.elapsed().as_secs_f64();
         Ok((body, elapsed))
-    }
-
-    pub async fn query_miner_adaptive(
-        &self,
-        ip: &str,
-        port: u16,
-        hotkey: &str,
-        synapse_type: &str,
-        body: &serde_json::Value,
-        timeout_secs: f64,
-    ) -> Result<(serde_json::Value, f64)> {
-        let wall_start = Instant::now();
-        let addr = format!("{ip}:{port}");
-        let pref = self.get_transport(hotkey);
-
-        if pref != TransportPreference::Quic {
-            let headers = self.build_signing_headers(body, hotkey)?;
-            let (resp, elapsed) = self
-                .query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
-                .await?;
-            info!(addr = %addr, transport = "http", pref = ?pref, synapse = synapse_type, elapsed, "miner query completed");
-            return Ok((resp, elapsed));
-        }
-
-        let axon = QuicAxonInfo::new(hotkey.to_string(), ip.to_string(), port, 4);
-        let data: HashMap<String, serde_json::Value> = match serde_json::from_value(body.clone()) {
-            Ok(d) => d,
-            Err(e) => {
-                return Err(anyhow::Error::from(e).context("deserializing QUIC payload"));
-            }
-        };
-
-        match self
-            .query_miner_quic(&axon, synapse_type, data, timeout_secs)
-            .await
-        {
-            Ok((resp, elapsed)) => {
-                info!(addr = %addr, transport = "quic", pref = ?pref, synapse = synapse_type, elapsed, "miner query completed");
-                Ok((resp, elapsed))
-            }
-            Err(e) if is_connection_error(&e) => {
-                self.set_transport(hotkey, TransportPreference::HttpOnly, &addr);
-                warn!(
-                    hotkey = hotkey,
-                    error = ?e,
-                    "QUIC connection failed, falling back to HTTP"
-                );
-                let headers = self.build_signing_headers(body, hotkey)?;
-                let (resp, _) = self
-                    .query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
-                    .await?;
-                let wall_elapsed = wall_start.elapsed().as_secs_f64();
-                info!(addr = %addr, transport = "http-fallback", pref = ?pref, synapse = synapse_type, elapsed = wall_elapsed, "miner query completed");
-                Ok((resp, wall_elapsed))
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    fn get_transport(&self, hotkey: &str) -> TransportPreference {
-        let cache = self
-            .transport_cache
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        cache
-            .get(hotkey)
-            .map(|(pref, _)| *pref)
-            .unwrap_or(TransportPreference::Unknown)
-    }
-
-    fn set_transport(&self, hotkey: &str, pref: TransportPreference, addr: &str) {
-        self.transport_cache
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(hotkey.to_string(), (pref, addr.to_string()));
-    }
-
-    pub fn clear_transport_cache(&self) {
-        self.transport_cache
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clear();
-    }
-
-    pub async fn seed_transport_cache(&self, miners: &[QuicAxonInfo]) {
-        let stats = match self.lightning.get_connection_stats().await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "failed to read connection stats, preserving existing cache");
-                return;
-            }
-        };
-
-        let mut cache = self
-            .transport_cache
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        cache.clear();
-
-        let mut quic_count = 0u32;
-
-        for miner in miners {
-            let key = format!("connection_{}", miner.addr_key());
-            if stats.get(&key).map(|s| s == "active").unwrap_or(false) {
-                let addr = miner.addr_key().to_string();
-                cache.insert(miner.hotkey.clone(), (TransportPreference::Quic, addr));
-                quic_count += 1;
-            }
-        }
-
-        info!(
-            quic = quic_count,
-            http = miners.len() as u32 - quic_count,
-            "seeded transport cache from connection stats"
-        );
-    }
-}
-
-fn is_connection_error(err: &anyhow::Error) -> bool {
-    for cause in err.chain() {
-        if let Some(le) = cause.downcast_ref::<LightningError>() {
-            return matches!(
-                le,
-                LightningError::Connection(_)
-                    | LightningError::Transport(_)
-                    | LightningError::Handshake(_)
-                    | LightningError::Stream(_)
-            );
-        }
-    }
-    false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_client() -> MinerQueryClient {
-        MinerQueryClient {
-            lightning: LightningClient::new("test".to_string()),
-            http: reqwest::Client::new(),
-            wallet: None,
-            transport_cache: Mutex::new(HashMap::new()),
-        }
-    }
-
-    #[test]
-    fn unknown_returned_for_new_hotkey() {
-        let client = make_client();
-        let pref = client.get_transport("hk1");
-        assert_eq!(pref, TransportPreference::Unknown);
-    }
-
-    #[test]
-    fn set_transport_overrides_preference() {
-        let client = make_client();
-        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
-        let pref = client.get_transport("hk1");
-        assert_eq!(pref, TransportPreference::Quic);
-    }
-
-    #[test]
-    fn clear_transport_cache_resets_all() {
-        let client = make_client();
-        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
-        client.set_transport("hk2", TransportPreference::HttpOnly, "5.6.7.8:8091");
-        client.clear_transport_cache();
-        let pref = client.get_transport("hk1");
-        assert_eq!(pref, TransportPreference::Unknown);
-    }
-
-    #[test]
-    fn is_connection_error_classifies_transport_errors() {
-        let conn = anyhow::Error::from(LightningError::Connection("reset".into()));
-        assert!(is_connection_error(&conn));
-
-        let transport = anyhow::Error::from(LightningError::Transport("timeout".into()));
-        assert!(is_connection_error(&transport));
-
-        let handshake = anyhow::Error::from(LightningError::Handshake("mismatch".into()));
-        assert!(is_connection_error(&handshake));
-
-        let stream = anyhow::Error::from(LightningError::Stream("closed".into()));
-        assert!(is_connection_error(&stream));
-    }
-
-    #[test]
-    fn is_connection_error_rejects_non_transport_errors() {
-        let other = anyhow::anyhow!("some random error");
-        assert!(!is_connection_error(&other));
-
-        let serialization = anyhow::Error::from(LightningError::Serialization("bad format".into()));
-        assert!(!is_connection_error(&serialization));
-    }
-
-    #[test]
-    fn independent_hotkeys_have_independent_state() {
-        let client = make_client();
-        client.set_transport("hk1", TransportPreference::Quic, "1.2.3.4:8091");
-        client.set_transport("hk2", TransportPreference::HttpOnly, "5.6.7.8:8091");
-        assert_eq!(client.get_transport("hk1"), TransportPreference::Quic);
-        assert_eq!(client.get_transport("hk2"), TransportPreference::HttpOnly);
-        assert_eq!(client.get_transport("hk3"), TransportPreference::Unknown);
     }
 }

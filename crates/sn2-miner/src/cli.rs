@@ -30,9 +30,6 @@ pub struct Cli {
     #[arg(long, alias = "axon.port", default_value_t = 8091)]
     pub axon_port: u16,
 
-    #[arg(long, help = "QUIC listen port; defaults to axon_port if not provided")]
-    pub quic_port: Option<u16>,
-
     #[arg(long, alias = "axon.external_ip")]
     pub external_ip: Option<String>,
 

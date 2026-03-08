@@ -12592,7 +12592,6 @@ dependencies = [
  "anyhow",
  "hex",
  "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=ec8f318)",
- "reqwest 0.12.28",
  "rmp-serde",
  "serde",
  "serde_json",

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -15,8 +13,6 @@ pub enum ServiceRequest {
     Reconstruct(ReconstructRequest),
     #[serde(rename = "evict")]
     Evict(EvictRequest),
-    #[serde(rename = "query_verify_store")]
-    QueryVerifyStore(QueryVerifyStoreRequest),
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,67 +60,6 @@ pub struct StoreRequest {
 #[derive(Debug, Deserialize)]
 pub struct EvictRequest {
     pub keys: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct QueryVerifyStoreRequest {
-    pub request_id: String,
-    pub miner_ip: String,
-    pub miner_port: u16,
-    pub url_path: String,
-    pub request_body_json: String,
-    pub headers: HashMap<String, String>,
-    pub timeout_secs: f64,
-    pub circuit_path: String,
-    pub num_inputs: usize,
-    #[serde(default = "default_pcs_type")]
-    pub pcs_type: String,
-    pub store_key: Option<String>,
-    pub output_shape: Option<[usize; 4]>,
-    pub expected_inputs: Option<Vec<f64>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct QueryVerifyStoreResponse {
-    pub request_id: String,
-    pub success: bool,
-    pub http_status: u16,
-    pub response_time_secs: f64,
-    pub verification_result: bool,
-    pub proof_size: usize,
-    pub stored: bool,
-    pub is_incremental: bool,
-    pub error: Option<String>,
-}
-
-impl QueryVerifyStoreResponse {
-    pub fn http_error(request_id: String, error: String) -> Self {
-        Self {
-            request_id,
-            success: false,
-            http_status: 0,
-            response_time_secs: 0.0,
-            verification_result: false,
-            proof_size: 0,
-            stored: false,
-            is_incremental: false,
-            error: Some(error),
-        }
-    }
-
-    pub fn miner_error(request_id: String, http_status: u16, elapsed: f64, error: String) -> Self {
-        Self {
-            request_id,
-            success: false,
-            http_status,
-            response_time_secs: elapsed,
-            verification_result: false,
-            proof_size: 0,
-            stored: false,
-            is_incremental: false,
-            error: Some(error),
-        }
-    }
 }
 
 fn default_pcs_type() -> String {
