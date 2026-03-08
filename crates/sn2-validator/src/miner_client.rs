@@ -194,11 +194,11 @@ impl MinerQueryClient {
 
         if pref != TransportPreference::Quic {
             let headers = self.build_signing_headers(body, hotkey)?;
-            let result = self
+            let (resp, elapsed) = self
                 .query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
                 .await?;
-            info!(addr = %addr, transport = "http", pref = ?pref, synapse = synapse_type, elapsed = result.1, "miner query completed");
-            return Ok(result);
+            info!(addr = %addr, transport = "http", pref = ?pref, synapse = synapse_type, elapsed, "miner query completed");
+            return Ok((resp, elapsed));
         }
 
         let axon = QuicAxonInfo::new(hotkey.to_string(), ip.to_string(), port, 4);
@@ -213,9 +213,9 @@ impl MinerQueryClient {
             .query_miner_quic(&axon, synapse_type, data, timeout_secs)
             .await
         {
-            Ok(result) => {
-                info!(addr = %addr, transport = "quic", synapse = synapse_type, elapsed = result.1, "miner query completed");
-                Ok(result)
+            Ok((resp, elapsed)) => {
+                info!(addr = %addr, transport = "quic", synapse = synapse_type, elapsed, "miner query completed");
+                Ok((resp, elapsed))
             }
             Err(e) if is_connection_error(&e) => {
                 self.set_transport(hotkey, TransportPreference::HttpOnly, &addr);
@@ -225,11 +225,11 @@ impl MinerQueryClient {
                     "QUIC connection failed, falling back to HTTP"
                 );
                 let headers = self.build_signing_headers(body, hotkey)?;
-                let result = self
+                let (resp, elapsed) = self
                     .query_miner_http(ip, port, synapse_type, body, &headers, timeout_secs)
                     .await?;
-                info!(addr = %addr, transport = "http-fallback", synapse = synapse_type, elapsed = result.1, "miner query completed");
-                Ok(result)
+                info!(addr = %addr, transport = "http-fallback", synapse = synapse_type, elapsed, "miner query completed");
+                Ok((resp, elapsed))
             }
             Err(e) => Err(e),
         }
