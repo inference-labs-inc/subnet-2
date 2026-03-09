@@ -347,6 +347,14 @@ impl IncrementalRunManager {
             .any(|r| r.run_source == RunSource::Benchmark)
     }
 
+    pub fn benchmark_run_uids(&self) -> Vec<String> {
+        self.runs
+            .iter()
+            .filter(|(_, run)| run.run_source == RunSource::Benchmark)
+            .map(|(uid, _)| uid.clone())
+            .collect()
+    }
+
     pub fn evict_by_circuit(&mut self, circuit_id: &str) -> Vec<String> {
         let to_remove: Vec<String> = self
             .runs

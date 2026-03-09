@@ -504,6 +504,14 @@ impl ValidatorLoop {
             .await;
         }
 
+        let benchmark_uids = self.run_manager.benchmark_run_uids();
+        for uid in &benchmark_uids {
+            info!(run_uid = %uid, "preempting benchmark run for API dsperse submission");
+            self.teardown_run(uid).await;
+        }
+        self.stacked_dslice_queue.clear();
+        self.dsperse_benchmark_backoff_until = Instant::now() + Duration::from_secs(120);
+
         self.enqueue_next_dslice(&run_uid, &circuit).await;
     }
 
@@ -819,6 +827,9 @@ impl ValidatorLoop {
         if self.config.disable_benchmark || self.run_manager.has_benchmark_runs() {
             return;
         }
+        if !self.api_dslice_queue.is_empty() {
+            return;
+        }
         if Instant::now() < self.dsperse_benchmark_backoff_until {
             return;
         }
@@ -1059,7 +1070,7 @@ impl ValidatorLoop {
                         break;
                     }
                     dsperse_circuit_path = None;
-                } else if api_eligible.contains(&uid) && !self.api_dslice_queue.is_empty() {
+                } else if !self.api_dslice_queue.is_empty() {
                     let Some(dslice) = self.api_dslice_queue.pop_front() else {
                         warn!(
                             "api_dslice_queue was empty despite earlier guard; skipping dispatch"
