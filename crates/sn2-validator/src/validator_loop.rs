@@ -2267,7 +2267,7 @@ impl ValidatorLoop {
             self.score_manager.zero_non_queryable(&queryable_uids);
         }
 
-        for neuron in self.config.metagraph.active_neurons() {
+        for neuron in &self.config.metagraph.neurons {
             if let Some(prev_hotkey) = self.uid_hotkeys.get(&neuron.uid) {
                 if *prev_hotkey != neuron.hotkey {
                     info!(uid = neuron.uid, "hotkey changed, resetting performance");
