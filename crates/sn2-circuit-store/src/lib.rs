@@ -666,10 +666,22 @@ fn file_checksum_valid(
     let Some(expected) = checksums.get(filename).and_then(|v| v.as_str()) else {
         return true;
     };
-    let Ok(data) = std::fs::read(path) else {
+    let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
-    hex::encode(Sha256::digest(&data)) == expected
+    let mut reader = std::io::BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let Ok(n) = std::io::Read::read(&mut reader, &mut buf) else {
+            return false;
+        };
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    hex::encode(hasher.finalize()) == expected
 }
 
 pub fn cleanup_extracted_slice(slices_dir: &Path, slice_id: &str) {
