@@ -71,6 +71,7 @@ impl CircuitStore {
         let mut active_ids: HashSet<String> = api_circuits
             .iter()
             .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
+            .filter(|id| !IGNORED_MODEL_HASHES.contains(&id.as_str()))
             .collect();
 
         for pinned_id in &self.pinned_ids {
@@ -178,6 +179,7 @@ impl CircuitStore {
         let active_ids: HashSet<String> = api_circuits
             .iter()
             .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
+            .filter(|id| !IGNORED_MODEL_HASHES.contains(&id.as_str()))
             .collect();
 
         for circuit_data in &api_circuits {
