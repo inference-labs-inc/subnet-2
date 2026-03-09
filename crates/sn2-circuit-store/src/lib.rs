@@ -145,6 +145,10 @@ impl CircuitStore {
             anyhow::bail!("circuit {} is in the ignored list", circuit_id);
         }
 
+        if self.is_downloading(circuit_id) {
+            anyhow::bail!("circuit {} has incomplete file downloads", circuit_id);
+        }
+
         if let Some(circuit) = self.circuits.get(circuit_id) {
             return Ok(circuit.clone());
         }
