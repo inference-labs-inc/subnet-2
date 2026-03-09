@@ -822,7 +822,12 @@ impl ValidatorLoop {
         if Instant::now() < self.dsperse_benchmark_backoff_until {
             return;
         }
-        let dsperse_circuits = self.circuit_store.get_dsperse_circuits();
+        let dsperse_circuits: Vec<_> = self
+            .circuit_store
+            .get_dsperse_circuits()
+            .into_iter()
+            .filter(|c| !self.circuit_store.is_downloading(&c.id))
+            .collect();
         if dsperse_circuits.is_empty() {
             return;
         }
