@@ -117,10 +117,18 @@ jobs:
 
       - name: Download release binaries
         run: |
-          gh release download "$RELEASE_TAG" \
-            --pattern 'sn2-validator-linux-x86_64' \
-            --pattern 'sn2-miner-linux-x86_64' \
-            --dir .
+          for attempt in 1 2 3 4 5; do
+            if gh release download "$RELEASE_TAG" \
+              --pattern 'sn2-validator-linux-x86_64' \
+              --pattern 'sn2-miner-linux-x86_64' \
+              --dir .; then
+              exit 0
+            fi
+            echo "Attempt $attempt failed, retrying in $((attempt * 10))s..."
+            sleep $((attempt * 10))
+          done
+          echo "Failed to download release assets after 5 attempts"
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
