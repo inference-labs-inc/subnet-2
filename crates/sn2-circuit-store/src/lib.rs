@@ -182,7 +182,10 @@ impl CircuitStore {
 
         for circuit_data in &api_circuits {
             if let Some(id) = circuit_data.get("id").and_then(|v| v.as_str()) {
-                if self.circuits.contains_key(id) || IGNORED_MODEL_HASHES.contains(&id) {
+                if IGNORED_MODEL_HASHES.contains(&id) {
+                    continue;
+                }
+                if self.circuits.contains_key(id) && !self.is_downloading(id) {
                     continue;
                 }
                 match self.cache_and_load_circuit(id, circuit_data).await {
@@ -474,7 +477,7 @@ async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) ->
         .headers()
         .get("x-checksum-sha256")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_lowercase());
+        .map(|s| s.trim().to_lowercase());
 
     let partial = dest.with_extension("partial");
 
