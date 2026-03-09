@@ -7,8 +7,9 @@ on:
       - testnet
   pull_request:
     types: [labeled, synchronize]
-  release:
-    types: [created]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch: {}
 
 env:
@@ -16,8 +17,8 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/subnet-2
 
 jobs:
-  build-and-push-image:
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-build')
+  build-dev:
+    if: github.event_name != 'workflow_run' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-build'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,12 +48,12 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
       - name: Build and push Docker image for testnet branch
-        if: github.event_name != 'release'
         id: push-testnet
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
+          target: dev
           pull: true
           push: ${{ github.event_name != 'pull_request' }}
           build-args: |
@@ -91,30 +92,85 @@ jobs:
           subject-digest: ${{ steps.push-testnet.outputs.digest }}
           push-to-registry: true
 
+  build-release:
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch != 'testnet'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+      security-events: write
+
+    env:
+      RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Download release binaries
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --pattern 'sn2-validator-linux-x86_64' \
+            --pattern 'sn2-miner-linux-x86_64' \
+            --dir .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify binary attestations
+        run: |
+          gh attestation verify sn2-validator-linux-x86_64 --repo "${{ github.repository }}"
+          gh attestation verify sn2-miner-linux-x86_64 --repo "${{ github.repository }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare binaries for Docker context
+        run: |
+          mv sn2-validator-linux-x86_64 sn2-validator
+          mv sn2-miner-linux-x86_64 sn2-miner
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
       - name: Build and push Docker image for release
-        if: github.event_name == 'release'
         id: push-release
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
+          target: release
           pull: true
           push: true
-          build-args: |
-            SN2_VERSION=${{ github.event.release.tag_name }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Scan release container image with Trivy
-        if: github.event_name == 'release'
         id: trivy-scan-release
         uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478 # 0.34.2
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
           format: sarif
           output: trivy-image-results.sarif
           severity: CRITICAL,HIGH
@@ -128,7 +184,6 @@ jobs:
           category: trivy-image-release
 
       - name: Generate artifact attestation for release
-        if: github.event_name == 'release'
         id: attest-release
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:

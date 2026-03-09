@@ -36,7 +36,7 @@ RUN CARGO_VERSION="${SN2_VERSION#v}" && \
     fi && \
     cargo build --release --locked --bin sn2-validator --bin sn2-miner
 
-FROM --platform=linux/amd64 debian:bookworm-20250224-slim
+FROM --platform=linux/amd64 debian:bookworm-20250224-slim AS runtime
 
 RUN apt-get update && apt-get install -y \
     jq \
@@ -71,9 +71,6 @@ ENV PATH="/home/subnet2/.local/bin:${PATH}"
 
 USER root
 
-COPY --from=builder /build/target/release/sn2-validator /usr/local/bin/sn2-validator
-COPY --from=builder /build/target/release/sn2-miner /usr/local/bin/sn2-miner
-
 RUN cat <<'EOF' > /entrypoint.sh
 #!/usr/bin/env bash
 set -e
@@ -107,3 +104,12 @@ CMD ["sn2-validator", "--help"]
 EXPOSE 8091/tcp
 EXPOSE 8443/tcp
 EXPOSE 9090/tcp
+
+FROM runtime AS release
+COPY sn2-validator /usr/local/bin/sn2-validator
+COPY sn2-miner /usr/local/bin/sn2-miner
+RUN chmod +x /usr/local/bin/sn2-validator /usr/local/bin/sn2-miner
+
+FROM runtime AS dev
+COPY --from=builder /build/target/release/sn2-validator /usr/local/bin/sn2-validator
+COPY --from=builder /build/target/release/sn2-miner /usr/local/bin/sn2-miner
