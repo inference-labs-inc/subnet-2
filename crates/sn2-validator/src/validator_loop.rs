@@ -2187,6 +2187,8 @@ impl ValidatorLoop {
                 benchmark_circuits = benchmark_count,
                 dsperse_circuits = dsperse_count,
                 max_concurrent_verifications = self.config.max_concurrent_verifications,
+                verify_tasks = self.verify_tasks.len(),
+                pending_verifications = self.pending_verifications.len(),
                 benchmark_in_flight = self.benchmark_in_flight,
                 "health"
             );
