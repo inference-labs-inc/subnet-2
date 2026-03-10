@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
     CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP, CAPACITY_RAMP_THRESHOLD, CAPACITY_WINDOW_SIZE,
-    CIRCUIT_TIMEOUT_SECONDS, MAX_CONCURRENT_REQUESTS, PERFORMANCE_MIN_SAMPLES,
-    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_SCORING_PERCENTILE, PERFORMANCE_WINDOW_SIZE,
+    CIRCUIT_TIMEOUT_SECONDS, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY,
+    PERFORMANCE_SCORING_PERCENTILE, PERFORMANCE_WINDOW_SIZE,
 };
 use tracing::{info, warn};
 
@@ -286,7 +286,7 @@ impl PerformanceTracker {
         let current = self.adaptive_caps.entry(uid).or_insert(1);
 
         if success_rate >= CAPACITY_RAMP_THRESHOLD {
-            *current = (*current + 1).min(MAX_CONCURRENT_REQUESTS);
+            *current += 1;
             if let Some(r) = self.at_cap_results.get_mut(&uid) {
                 r.clear();
             }

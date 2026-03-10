@@ -928,8 +928,9 @@ impl ValidatorLoop {
             return Ok(());
         }
 
+        let max_dispatched = self.config.max_concurrent_verifications * DISPATCH_BUFFER_MULTIPLIER;
         let active_count = self.tasks.len();
-        let available_slots = self.config.max_concurrency.saturating_sub(active_count);
+        let available_slots = max_dispatched.saturating_sub(active_count);
         if available_slots == 0 {
             return Ok(());
         }
@@ -2200,7 +2201,8 @@ impl ValidatorLoop {
                 queryable_neurons = queryable_count,
                 benchmark_circuits = benchmark_count,
                 dsperse_circuits = dsperse_count,
-                max_concurrency = self.config.max_concurrency,
+                max_dispatch =
+                    self.config.max_concurrent_verifications * DISPATCH_BUFFER_MULTIPLIER,
                 max_concurrent_verifications = self.config.max_concurrent_verifications,
                 benchmark_in_flight = self.benchmark_in_flight,
                 "health"

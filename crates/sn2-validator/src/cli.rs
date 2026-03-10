@@ -24,9 +24,6 @@ pub struct Cli {
     #[arg(long, alias = "logging.level", default_value = "info")]
     pub log_level: String,
 
-    #[arg(long, default_value_t = sn2_types::MAX_CONCURRENT_REQUESTS)]
-    pub max_concurrency: usize,
-
     #[arg(long, default_value_t = 20)]
     pub api_miners_pct: u32,
 
