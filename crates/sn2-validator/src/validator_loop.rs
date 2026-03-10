@@ -350,10 +350,10 @@ impl ValidatorLoop {
                         }
                     }
                     let had_pending = !self.pending_verifications.is_empty();
-                    self.drain_pending_verifications();
                     if had_pending {
                         self.grow_verification_concurrency();
                     }
+                    self.drain_pending_verifications();
                 }
                 Some(submission) = self.dsperse_rx.recv() => {
                     self.handle_dsperse_submission(submission).await;
