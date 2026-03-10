@@ -41,23 +41,6 @@ fn default_pow_proof_system() -> ProofSystem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Competition {
-    pub id: i32,
-    pub hash: String,
-    pub file_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commitment: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl Competition {
-    pub const NAME: &str = "competition";
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DSliceProofGenerationDataModel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub circuit: Option<String>,
