@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -2627,7 +2627,7 @@ mod tests {
     }
 }
 
-fn load_verification_concurrency(path: &PathBuf) -> usize {
+fn load_verification_concurrency(path: &Path) -> usize {
     let data = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(_) => return 1,
@@ -2645,7 +2645,7 @@ fn load_verification_concurrency(path: &PathBuf) -> usize {
     }
 }
 
-fn save_verification_concurrency(path: &PathBuf, concurrency: usize) {
+fn save_verification_concurrency(path: &Path, concurrency: usize) {
     let data = serde_json::json!({ "concurrency": concurrency });
     let tmp_path = path.with_extension("tmp");
     match serde_json::to_string(&data) {
