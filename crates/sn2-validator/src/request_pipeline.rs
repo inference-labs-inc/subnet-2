@@ -270,7 +270,7 @@ mod tests {
                 benchmark_choice_weight: None,
                 input_schema: None,
             },
-            proof_system: ProofSystem::ZKML,
+            proof_system: ProofSystem::JSTPROVE,
             settings: HashMap::new(),
             timeout: 60.0,
         }

@@ -1,63 +1,18 @@
 use std::str::FromStr;
 
-use serde::de::{self, Error as _, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
 pub enum ProofSystem {
-    ZKML,
     CIRCOM,
-    JOLT,
-    EZKL,
     JSTPROVE,
-}
-
-const PROOF_SYSTEM_VARIANTS: &[&str] = &["ZKML", "CIRCOM", "JOLT", "EZKL", "JSTPROVE"];
-
-impl<'de> Deserialize<'de> for ProofSystem {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct ProofSystemVisitor;
-
-        impl<'de> Visitor<'de> for ProofSystemVisitor {
-            type Value = ProofSystem;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("a proof system variant")
-            }
-
-            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-                match v {
-                    "ZKML" => Ok(ProofSystem::ZKML),
-                    "CIRCOM" => Ok(ProofSystem::CIRCOM),
-                    "JOLT" => Ok(ProofSystem::JOLT),
-                    "EZKL" => Ok(ProofSystem::EZKL),
-                    "JSTPROVE" => Ok(ProofSystem::JSTPROVE),
-                    _ => Err(E::unknown_variant(v, PROOF_SYSTEM_VARIANTS)),
-                }
-            }
-
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-                if let Some(key) = map.next_key::<String>()? {
-                    let _: de::IgnoredAny = map.next_value()?;
-                    self.visit_str(&key)
-                } else {
-                    Err(A::Error::custom("expected non-empty map for enum variant"))
-                }
-            }
-        }
-
-        deserializer.deserialize_any(ProofSystemVisitor)
-    }
 }
 
 impl std::fmt::Display for ProofSystem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ZKML => write!(f, "ZKML"),
             Self::CIRCOM => write!(f, "CIRCOM"),
-            Self::JOLT => write!(f, "JOLT"),
-            Self::EZKL => write!(f, "EZKL"),
             Self::JSTPROVE => write!(f, "JSTPROVE"),
         }
     }
@@ -68,10 +23,7 @@ impl FromStr for ProofSystem {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ZKML" => Ok(Self::ZKML),
             "CIRCOM" => Ok(Self::CIRCOM),
-            "JOLT" => Ok(Self::JOLT),
-            "EZKL" => Ok(Self::EZKL),
             "JSTPROVE" => Ok(Self::JSTPROVE),
             other => Err(format!("unknown proof system: {other}")),
         }
