@@ -159,7 +159,6 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          context: git
 
       - name: Build and push Docker image for release
         id: push-release
