@@ -939,10 +939,12 @@ impl ValidatorLoop {
     }
 
     async fn dispatch_requests(&mut self) -> Result<()> {
-        let verification_backlog = self.verify_tasks.len() + self.pending_verifications.len();
-        if verification_backlog >= self.verification_concurrency {
+        let total_pipeline =
+            self.tasks.len() + self.pending_verifications.len() + self.verify_tasks.len();
+        if total_pipeline >= self.verification_concurrency {
             return Ok(());
         }
+        let mut dispatch_budget = self.verification_concurrency - total_pipeline;
 
         let active_count = self.tasks.len();
 
@@ -970,13 +972,16 @@ impl ValidatorLoop {
         };
 
         for neuron in &neurons {
+            if dispatch_budget == 0 {
+                break;
+            }
             let uid = neuron.uid;
             let cap = capacities.get(&uid).copied().unwrap_or(1);
             let active_now = self.miner_active_count.get(&uid).copied().unwrap_or(0);
             if active_now >= cap {
                 continue;
             }
-            let slots_for_miner = cap - active_now;
+            let slots_for_miner = (cap - active_now).min(dispatch_budget);
 
             for _slot in 0..slots_for_miner {
                 let active = self.miner_active_count.get(&uid).copied().unwrap_or(0);
@@ -1326,6 +1331,7 @@ impl ValidatorLoop {
                     self.benchmark_in_flight += 1;
                 }
                 metrics::record_request_sent(&request_type.to_string());
+                dispatch_budget = dispatch_budget.saturating_sub(1);
             } // end inner slot loop
         }
 
@@ -1411,7 +1417,6 @@ impl ValidatorLoop {
             verification_concurrency = self.verification_concurrency,
             "grew verification concurrency"
         );
-        save_verification_concurrency(&self.concurrency_path, self.verification_concurrency);
     }
 
     fn spawn_verification(&mut self, mut result: TaskResult) {
@@ -2151,6 +2156,7 @@ impl ValidatorLoop {
 
         if now.duration_since(self.last_perf_save) > Duration::from_secs(300) {
             self.performance_tracker.save();
+            save_verification_concurrency(&self.concurrency_path, self.verification_concurrency);
             self.last_perf_save = now;
         }
 
@@ -2510,6 +2516,7 @@ impl ValidatorLoop {
             error!(error = %e, "saving scores during shutdown");
         }
         self.performance_tracker.save();
+        save_verification_concurrency(&self.concurrency_path, self.verification_concurrency);
     }
 }
 
