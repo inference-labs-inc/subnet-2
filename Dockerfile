@@ -38,9 +38,9 @@ RUN CARGO_VERSION="${SN2_VERSION#v}" && \
     cargo build --release --locked --bin sn2-validator --bin sn2-miner
 
 ARG SN2_PLATFORM=linux/amd64
-FROM --platform=$SN2_PLATFORM debian:bookworm-20250224-slim AS runtime
+FROM --platform=$SN2_PLATFORM debian:bookworm-20260223-slim AS runtime
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     jq \
     aria2 \
     curl \
@@ -62,9 +62,9 @@ RUN curl -o /tmp/install_nvm.sh https://raw.githubusercontent.com/nvm-sh/nvm/v0.
     rm /tmp/install_nvm.sh && \
     export NVM_DIR="$NVM_DIR" && \
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && \
-    nvm install 20 && \
-    nvm use 20 && \
-    npm install --prefix /opt/.snarkjs snarkjs@0.7.4 && \
+    nvm install 22 && \
+    nvm use 22 && \
+    npm install --prefix /opt/.snarkjs snarkjs@0.7.6 && \
     mkdir -p ~/.local/bin && \
     ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/node" /home/subnet2/.local/bin/node && \
     ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/npm" /home/subnet2/.local/bin/npm && \
