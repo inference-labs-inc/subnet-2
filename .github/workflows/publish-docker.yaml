@@ -112,7 +112,7 @@ jobs:
     steps:
       - name: Validate release ref
         run: |
-          if ! echo "${{ github.event.workflow_run.head_branch }}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+'; then
+          if ! echo "${{ github.event.workflow_run.head_branch }}" | grep -qE '^v?[0-9]+\.[0-9]+\.[0-9]+'; then
             echo "::error::Unexpected head_branch: ${{ github.event.workflow_run.head_branch }}"
             exit 1
           fi
