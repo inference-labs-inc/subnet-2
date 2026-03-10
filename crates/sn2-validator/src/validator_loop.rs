@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -114,6 +115,8 @@ pub struct ValidatorLoop {
     verify_tasks: JoinSet<VerifyResult>,
     verify_guard_hashes: HashMap<tokio::task::Id, Option<String>>,
     pending_verifications: VecDeque<TaskResult>,
+    verification_concurrency: usize,
+    concurrency_path: PathBuf,
 }
 
 impl ValidatorLoop {
@@ -205,6 +208,13 @@ impl ValidatorLoop {
             )
         };
 
+        let concurrency_path = dirs_next::home_dir()
+            .unwrap_or_default()
+            .join(".bittensor")
+            .join("subnet-2")
+            .join("verification_concurrency.json");
+        let verification_concurrency = load_verification_concurrency(&concurrency_path);
+
         let pipeline = RequestPipeline::new();
         let circuit_store_loopback = config.loopback && config.circuit_api_url.is_none();
         let circuit_store = CircuitStore::new(
@@ -257,6 +267,8 @@ impl ValidatorLoop {
             verify_tasks: JoinSet::new(),
             verify_guard_hashes: HashMap::new(),
             pending_verifications: VecDeque::new(),
+            verification_concurrency,
+            concurrency_path,
         })
     }
 
@@ -337,7 +349,11 @@ impl ValidatorLoop {
                             error!(error = %e, "verification task panicked");
                         }
                     }
+                    let had_pending = !self.pending_verifications.is_empty();
                     self.drain_pending_verifications();
+                    if had_pending {
+                        self.grow_verification_concurrency();
+                    }
                 }
                 Some(submission) = self.dsperse_rx.recv() => {
                     self.handle_dsperse_submission(submission).await;
@@ -924,7 +940,7 @@ impl ValidatorLoop {
 
     async fn dispatch_requests(&mut self) -> Result<()> {
         let verification_backlog = self.verify_tasks.len() + self.pending_verifications.len();
-        if verification_backlog >= self.config.max_concurrent_verifications {
+        if verification_backlog >= self.verification_concurrency {
             return Ok(());
         }
 
@@ -1372,7 +1388,7 @@ impl ValidatorLoop {
             self.benchmark_in_flight = self.benchmark_in_flight.saturating_sub(1);
         }
 
-        if self.verify_tasks.len() >= self.config.max_concurrent_verifications {
+        if self.verify_tasks.len() >= self.verification_concurrency {
             self.pending_verifications.push_back(result);
             return;
         }
@@ -1381,12 +1397,21 @@ impl ValidatorLoop {
     }
 
     fn drain_pending_verifications(&mut self) {
-        while self.verify_tasks.len() < self.config.max_concurrent_verifications {
+        while self.verify_tasks.len() < self.verification_concurrency {
             match self.pending_verifications.pop_front() {
                 Some(result) => self.spawn_verification(result),
                 None => break,
             }
         }
+    }
+
+    fn grow_verification_concurrency(&mut self) {
+        self.verification_concurrency += 1;
+        info!(
+            verification_concurrency = self.verification_concurrency,
+            "grew verification concurrency"
+        );
+        save_verification_concurrency(&self.concurrency_path, self.verification_concurrency);
     }
 
     fn spawn_verification(&mut self, mut result: TaskResult) {
@@ -2186,7 +2211,7 @@ impl ValidatorLoop {
                 queryable_neurons = queryable_count,
                 benchmark_circuits = benchmark_count,
                 dsperse_circuits = dsperse_count,
-                max_concurrent_verifications = self.config.max_concurrent_verifications,
+                verification_concurrency = self.verification_concurrency,
                 verify_tasks = self.verify_tasks.len(),
                 pending_verifications = self.pending_verifications.len(),
                 benchmark_in_flight = self.benchmark_in_flight,
@@ -2598,5 +2623,42 @@ mod tests {
     fn event_slice_num_tiled() {
         assert_eq!(event_slice_num("slice_0", true, Some(0)), "slice_0_tile_0");
         assert_eq!(event_slice_num("slice_2", true, Some(7)), "slice_2_tile_7");
+    }
+}
+
+fn load_verification_concurrency(path: &PathBuf) -> usize {
+    let data = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    match serde_json::from_str::<serde_json::Value>(&data) {
+        Ok(v) => {
+            let concurrency = v.get("concurrency").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+            info!(concurrency, "loaded verification concurrency from disk");
+            concurrency.max(1)
+        }
+        Err(e) => {
+            warn!(error = %e, "parsing verification concurrency file");
+            1
+        }
+    }
+}
+
+fn save_verification_concurrency(path: &PathBuf, concurrency: usize) {
+    let data = serde_json::json!({ "concurrency": concurrency });
+    let tmp_path = path.with_extension("tmp");
+    match serde_json::to_string(&data) {
+        Ok(json_str) => {
+            if let Err(e) = std::fs::write(&tmp_path, &json_str) {
+                warn!(error = %e, "writing verification concurrency tmp file");
+                return;
+            }
+            if let Err(e) = std::fs::rename(&tmp_path, path) {
+                warn!(error = %e, "renaming verification concurrency file");
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "serializing verification concurrency");
+        }
     }
 }

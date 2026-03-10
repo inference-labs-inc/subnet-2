@@ -71,9 +71,6 @@ pub struct Cli {
     )]
     pub miner_address: String,
 
-    #[arg(long, default_value_t = sn2_types::MAX_CONCURRENT_VERIFICATIONS, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
-    pub max_concurrent_verifications: usize,
-
     #[arg(long, value_delimiter = ',')]
     pub additional_circuits: Vec<String>,
 }
