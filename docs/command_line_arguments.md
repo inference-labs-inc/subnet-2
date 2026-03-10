@@ -24,8 +24,6 @@ All arguments use `--long-flag` syntax. Flags are shared between miner and valid
 | `--quic-port` | `8092` | QUIC ([btlightning](https://github.com/inference-labs-inc/lightning)) server port |
 | `--external-ip` | None | Public IP to register on-chain for the axon |
 | `--dsperse-socket` | None | dsperse prover socket address |
-| `--circuit-dir` | `competition_circuit` | Directory for competition circuit files |
-| `--storage-bucket` | None | S3 bucket for circuit storage |
 
 ## Validator Arguments
 
