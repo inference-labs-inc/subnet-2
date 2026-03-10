@@ -335,6 +335,7 @@ impl ValidatorLoop {
                     self.dispatch_notify.notify_one();
                 }
                 Some(result) = self.verify_tasks.join_next() => {
+                    let verified_ok = result.is_ok();
                     match result {
                         Ok(verify_result) => {
                             let guard_hash = self.verify_guard_hashes.remove(&verify_result.verify_task_id);
@@ -349,8 +350,7 @@ impl ValidatorLoop {
                             error!(error = %e, "verification task panicked");
                         }
                     }
-                    let had_pending = !self.pending_verifications.is_empty();
-                    if had_pending {
+                    if verified_ok && !self.pending_verifications.is_empty() {
                         self.grow_verification_concurrency();
                     }
                     self.drain_pending_verifications();
