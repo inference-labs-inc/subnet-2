@@ -870,10 +870,13 @@ impl ValidatorLoop {
             }
         };
 
-        let zeros = ndarray::ArrayD::zeros(ndarray::IxDyn(&shape));
+        let mut rng = rand::thread_rng();
+        let input = ndarray::ArrayD::from_shape_fn(ndarray::IxDyn(&shape), |_| {
+            rand::Rng::gen_range(&mut rng, 0.0_f64..1.0)
+        });
         let slices_dir = circuit.paths.base_path.join("slices");
 
-        let incremental = match dsperse::pipeline::IncrementalRun::new(&slices_dir, zeros) {
+        let incremental = match dsperse::pipeline::IncrementalRun::new(&slices_dir, input) {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, circuit = %circuit.id, "failed to create benchmark IncrementalRun");
