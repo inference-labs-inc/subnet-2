@@ -1,5 +1,5 @@
-ARG TARGETPLATFORM=linux/amd64
-FROM --platform=$TARGETPLATFORM rust:1.91.0-bookworm AS chef
+ARG SN2_PLATFORM=linux/amd64
+FROM --platform=$SN2_PLATFORM rust:1.91.0-bookworm AS chef
 
 RUN cargo install cargo-chef --locked
 RUN apt-get update && apt-get install -y \
@@ -37,8 +37,8 @@ RUN CARGO_VERSION="${SN2_VERSION#v}" && \
     fi && \
     cargo build --release --locked --bin sn2-validator --bin sn2-miner
 
-ARG TARGETPLATFORM=linux/amd64
-FROM --platform=$TARGETPLATFORM debian:bookworm-20250224-slim AS runtime
+ARG SN2_PLATFORM=linux/amd64
+FROM --platform=$SN2_PLATFORM debian:bookworm-20250224-slim AS runtime
 
 RUN apt-get update && apt-get install -y \
     jq \
