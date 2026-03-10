@@ -928,12 +928,7 @@ impl ValidatorLoop {
             return Ok(());
         }
 
-        let max_dispatched = self.config.max_concurrent_verifications * DISPATCH_BUFFER_MULTIPLIER;
         let active_count = self.tasks.len();
-        let available_slots = max_dispatched.saturating_sub(active_count);
-        if available_slots == 0 {
-            return Ok(());
-        }
 
         metrics::set_active_tasks(active_count);
 
@@ -958,25 +953,16 @@ impl ValidatorLoop {
             None
         };
 
-        let mut dispatched = 0usize;
-
         for neuron in &neurons {
-            if dispatched >= available_slots {
-                break;
-            }
-
             let uid = neuron.uid;
             let cap = capacities.get(&uid).copied().unwrap_or(1);
             let active_now = self.miner_active_count.get(&uid).copied().unwrap_or(0);
             if active_now >= cap {
                 continue;
             }
-            let slots_for_miner = (cap - active_now).min(available_slots - dispatched);
+            let slots_for_miner = cap - active_now;
 
             for _slot in 0..slots_for_miner {
-                if dispatched >= available_slots {
-                    break;
-                }
                 let active = self.miner_active_count.get(&uid).copied().unwrap_or(0);
                 let was_at_capacity = active + 1 >= cap;
 
@@ -1323,7 +1309,6 @@ impl ValidatorLoop {
                 if is_benchmark {
                     self.benchmark_in_flight += 1;
                 }
-                dispatched += 1;
                 metrics::record_request_sent(&request_type.to_string());
             } // end inner slot loop
         }
@@ -2201,8 +2186,6 @@ impl ValidatorLoop {
                 queryable_neurons = queryable_count,
                 benchmark_circuits = benchmark_count,
                 dsperse_circuits = dsperse_count,
-                max_dispatch =
-                    self.config.max_concurrent_verifications * DISPATCH_BUFFER_MULTIPLIER,
                 max_concurrent_verifications = self.config.max_concurrent_verifications,
                 benchmark_in_flight = self.benchmark_in_flight,
                 "health"
