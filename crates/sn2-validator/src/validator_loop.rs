@@ -213,7 +213,7 @@ impl ValidatorLoop {
             .unwrap_or_default()
             .join(".bittensor")
             .join("subnet-2")
-            .join("verification_concurrency.json");
+            .join(format!("verification_concurrency.{}.json", config.netuid));
         let max_verification_concurrency =
             std::thread::available_parallelism().map_or(8, |n| n.get());
         let verification_concurrency =
