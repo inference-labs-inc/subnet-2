@@ -1,0 +1,48 @@
+name: Trivy SARIF Scan
+description: Run Trivy security scan and upload SARIF to GitHub Security tab
+
+inputs:
+  scan-type:
+    description: "Trivy scan type: image or fs"
+    default: image
+  image-ref:
+    description: Container image to scan (for image scans)
+    default: ""
+  scan-ref:
+    description: Path to scan (for fs scans)
+    default: "."
+  category:
+    description: SARIF category for GitHub Security tab
+    required: true
+  severity:
+    description: Severity levels to report
+    default: CRITICAL,HIGH
+  ignore-unfixed:
+    description: Ignore unfixed vulnerabilities
+    default: "true"
+  skip-dirs:
+    description: Directories to skip (comma-separated)
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Run Trivy scan
+      id: trivy
+      uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+      with:
+        scan-type: ${{ inputs.scan-type }}
+        image-ref: ${{ inputs.image-ref }}
+        scan-ref: ${{ inputs.scan-ref }}
+        format: sarif
+        output: trivy-results.sarif
+        severity: ${{ inputs.severity }}
+        ignore-unfixed: ${{ inputs.ignore-unfixed }}
+        skip-dirs: ${{ inputs.skip-dirs }}
+
+    - name: Upload SARIF to GitHub Security tab
+      if: steps.trivy.conclusion == 'success'
+      uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
+      with:
+        sarif_file: trivy-results.sarif
+        category: ${{ inputs.category }}
