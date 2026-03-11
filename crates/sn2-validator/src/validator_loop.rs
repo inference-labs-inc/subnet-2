@@ -206,7 +206,13 @@ impl ValidatorLoop {
             )
         };
 
-        let verification_concurrency = std::thread::available_parallelism().map_or(8, |n| n.get());
+        let verification_concurrency = match std::thread::available_parallelism() {
+            Ok(n) => n.get(),
+            Err(e) => {
+                warn!(error = %e, fallback = 8, "CPU detection failed, using fallback verification concurrency");
+                8
+            }
+        };
         info!(
             verification_concurrency,
             "initialized verification concurrency"
