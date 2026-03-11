@@ -1745,8 +1745,9 @@ dependencies = [
 
 [[package]]
 name = "btlightning"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/btlightning.git?rev=6e8b399184f1b8bc88d5668ae75e5b548cc2fcaa#6e8b399184f1b8bc88d5668ae75e5b548cc2fcaa"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c882342e46b0c30f778f3ae1d6cfec818a7325d9ea1613b7353ebafe5071a3e"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1755,6 +1756,7 @@ dependencies = [
  "indexmap 2.13.0",
  "parity-scale-codec",
  "quinn",
+ "quinn-proto",
  "rand 0.8.5",
  "rcgen",
  "rmp-serde",
@@ -10466,9 +10468,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.13"
+version = "0.11.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31"
+checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
 dependencies = [
  "bytes",
  "fastbloom",

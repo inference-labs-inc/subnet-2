@@ -1,0 +1,83 @@
+name: Docker Build and Publish
+description: Set up Docker Buildx, authenticate, extract metadata, build and push image
+
+inputs:
+  registry:
+    description: Container registry
+    required: true
+  username:
+    description: Registry username
+    required: true
+  password:
+    description: Registry password or token
+    required: true
+  images:
+    description: Image name for metadata generation
+    required: true
+  context:
+    description: Docker build context
+    default: "."
+  file:
+    description: Path to Dockerfile
+    default: "./Dockerfile"
+  target:
+    description: Docker build target stage
+    default: ""
+  tags:
+    description: Image tags (newline-separated)
+    required: true
+  push:
+    description: Push image to registry
+    default: "true"
+  pull:
+    description: Pull base images before build
+    default: "false"
+  build-args:
+    description: Build arguments (newline-separated)
+    default: ""
+  cache-from:
+    description: Cache source
+    default: ""
+  cache-to:
+    description: Cache destination
+    default: ""
+
+outputs:
+  digest:
+    description: Image digest
+    value: ${{ steps.build.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+    - name: Log in to container registry
+      if: inputs.push == 'true'
+      uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.username }}
+        password: ${{ inputs.password }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+      with:
+        images: ${{ inputs.images }}
+
+    - name: Build and push
+      id: build
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        target: ${{ inputs.target }}
+        push: ${{ inputs.push }}
+        pull: ${{ inputs.pull }}
+        tags: ${{ inputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: ${{ inputs.build-args }}
+        cache-from: ${{ inputs.cache-from }}
+        cache-to: ${{ inputs.cache-to }}

@@ -91,24 +91,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Run Trivy vulnerability scanner in repo mode
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+      - name: Scan repository
+        uses: ./.github/actions/trivy-sarif
         with:
-          scan-type: "fs"
+          scan-type: fs
           scan-ref: "."
-          format: "sarif"
-          output: "trivy-results.sarif"
+          category: trivy
           skip-dirs: "/lib/modules,/boot,/usr/src/kernels,target"
-          ignore-unfixed: true
-
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
-        with:
-          sarif_file: "trivy-results.sarif"
-          category: "trivy"
 
       - name: Run Trivy for JSON report
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
           scan-type: "repo"
           scan-ref: "."
@@ -141,7 +133,7 @@ jobs:
 
       - name: TruffleHog OSS (Pull Request)
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@cbdff3fa9cf5e46d9a78c0d3ab6374f7f5e89334
+        uses: trufflesecurity/trufflehog@4860052fc923ce00536db0f7b257092794dbb750
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -150,7 +142,7 @@ jobs:
 
       - name: TruffleHog OSS (Push)
         if: github.event_name == 'push'
-        uses: trufflesecurity/trufflehog@cbdff3fa9cf5e46d9a78c0d3ab6374f7f5e89334
+        uses: trufflesecurity/trufflehog@4860052fc923ce00536db0f7b257092794dbb750
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -159,7 +151,7 @@ jobs:
 
       - name: TruffleHog OSS (Schedule)
         if: github.event_name == 'schedule'
-        uses: trufflesecurity/trufflehog@cbdff3fa9cf5e46d9a78c0d3ab6374f7f5e89334
+        uses: trufflesecurity/trufflehog@4860052fc923ce00536db0f7b257092794dbb750
         with:
           path: ./
           extra_args: --debug --only-verified
