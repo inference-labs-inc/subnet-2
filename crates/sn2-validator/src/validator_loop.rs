@@ -576,7 +576,7 @@ impl ValidatorLoop {
                         return;
                     }
                 };
-                let (output_data, output_shape) = if slice_info.named_inputs.len() > 1 {
+                let inference_result = if slice_info.named_inputs.len() > 1 {
                     let inputs: Vec<(String, Vec<f64>, Vec<usize>)> = slice_info
                         .named_inputs
                         .iter()
@@ -589,7 +589,7 @@ impl ValidatorLoop {
                         })
                         .collect();
                     let onnx = onnx_path.clone();
-                    let result = tokio::task::spawn_blocking(move || {
+                    tokio::task::spawn_blocking(move || {
                         let refs: Vec<(&str, Vec<f64>, Vec<usize>)> = inputs
                             .iter()
                             .map(|(n, d, s)| (n.as_str(), d.clone(), s.clone()))
@@ -599,44 +599,31 @@ impl ValidatorLoop {
                             &refs,
                         )
                     })
-                    .await;
-                    match result {
-                        Ok(Ok(r)) => r,
-                        Ok(Err(e)) => {
-                            warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX multi-input inference failed");
-                            self.teardown_run(run_uid).await;
-                            return;
-                        }
-                        Err(e) => {
-                            warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX multi-input inference task panicked");
-                            self.teardown_run(run_uid).await;
-                            return;
-                        }
-                    }
+                    .await
                 } else {
                     let input_flat: Vec<f64> = slice_info.input_tensor.iter().copied().collect();
                     let input_shape: Vec<usize> = slice_info.input_tensor.shape().to_vec();
                     let onnx = onnx_path.clone();
-                    let result = tokio::task::spawn_blocking(move || {
+                    tokio::task::spawn_blocking(move || {
                         dsperse::backend::onnx::run_inference(
                             std::path::Path::new(&onnx),
                             &input_flat,
                             &input_shape,
                         )
                     })
-                    .await;
-                    match result {
-                        Ok(Ok(r)) => r,
-                        Ok(Err(e)) => {
-                            warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference failed");
-                            self.teardown_run(run_uid).await;
-                            return;
-                        }
-                        Err(e) => {
-                            warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference task panicked");
-                            self.teardown_run(run_uid).await;
-                            return;
-                        }
+                    .await
+                };
+                let (output_data, output_shape) = match inference_result {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(e)) => {
+                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference failed");
+                        self.teardown_run(run_uid).await;
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference task panicked");
+                        self.teardown_run(run_uid).await;
+                        return;
                     }
                 };
                 let output_tensor = match ndarray::ArrayD::from_shape_vec(
@@ -1084,13 +1071,16 @@ impl ValidatorLoop {
                         break;
                     }
                     dsperse_circuit_path = None;
-                } else if !self.api_dslice_queue.is_empty() {
-                    let Some(dslice) = self.api_dslice_queue.pop_front() else {
-                        warn!(
-                            "api_dslice_queue was empty despite earlier guard; skipping dispatch"
-                        );
-                        continue;
-                    };
+                } else if let Some((dslice, queue_source)) = self
+                    .api_dslice_queue
+                    .pop_front()
+                    .map(|d| (d, RunSource::Api))
+                    .or_else(|| {
+                        self.stacked_dslice_queue
+                            .pop_front()
+                            .map(|d| (d, RunSource::Benchmark))
+                    })
+                {
                     retry_payload = RetryPayload::DSlice(Box::new(dslice.clone()));
                     request_type = RequestType::DSlice;
                     external_request_hash = None;
@@ -1121,42 +1111,10 @@ impl ValidatorLoop {
                         dslice.tile_idx,
                     );
                     if guard_hash.is_none() {
-                        self.api_dslice_queue.push_back(dslice);
-                        break;
-                    }
-                    dsperse_circuit_path = dslice.circuit_path.clone();
-                } else if let Some(dslice) = self.stacked_dslice_queue.pop_front() {
-                    retry_payload = RetryPayload::DSlice(Box::new(dslice.clone()));
-                    request_type = RequestType::DSlice;
-                    external_request_hash = None;
-                    retry_count = dslice.retry_count;
-                    slice_num = Some(dslice.slice_num.clone());
-                    run_uid = Some(dslice.run_uid.clone());
-                    is_tile = dslice.is_tile;
-                    task_id = dslice.task_id.clone();
-                    tile_idx = dslice.tile_idx;
-                    task_circuit = Some(dslice.circuit.clone());
-                    task_inputs = Some(dslice.inputs.clone());
-                    task_proof_system = Some(dslice.proof_system);
-                    synapse_name = DSliceProofGenerationDataModel::NAME;
-                    let dslice_model = self.pipeline.prepare_dslice_request(
-                        uid,
-                        &dslice.circuit,
-                        dslice.inputs.clone(),
-                        None,
-                        &dslice.slice_num,
-                        &dslice.run_uid,
-                        dslice.proof_system,
-                    );
-                    body = serde_json::to_value(&dslice_model).unwrap_or_default();
-                    guard_hash = self.pipeline.check_dslice_hash(
-                        &dslice.circuit.id,
-                        &dslice.slice_num,
-                        &dslice.run_uid,
-                        dslice.tile_idx,
-                    );
-                    if guard_hash.is_none() {
-                        self.stacked_dslice_queue.push_back(dslice);
+                        match queue_source {
+                            RunSource::Api => self.api_dslice_queue.push_back(dslice),
+                            RunSource::Benchmark => self.stacked_dslice_queue.push_back(dslice),
+                        }
                         break;
                     }
                     dsperse_circuit_path = dslice.circuit_path.clone();

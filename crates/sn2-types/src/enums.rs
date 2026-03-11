@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[allow(non_camel_case_types)]
+#[repr(u64)]
 pub enum ProofSystem {
-    CIRCOM,
-    JSTPROVE,
+    CIRCOM = 0,
+    JSTPROVE = 1,
 }
 
 impl<'de> Deserialize<'de> for ProofSystem {
@@ -31,8 +32,8 @@ impl<'de> Deserialize<'de> for ProofSystem {
 
             fn visit_u64<E: de::Error>(self, v: u64) -> Result<ProofSystem, E> {
                 match v {
-                    0 => Ok(ProofSystem::CIRCOM),
-                    1 => Ok(ProofSystem::JSTPROVE),
+                    v if v == ProofSystem::CIRCOM as u64 => Ok(ProofSystem::CIRCOM),
+                    v if v == ProofSystem::JSTPROVE as u64 => Ok(ProofSystem::JSTPROVE),
                     _ => Err(E::invalid_value(Unexpected::Unsigned(v), &self)),
                 }
             }
