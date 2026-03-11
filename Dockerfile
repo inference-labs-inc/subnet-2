@@ -65,7 +65,7 @@ RUN curl -o /tmp/install_nvm.sh https://raw.githubusercontent.com/nvm-sh/nvm/v0.
     nvm install 22 && \
     nvm use 22 && \
     npm install --prefix /opt/.snarkjs snarkjs@0.7.6 && \
-    cd /opt/.snarkjs && npm audit fix && cd - && \
+    cd /opt/.snarkjs && (npm audit fix || true) && cd - && \
     mkdir -p ~/.local/bin && \
     ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/node" /home/subnet2/.local/bin/node && \
     ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/npm" /home/subnet2/.local/bin/npm && \
