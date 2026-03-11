@@ -5,7 +5,7 @@ use crate::tensor_json::{arrayd_to_json, json_to_arrayd};
 use dsperse::pipeline::{IncrementalRun, SliceExecutionResult, SliceWork};
 use dsperse::schema::execution::{ExecutionInfo, ExecutionMethod};
 use dsperse::schema::tiling::TilingInfo;
-use sn2_types::{BoundedLruSet, ProofSystem, RunSource};
+use sn2_types::{BoundedFifoSet, ProofSystem, RunSource};
 use tracing::{info, warn};
 
 pub enum TileBufferOutcome {
@@ -59,7 +59,7 @@ const EVICTED_CAP: usize = 256;
 
 pub struct IncrementalRunManager {
     runs: HashMap<String, ActiveRun>,
-    evicted: BoundedLruSet<String>,
+    evicted: BoundedFifoSet<String>,
     tile_buffers: HashMap<(String, String), TileBuffer>,
 }
 
@@ -67,7 +67,7 @@ impl Default for IncrementalRunManager {
     fn default() -> Self {
         Self {
             runs: HashMap::new(),
-            evicted: BoundedLruSet::new(EVICTED_CAP),
+            evicted: BoundedFifoSet::new(EVICTED_CAP),
             tile_buffers: HashMap::new(),
         }
     }

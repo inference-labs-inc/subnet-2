@@ -1,13 +1,13 @@
 use std::collections::{HashSet, VecDeque};
 use std::hash::Hash;
 
-pub struct BoundedLruSet<T: Eq + Hash + Clone> {
+pub struct BoundedFifoSet<T: Eq + Hash + Clone> {
     set: HashSet<T>,
     order: VecDeque<T>,
     capacity: usize,
 }
 
-impl<T: Eq + Hash + Clone> BoundedLruSet<T> {
+impl<T: Eq + Hash + Clone> BoundedFifoSet<T> {
     pub fn new(capacity: usize) -> Self {
         Self {
             set: HashSet::new(),
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn insert_and_contains() {
-        let mut s = BoundedLruSet::new(4);
+        let mut s = BoundedFifoSet::new(4);
         assert!(s.insert("a".to_string()));
         assert!(s.contains(&"a".to_string()));
         assert!(!s.insert("a".to_string()));
@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn evicts_oldest_at_capacity() {
-        let mut s = BoundedLruSet::new(2);
+        let mut s = BoundedFifoSet::new(2);
         s.insert("a".to_string());
         s.insert("b".to_string());
         s.insert("c".to_string());
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn remove_allows_reinsert() {
-        let mut s = BoundedLruSet::new(4);
+        let mut s = BoundedFifoSet::new(4);
         s.insert("a".to_string());
         assert!(s.remove(&"a".to_string()));
         assert!(!s.contains(&"a".to_string()));
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn clear_empties() {
-        let mut s = BoundedLruSet::new(4);
+        let mut s = BoundedFifoSet::new(4);
         s.insert("a".to_string());
         s.clear();
         assert!(s.is_empty());

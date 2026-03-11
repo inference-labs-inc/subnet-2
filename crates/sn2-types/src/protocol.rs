@@ -23,7 +23,7 @@ impl QueryZkProof {
 }
 
 impl ProtocolMessage for QueryZkProof {
-    const NAME: &str = "query-zk-proof";
+    const NAME: &str = QueryZkProof::NAME;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +43,7 @@ impl ProofOfWeightsDataModel {
 }
 
 impl ProtocolMessage for ProofOfWeightsDataModel {
-    const NAME: &str = "proof-of-weights";
+    const NAME: &str = ProofOfWeightsDataModel::NAME;
 }
 
 fn default_subnet_uid() -> i32 {
@@ -75,7 +75,7 @@ impl DSliceProofGenerationDataModel {
 }
 
 impl ProtocolMessage for DSliceProofGenerationDataModel {
-    const NAME: &str = "dsperse-proof-generation";
+    const NAME: &str = DSliceProofGenerationDataModel::NAME;
 }
 
 fn default_dslice_proof_system() -> ProofSystem {

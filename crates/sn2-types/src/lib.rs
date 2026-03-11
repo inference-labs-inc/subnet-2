@@ -1,4 +1,4 @@
-mod bounded_lru_set;
+mod bounded_fifo_set;
 mod circuit;
 mod constants;
 mod enums;
@@ -8,7 +8,7 @@ mod persistence;
 mod protocol;
 mod request;
 
-pub use bounded_lru_set::*;
+pub use bounded_fifo_set::*;
 pub use circuit::*;
 pub use constants::*;
 pub use enums::*;

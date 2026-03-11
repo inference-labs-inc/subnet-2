@@ -1,19 +1,19 @@
 use sha2::{Digest, Sha256};
 use sn2_types::{
-    BoundedLruSet, Circuit, DSliceProofGenerationDataModel, ProofSystem, Request, RequestType,
+    BoundedFifoSet, Circuit, DSliceProofGenerationDataModel, ProofSystem, Request, RequestType,
 };
 use tracing::warn;
 
 const MAX_HASHES: usize = 32768;
 
 pub struct RequestPipeline {
-    hash_guard: BoundedLruSet<String>,
+    hash_guard: BoundedFifoSet<String>,
 }
 
 impl Default for RequestPipeline {
     fn default() -> Self {
         Self {
-            hash_guard: BoundedLruSet::new(MAX_HASHES),
+            hash_guard: BoundedFifoSet::new(MAX_HASHES),
         }
     }
 }
@@ -26,7 +26,7 @@ impl RequestPipeline {
     #[cfg(test)]
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            hash_guard: BoundedLruSet::new(capacity),
+            hash_guard: BoundedFifoSet::new(capacity),
         }
     }
 
