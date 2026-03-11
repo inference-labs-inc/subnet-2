@@ -178,6 +178,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          target: dev
           pull: "true"
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:testnet-nightly
           cache-from: type=gha
