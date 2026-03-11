@@ -38,6 +38,9 @@ impl<'de> Deserialize<'de> for ProofSystem {
             }
 
             fn visit_i64<E: de::Error>(self, v: i64) -> Result<ProofSystem, E> {
+                if v < 0 {
+                    return Err(E::invalid_value(Unexpected::Signed(v), &self));
+                }
                 self.visit_u64(v as u64)
             }
         }
