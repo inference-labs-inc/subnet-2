@@ -1,22 +1,13 @@
 use std::str::FromStr;
 
 use serde::de::{self, Deserializer, Unexpected};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[allow(non_camel_case_types)]
 pub enum ProofSystem {
     CIRCOM,
     JSTPROVE,
-}
-
-impl Serialize for ProofSystem {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(match self {
-            Self::CIRCOM => "CIRCOM",
-            Self::JSTPROVE => "JSTPROVE",
-        })
-    }
 }
 
 impl<'de> Deserialize<'de> for ProofSystem {
