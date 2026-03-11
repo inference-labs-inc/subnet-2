@@ -364,6 +364,7 @@ impl ValidatorLoop {
                         self.grow_verification_concurrency();
                     }
                     self.drain_pending_verifications();
+                    self.dispatch_notify.notify_one();
                 }
                 Some(submission) = self.dsperse_rx.recv() => {
                     self.handle_dsperse_submission(submission).await;
