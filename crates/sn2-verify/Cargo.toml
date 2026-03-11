@@ -12,7 +12,13 @@ path = "src/lib.rs"
 name = "sn2-verify"
 path = "src/main.rs"
 
+[[bin]]
+name = "bench-verify"
+path = "src/bench_verify.rs"
+
 [dependencies]
+clap = { workspace = true }
+dsperse = { workspace = true }
 sn2-types = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
