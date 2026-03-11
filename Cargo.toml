@@ -36,7 +36,7 @@ hex = "0.4"
 sp-core = "31"
 bittensor_wallet = { version = "4.0.1", package = "btwallet", default-features = false }
 subxt = "0.37"
-btlightning = { git = "https://github.com/inference-labs-inc/btlightning.git", rev = "6e8b399184f1b8bc88d5668ae75e5b548cc2fcaa", features = ["btwallet", "subtensor"] }
+btlightning = { version = "0.2.5", features = ["btwallet", "subtensor"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"

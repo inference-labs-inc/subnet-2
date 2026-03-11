@@ -141,7 +141,7 @@ jobs:
 
       - name: TruffleHog OSS (Pull Request)
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@cbdff3fa9cf5e46d9a78c0d3ab6374f7f5e89334
+        uses: trufflesecurity/trufflehog@4860052fc923ce00536db0f7b257092794dbb750
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -150,7 +150,7 @@ jobs:
 
       - name: TruffleHog OSS (Push)
         if: github.event_name == 'push'
-        uses: trufflesecurity/trufflehog@cbdff3fa9cf5e46d9a78c0d3ab6374f7f5e89334
+        uses: trufflesecurity/trufflehog@4860052fc923ce00536db0f7b257092794dbb750
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -159,7 +159,7 @@ jobs:
 
       - name: TruffleHog OSS (Schedule)
         if: github.event_name == 'schedule'
-        uses: trufflesecurity/trufflehog@cbdff3fa9cf5e46d9a78c0d3ab6374f7f5e89334
+        uses: trufflesecurity/trufflehog@4860052fc923ce00536db0f7b257092794dbb750
         with:
           path: ./
           extra_args: --debug --only-verified
