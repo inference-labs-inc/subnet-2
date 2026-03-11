@@ -116,6 +116,7 @@ pub struct ValidatorLoop {
     verify_guard_hashes: HashMap<tokio::task::Id, Option<String>>,
     pending_verifications: VecDeque<TaskResult>,
     verification_concurrency: usize,
+    max_verification_concurrency: usize,
     concurrency_path: PathBuf,
 }
 
@@ -213,7 +214,14 @@ impl ValidatorLoop {
             .join(".bittensor")
             .join("subnet-2")
             .join("verification_concurrency.json");
-        let verification_concurrency = load_verification_concurrency(&concurrency_path);
+        let max_verification_concurrency =
+            std::thread::available_parallelism().map_or(8, |n| n.get());
+        let verification_concurrency =
+            load_verification_concurrency(&concurrency_path).min(max_verification_concurrency);
+        info!(
+            verification_concurrency,
+            max_verification_concurrency, "initialized verification concurrency"
+        );
 
         let pipeline = RequestPipeline::new();
         let circuit_store_loopback = config.loopback && config.circuit_api_url.is_none();
@@ -268,6 +276,7 @@ impl ValidatorLoop {
             verify_guard_hashes: HashMap::new(),
             pending_verifications: VecDeque::new(),
             verification_concurrency,
+            max_verification_concurrency,
             concurrency_path,
         })
     }
@@ -1417,9 +1426,13 @@ impl ValidatorLoop {
     }
 
     fn grow_verification_concurrency(&mut self) {
+        if self.verification_concurrency >= self.max_verification_concurrency {
+            return;
+        }
         self.verification_concurrency += 1;
         info!(
             verification_concurrency = self.verification_concurrency,
+            max_verification_concurrency = self.max_verification_concurrency,
             "grew verification concurrency"
         );
     }
@@ -2659,6 +2672,12 @@ fn load_verification_concurrency(path: &Path) -> usize {
 fn save_verification_concurrency(path: &Path, concurrency: usize) {
     let data = serde_json::json!({ "concurrency": concurrency });
     let tmp_path = path.with_extension("tmp");
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!(error = %e, "creating verification concurrency directory");
+            return;
+        }
+    }
     match serde_json::to_string(&data) {
         Ok(json_str) => {
             if let Err(e) = std::fs::write(&tmp_path, &json_str) {
