@@ -119,7 +119,13 @@ pub struct ValidatorLoop {
 
 impl ValidatorLoop {
     pub async fn new(config: ValidatorConfig) -> Result<Self> {
-        metrics_server::init_metrics(config.metrics_port)?;
+        if let Err(e) = metrics_server::init_metrics(config.metrics_port) {
+            warn!(
+                error = %e,
+                port = config.metrics_port,
+                "metrics server unavailable, continuing without prometheus"
+            );
+        }
 
         let score_path = dirs_next::home_dir()
             .unwrap_or_default()
