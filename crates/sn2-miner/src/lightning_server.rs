@@ -50,6 +50,17 @@ pub async fn run_lightning_server(
         )
         .await?;
 
+    let h = handlers.clone();
+    server
+        .register_async_synapse_handler(
+            ProofOfWeightsDataModel::NAME.to_string(),
+            typed_async_handler(move |query: ProofOfWeightsDataModel| {
+                let h = h.clone();
+                async move { h.handle_proof_of_weights(query).await }
+            }),
+        )
+        .await?;
+
     server.start().await?;
 
     info!(host = host, port = port, "QUIC Lightning server listening");
