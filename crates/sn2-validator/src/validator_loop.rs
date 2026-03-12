@@ -512,7 +512,11 @@ impl ValidatorLoop {
         }
 
         let slices_dir = circuit.paths.base_path.join("slices");
-        let input_tensor = match crate::tensor_json::json_to_arrayd(&submission.inputs) {
+        let tensor_value = submission
+            .inputs
+            .get("input_data")
+            .unwrap_or(&submission.inputs);
+        let input_tensor = match crate::tensor_json::json_to_arrayd(tensor_value) {
             Ok(t) => t,
             Err(e) => {
                 warn!(error = %e, "failed to convert input to tensor");
