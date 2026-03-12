@@ -518,16 +518,48 @@ impl ValidatorLoop {
             .inputs
             .get("input_data")
             .unwrap_or(&submission.inputs);
-        let input_tensor = match crate::tensor_json::json_to_arrayd(tensor_value) {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(error = %e, "failed to convert input to tensor");
-                if let Some(req_id) = &submission.request_id {
-                    self.relay_send_response(req_id, serde_json::json!({"error": e.to_string()}))
-                        .await;
+
+        let input_tensor = match tensor_value.as_str() {
+            Some(b64) => {
+                let shape: Vec<usize> = submission
+                    .inputs
+                    .get("shape")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as usize))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match crate::tensor_json::decode_protobuf_tensor(b64, &shape) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        warn!(error = %e, "failed to decode protobuf tensor");
+                        if let Some(req_id) = &submission.request_id {
+                            self.relay_send_response(
+                                req_id,
+                                serde_json::json!({"error": e.to_string()}),
+                            )
+                            .await;
+                        }
+                        return;
+                    }
                 }
-                return;
             }
+            None => match crate::tensor_json::json_to_arrayd(tensor_value) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = %e, "failed to convert input to tensor");
+                    if let Some(req_id) = &submission.request_id {
+                        self.relay_send_response(
+                            req_id,
+                            serde_json::json!({"error": e.to_string()}),
+                        )
+                        .await;
+                    }
+                    return;
+                }
+            },
         };
 
         let incremental = match dsperse::pipeline::IncrementalRun::new(&slices_dir, input_tensor) {
