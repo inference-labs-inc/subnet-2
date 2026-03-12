@@ -10,10 +10,11 @@ pub struct BoundedFifoSet<T: Eq + Hash + Clone> {
 
 impl<T: Eq + Hash + Clone> BoundedFifoSet<T> {
     pub fn new(capacity: usize) -> Self {
+        let cap = capacity.max(1);
         Self {
-            set: HashSet::new(),
-            order: VecDeque::new(),
-            capacity: capacity.max(1),
+            set: HashSet::with_capacity(cap),
+            order: VecDeque::with_capacity(cap),
+            capacity: cap,
         }
     }
 
