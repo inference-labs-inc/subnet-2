@@ -1,23 +1,19 @@
-use std::collections::{HashSet, VecDeque};
-
 use sha2::{Digest, Sha256};
-use sn2_types::{Circuit, DSliceProofGenerationDataModel, ProofSystem, Request, RequestType};
+use sn2_types::{
+    BoundedFifoSet, Circuit, DSliceProofGenerationDataModel, ProofSystem, Request, RequestType,
+};
 use tracing::warn;
 
 const MAX_HASHES: usize = 32768;
 
 pub struct RequestPipeline {
-    hash_guard: HashSet<String>,
-    hash_order: VecDeque<String>,
-    capacity: usize,
+    hash_guard: BoundedFifoSet<String>,
 }
 
 impl Default for RequestPipeline {
     fn default() -> Self {
         Self {
-            hash_guard: HashSet::new(),
-            hash_order: VecDeque::new(),
-            capacity: MAX_HASHES,
+            hash_guard: BoundedFifoSet::new(MAX_HASHES),
         }
     }
 }
@@ -30,22 +26,8 @@ impl RequestPipeline {
     #[cfg(test)]
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            hash_guard: HashSet::new(),
-            hash_order: VecDeque::new(),
-            capacity: capacity.max(1),
+            hash_guard: BoundedFifoSet::new(capacity),
         }
-    }
-
-    fn insert_hash(&mut self, hash: String) {
-        while self.hash_guard.len() >= self.capacity {
-            if let Some(oldest) = self.hash_order.pop_front() {
-                self.hash_guard.remove(&oldest);
-            } else {
-                break;
-            }
-        }
-        self.hash_guard.insert(hash.clone());
-        self.hash_order.push_back(hash);
     }
 
     pub fn check_hash(&mut self, inputs: &serde_json::Value) -> Option<String> {
@@ -53,7 +35,7 @@ impl RequestPipeline {
         if self.hash_guard.contains(&hash) {
             return None;
         }
-        self.insert_hash(hash.clone());
+        self.hash_guard.insert(hash.clone());
         Some(hash)
     }
 
@@ -78,7 +60,7 @@ impl RequestPipeline {
         if self.hash_guard.contains(&hash) {
             return None;
         }
-        self.insert_hash(hash.clone());
+        self.hash_guard.insert(hash.clone());
         Some(hash)
     }
 
@@ -96,7 +78,7 @@ impl RequestPipeline {
         if self.hash_guard.contains(&hash) {
             return None;
         }
-        self.insert_hash(hash.clone());
+        self.hash_guard.insert(hash.clone());
         Some(hash)
     }
 
@@ -137,14 +119,10 @@ impl RequestPipeline {
 
     pub fn release_hash(&mut self, hash: &str) {
         self.hash_guard.remove(hash);
-        if let Some(pos) = self.hash_order.iter().position(|h| h == hash) {
-            self.hash_order.remove(pos);
-        }
     }
 
     pub fn clear_guard(&mut self) {
         self.hash_guard.clear();
-        self.hash_order.clear();
     }
 }
 

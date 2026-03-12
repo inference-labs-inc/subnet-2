@@ -1,15 +1,19 @@
+mod bounded_fifo_set;
 mod circuit;
 mod constants;
 mod enums;
 pub mod json_tensor;
 mod miner_response;
+mod persistence;
 mod protocol;
 mod request;
 
+pub use bounded_fifo_set::*;
 pub use circuit::*;
 pub use constants::*;
 pub use enums::*;
 pub use miner_response::*;
+pub use persistence::*;
 pub use protocol::*;
 pub use request::*;
 

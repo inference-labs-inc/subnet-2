@@ -1,11 +1,11 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::tensor_json::{arrayd_to_json, json_to_arrayd};
 use dsperse::pipeline::{IncrementalRun, SliceExecutionResult, SliceWork};
 use dsperse::schema::execution::{ExecutionInfo, ExecutionMethod};
 use dsperse::schema::tiling::TilingInfo;
-use sn2_types::{ProofSystem, RunSource};
+use sn2_types::{BoundedFifoSet, ProofSystem, RunSource};
 use tracing::{info, warn};
 
 pub enum TileBufferOutcome {
@@ -57,12 +57,20 @@ struct TileBuffer {
 
 const EVICTED_CAP: usize = 256;
 
-#[derive(Default)]
 pub struct IncrementalRunManager {
     runs: HashMap<String, ActiveRun>,
-    evicted_set: HashSet<String>,
-    evicted_order: VecDeque<String>,
+    evicted: BoundedFifoSet<String>,
     tile_buffers: HashMap<(String, String), TileBuffer>,
+}
+
+impl Default for IncrementalRunManager {
+    fn default() -> Self {
+        Self {
+            runs: HashMap::new(),
+            evicted: BoundedFifoSet::new(EVICTED_CAP),
+            tile_buffers: HashMap::new(),
+        }
+    }
 }
 
 impl IncrementalRunManager {
@@ -130,18 +138,7 @@ impl IncrementalRunManager {
     }
 
     pub fn is_evicted(&self, run_uid: &str) -> bool {
-        self.evicted_set.contains(run_uid)
-    }
-
-    fn mark_evicted(&mut self, run_uid: String) {
-        if self.evicted_set.insert(run_uid.clone()) {
-            self.evicted_order.push_back(run_uid);
-        }
-        while self.evicted_order.len() > EVICTED_CAP {
-            if let Some(oldest) = self.evicted_order.pop_front() {
-                self.evicted_set.remove(&oldest);
-            }
-        }
+        self.evicted.contains(run_uid)
     }
 
     pub fn get_circuit_id(&self, run_uid: &str) -> Option<&str> {
@@ -375,7 +372,7 @@ impl IncrementalRunManager {
             .retain(|(run_uid, _), _| !evict_set.contains(run_uid.as_str()));
         for uid in to_remove.iter() {
             self.runs.remove(uid);
-            self.mark_evicted(uid.clone());
+            self.evicted.insert(uid.clone());
         }
         to_remove
     }
@@ -396,7 +393,7 @@ impl IncrementalRunManager {
             .retain(|(run_uid, _), _| !stale_set.contains(run_uid.as_str()));
         for uid in stale.iter() {
             self.runs.remove(uid);
-            self.mark_evicted(uid.clone());
+            self.evicted.insert(uid.clone());
         }
         stale
     }

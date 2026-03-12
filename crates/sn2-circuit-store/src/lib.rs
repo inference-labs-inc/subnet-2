@@ -631,10 +631,7 @@ pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
     if !archive.exists() {
         anyhow::bail!("dslice archive not found: {}", archive.display());
     }
-    let tmp_dir = slices_dir.join(format!(".{slice_id}.extracting"));
-    if tmp_dir.exists() {
-        std::fs::remove_dir_all(&tmp_dir).ok();
-    }
+    let tmp_dir = slices_dir.join(format!(".{slice_id}.extracting.{}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir).with_context(|| format!("creating {}", tmp_dir.display()))?;
     let file =
         std::fs::File::open(&archive).with_context(|| format!("opening {}", archive.display()))?;
@@ -649,6 +646,9 @@ pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
     }
     if let Err(e) = std::fs::rename(&tmp_dir, &extract_dir) {
         std::fs::remove_dir_all(&tmp_dir).ok();
+        if extract_dir.exists() {
+            return Ok(());
+        }
         return Err(anyhow::anyhow!(
             "renaming {} to {}: {e}",
             tmp_dir.display(),

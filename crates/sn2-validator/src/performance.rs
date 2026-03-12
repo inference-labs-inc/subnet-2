@@ -119,15 +119,10 @@ impl PerformanceTracker {
             "capacities": capacities_json,
         });
 
-        let tmp_path = path.with_extension("tmp");
         match serde_json::to_string(&data) {
             Ok(json_str) => {
-                if let Err(e) = std::fs::write(&tmp_path, &json_str) {
-                    warn!(error = %e, "writing performance tracker tmp file");
-                    return;
-                }
-                if let Err(e) = std::fs::rename(&tmp_path, path) {
-                    warn!(error = %e, "renaming performance tracker file");
+                if let Err(e) = sn2_types::atomic_write_json(path, json_str.as_bytes()) {
+                    warn!(error = %e, "saving performance tracker");
                 }
             }
             Err(e) => {

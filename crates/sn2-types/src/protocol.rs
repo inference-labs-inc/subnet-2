@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ProofSystem;
 
+pub trait ProtocolMessage:
+    serde::Serialize + for<'de> serde::Deserialize<'de> + Send + Sync
+{
+    const NAME: &str;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryZkProof {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -14,6 +20,10 @@ pub struct QueryZkProof {
 
 impl QueryZkProof {
     pub const NAME: &str = "query-zk-proof";
+}
+
+impl ProtocolMessage for QueryZkProof {
+    const NAME: &str = QueryZkProof::NAME;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +40,10 @@ pub struct ProofOfWeightsDataModel {
 
 impl ProofOfWeightsDataModel {
     pub const NAME: &str = "proof-of-weights";
+}
+
+impl ProtocolMessage for ProofOfWeightsDataModel {
+    const NAME: &str = ProofOfWeightsDataModel::NAME;
 }
 
 fn default_subnet_uid() -> i32 {
@@ -58,6 +72,10 @@ pub struct DSliceProofGenerationDataModel {
 
 impl DSliceProofGenerationDataModel {
     pub const NAME: &str = "dsperse-proof-generation";
+}
+
+impl ProtocolMessage for DSliceProofGenerationDataModel {
+    const NAME: &str = DSliceProofGenerationDataModel::NAME;
 }
 
 fn default_dslice_proof_system() -> ProofSystem {
