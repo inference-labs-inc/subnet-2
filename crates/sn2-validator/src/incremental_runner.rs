@@ -138,7 +138,7 @@ impl IncrementalRunManager {
     }
 
     pub fn is_evicted(&self, run_uid: &str) -> bool {
-        self.evicted.contains(&run_uid.to_string())
+        self.evicted.contains(run_uid)
     }
 
     pub fn get_circuit_id(&self, run_uid: &str) -> Option<&str> {

@@ -118,7 +118,7 @@ impl RequestPipeline {
     }
 
     pub fn release_hash(&mut self, hash: &str) {
-        self.hash_guard.remove(&hash.to_string());
+        self.hash_guard.remove(hash);
     }
 
     pub fn clear_guard(&mut self) {

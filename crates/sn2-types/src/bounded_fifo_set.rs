@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::{HashSet, VecDeque};
 use std::hash::Hash;
 
@@ -16,7 +17,11 @@ impl<T: Eq + Hash + Clone> BoundedFifoSet<T> {
         }
     }
 
-    pub fn contains(&self, item: &T) -> bool {
+    pub fn contains<Q>(&self, item: &Q) -> bool
+    where
+        T: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
         self.set.contains(item)
     }
 
@@ -35,9 +40,13 @@ impl<T: Eq + Hash + Clone> BoundedFifoSet<T> {
         true
     }
 
-    pub fn remove(&mut self, item: &T) -> bool {
+    pub fn remove<Q>(&mut self, item: &Q) -> bool
+    where
+        T: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
         if self.set.remove(item) {
-            if let Some(pos) = self.order.iter().position(|i| i == item) {
+            if let Some(pos) = self.order.iter().position(|i| i.borrow() == item) {
                 self.order.remove(pos);
             }
             true
@@ -68,7 +77,7 @@ mod tests {
     fn insert_and_contains() {
         let mut s = BoundedFifoSet::new(4);
         assert!(s.insert("a".to_string()));
-        assert!(s.contains(&"a".to_string()));
+        assert!(s.contains("a"));
         assert!(!s.insert("a".to_string()));
     }
 
@@ -78,17 +87,17 @@ mod tests {
         s.insert("a".to_string());
         s.insert("b".to_string());
         s.insert("c".to_string());
-        assert!(!s.contains(&"a".to_string()));
-        assert!(s.contains(&"b".to_string()));
-        assert!(s.contains(&"c".to_string()));
+        assert!(!s.contains("a"));
+        assert!(s.contains("b"));
+        assert!(s.contains("c"));
     }
 
     #[test]
     fn remove_allows_reinsert() {
         let mut s = BoundedFifoSet::new(4);
         s.insert("a".to_string());
-        assert!(s.remove(&"a".to_string()));
-        assert!(!s.contains(&"a".to_string()));
+        assert!(s.remove("a"));
+        assert!(!s.contains("a"));
         assert!(s.insert("a".to_string()));
     }
 
