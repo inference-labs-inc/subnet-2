@@ -72,8 +72,14 @@ impl DSperseClient {
             .context("parsing slice_num")?;
 
         let slice_id = format!("slice_{slice_idx}");
-        sn2_circuit_store::ensure_slice_extracted(&slices_dir, &slice_id)
-            .with_context(|| format!("extracting dslice archive for {slice_id}"))?;
+        tokio::task::spawn_blocking({
+            let slices_dir = slices_dir.clone();
+            let slice_id = slice_id.clone();
+            move || sn2_circuit_store::ensure_slice_extracted(&slices_dir, &slice_id)
+        })
+        .await
+        .context("slice extraction task panicked")?
+        .with_context(|| format!("extracting dslice archive for {slice_id}"))?;
 
         let slice_dir = slices_dir.join(&slice_id);
         let circuit_path = slice_dir.join("jstprove").join("circuit.bundle");
