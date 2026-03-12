@@ -585,6 +585,8 @@ impl ValidatorLoop {
                 for (name, arr) in &slice_info.named_inputs {
                     let nan_c = arr.iter().filter(|v| v.is_nan()).count();
                     let inf_c = arr.iter().filter(|v| v.is_infinite()).count();
+                    let max_abs = arr.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+                    let f32_overflow = arr.iter().filter(|&&v| v.abs() > f32::MAX as f64).count();
                     let elems = arr.len();
                     info!(
                         run_uid = %run_uid,
@@ -594,6 +596,8 @@ impl ValidatorLoop {
                         elems = elems,
                         nan = nan_c,
                         inf = inf_c,
+                        max_abs = max_abs,
+                        f32_overflow = f32_overflow,
                         "ONNX slice input tensor stats"
                     );
                 }
