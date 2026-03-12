@@ -804,6 +804,16 @@ impl ValidatorLoop {
                 .get_run_source(run_uid)
                 .unwrap_or(RunSource::Benchmark);
 
+            if slice_info.input_tensor.iter().any(|v| !v.is_finite()) {
+                warn!(
+                    run_uid = %run_uid,
+                    slice = %slice_info.slice_id,
+                    "circuit slice input contains non-finite values, aborting run"
+                );
+                self.teardown_run(run_uid).await;
+                return;
+            }
+
             let input_max_abs = slice_info
                 .input_tensor
                 .iter()
@@ -1841,8 +1851,7 @@ impl ValidatorLoop {
                             "denormalized tiled circuit output"
                         );
                     }
-                    let full_json = crate::tensor_json::arrayd_to_json(&full_output);
-                    self.apply_dslice_result(&run_uid, &slice_num, &full_json)
+                    self.apply_dslice_result_tensor(&run_uid, &slice_num, full_output)
                         .await;
                 }
                 TileBufferOutcome::Failed(reason) => {
@@ -1865,33 +1874,36 @@ impl ValidatorLoop {
             .unwrap_or(serde_json::Value::Null);
 
         let scale_key = (run_uid.clone(), slice_num.clone());
-        let computed = if let Some(scale) = self.dslice_input_scales.remove(&scale_key) {
-            match crate::tensor_json::json_to_arrayd(&computed) {
-                Ok(mut arr) => {
-                    arr.mapv_inplace(|v| v * scale);
-                    info!(
-                        run_uid = %run_uid,
-                        slice = %slice_num,
-                        scale,
-                        "denormalized circuit output"
-                    );
-                    crate::tensor_json::arrayd_to_json(&arr)
-                }
-                Err(_) => computed,
+        let scale = self.dslice_input_scales.remove(&scale_key);
+
+        let mut tensor = match crate::tensor_json::json_to_arrayd(&computed) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(run_uid = %run_uid, slice = %slice_num, error = %e, "output tensor conversion failed, removing run");
+                self.teardown_run(&run_uid).await;
+                return;
             }
-        } else {
-            computed
         };
 
-        self.apply_dslice_result(&run_uid, &slice_num, &computed)
+        if let Some(scale) = scale {
+            tensor.mapv_inplace(|v| v * scale);
+            info!(
+                run_uid = %run_uid,
+                slice = %slice_num,
+                scale,
+                "denormalized circuit output"
+            );
+        }
+
+        self.apply_dslice_result_tensor(&run_uid, &slice_num, tensor)
             .await;
     }
 
-    async fn apply_dslice_result(
+    async fn apply_dslice_result_tensor(
         &mut self,
         run_uid: &str,
         slice_num: &str,
-        computed: &serde_json::Value,
+        output: ndarray::ArrayD<f64>,
     ) {
         let slices_dir = self
             .run_manager
@@ -1904,7 +1916,10 @@ impl ValidatorLoop {
             sn2_circuit_store::cleanup_extracted_slice(sd, slice_num);
         }
 
-        match self.run_manager.apply_result(run_uid, slice_num, computed) {
+        match self
+            .run_manager
+            .apply_result_tensor(run_uid, slice_num, output)
+        {
             Ok(is_complete) => {
                 if is_complete {
                     info!(run_uid = %run_uid, "incremental run complete");
@@ -2247,6 +2262,7 @@ impl ValidatorLoop {
                         if !evicted.is_empty() {
                             info!(circuit = %circuit_id, runs = ?evicted, "evicted in-flight runs for deactivated circuit");
                             for run_id in &evicted {
+                                self.dslice_input_scales.retain(|(uid, _), _| uid != run_id);
                                 self.relay_remove_pending(run_id).await;
                             }
                         }
@@ -2284,6 +2300,8 @@ impl ValidatorLoop {
         if now.duration_since(self.timings.gc) > Duration::from_secs(120) {
             let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
             for uid in &evicted {
+                self.dslice_input_scales
+                    .retain(|(run_uid, _), _| run_uid != uid);
                 self.relay_remove_pending(uid).await;
             }
             if !evicted.is_empty() {

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use crate::tensor_json::{arrayd_to_json, json_to_arrayd};
+use crate::tensor_json::arrayd_to_json;
 use dsperse::pipeline::{IncrementalRun, SliceExecutionResult, SliceWork};
 use dsperse::schema::execution::{ExecutionInfo, ExecutionMethod};
 use dsperse::schema::tiling::TilingInfo;
@@ -279,17 +279,6 @@ impl IncrementalRunManager {
                 "tile reconstruction failed for run={run_uid} slice={slice_id}: {e}"
             )),
         }
-    }
-
-    pub fn apply_result(
-        &mut self,
-        run_uid: &str,
-        slice_id: &str,
-        computed_outputs: &serde_json::Value,
-    ) -> anyhow::Result<bool> {
-        let output_tensor = json_to_arrayd(computed_outputs)
-            .map_err(|e| anyhow::anyhow!("output tensor conversion: {e}"))?;
-        self.apply_result_tensor(run_uid, slice_id, output_tensor)
     }
 
     pub fn apply_result_tensor(
