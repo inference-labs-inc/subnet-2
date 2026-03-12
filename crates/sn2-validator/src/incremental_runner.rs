@@ -290,6 +290,17 @@ impl IncrementalRunManager {
         slice_id: &str,
         computed_outputs: &serde_json::Value,
     ) -> anyhow::Result<bool> {
+        let output_tensor = json_to_arrayd(computed_outputs)
+            .map_err(|e| anyhow::anyhow!("output tensor conversion: {e}"))?;
+        self.apply_result_tensor(run_uid, slice_id, output_tensor)
+    }
+
+    pub fn apply_result_tensor(
+        &mut self,
+        run_uid: &str,
+        slice_id: &str,
+        output_tensor: ndarray::ArrayD<f64>,
+    ) -> anyhow::Result<bool> {
         let run = self
             .runs
             .get_mut(run_uid)
@@ -299,9 +310,6 @@ impl IncrementalRunManager {
             .incremental
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("run {run_uid} has no IncrementalRun"))?;
-
-        let output_tensor = json_to_arrayd(computed_outputs)
-            .map_err(|e| anyhow::anyhow!("output tensor conversion: {e}"))?;
 
         inc.apply_result(SliceExecutionResult {
             slice_id: slice_id.to_string(),

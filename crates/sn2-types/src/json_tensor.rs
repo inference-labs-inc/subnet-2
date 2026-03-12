@@ -2,6 +2,7 @@ pub fn flatten_json_to_f64(value: &serde_json::Value) -> Vec<f64> {
     match value {
         serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0)],
         serde_json::Value::Array(arr) => arr.iter().flat_map(flatten_json_to_f64).collect(),
+        serde_json::Value::Null => vec![0.0],
         _ => vec![],
     }
 }

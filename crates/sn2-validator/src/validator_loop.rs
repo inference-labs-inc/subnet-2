@@ -582,6 +582,21 @@ impl ValidatorLoop {
                         return;
                     }
                 };
+                for (name, arr) in &slice_info.named_inputs {
+                    let nan_c = arr.iter().filter(|v| v.is_nan()).count();
+                    let inf_c = arr.iter().filter(|v| v.is_infinite()).count();
+                    let elems = arr.len();
+                    info!(
+                        run_uid = %run_uid,
+                        slice = %slice_info.slice_id,
+                        input_name = %name,
+                        shape = ?arr.shape(),
+                        elems = elems,
+                        nan = nan_c,
+                        inf = inf_c,
+                        "ONNX slice input tensor stats"
+                    );
+                }
                 let inference_result = if slice_info.named_inputs.len() > 1 {
                     let inputs: Vec<(String, Vec<f64>, Vec<usize>)> = slice_info
                         .named_inputs
@@ -649,16 +664,32 @@ impl ValidatorLoop {
                         return;
                     }
                 };
-                info!(
-                    run_uid = %run_uid,
-                    slice = %slice_info.slice_id,
-                    output_shape = ?output_shape,
-                    "ran ONNX inference for non-circuit slice"
-                );
-                match self.run_manager.apply_result(
+                let nan_count = output_tensor.iter().filter(|v| v.is_nan()).count();
+                let inf_count = output_tensor.iter().filter(|v| v.is_infinite()).count();
+                let total_elems = output_tensor.len();
+                if nan_count > 0 || inf_count > 0 {
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %slice_info.slice_id,
+                        output_shape = ?output_shape,
+                        nan_count = nan_count,
+                        inf_count = inf_count,
+                        total_elems = total_elems,
+                        "ONNX output contains non-finite values"
+                    );
+                } else {
+                    info!(
+                        run_uid = %run_uid,
+                        slice = %slice_info.slice_id,
+                        output_shape = ?output_shape,
+                        total_elems = total_elems,
+                        "ran ONNX inference for non-circuit slice"
+                    );
+                }
+                match self.run_manager.apply_result_tensor(
                     run_uid,
                     &slice_info.slice_id,
-                    &crate::tensor_json::arrayd_to_json(&output_tensor),
+                    output_tensor,
                 ) {
                     Ok(true) => {
                         sn2_circuit_store::cleanup_extracted_slice(
