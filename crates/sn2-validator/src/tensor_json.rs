@@ -6,14 +6,31 @@ use sn2_types::json_tensor::{flatten_json_to_f64, infer_json_shape};
 use std::io::Read;
 
 pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>> {
+    let expected = shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .context("shape overflow")?;
+    let max_raw_len = expected
+        .checked_mul(5)
+        .and_then(|n| n.checked_add(1024))
+        .context("shape overflow")?;
+
     let compressed = base64::engine::general_purpose::STANDARD
         .decode(b64)
         .context("base64 decode")?;
-    let mut decoder = GzDecoder::new(&compressed[..]);
+    let decoder = GzDecoder::new(&compressed[..]);
     let mut raw = Vec::new();
-    decoder.read_to_end(&mut raw).context("gunzip")?;
+    decoder
+        .take(max_raw_len as u64 + 1)
+        .read_to_end(&mut raw)
+        .context("gunzip")?;
+    anyhow::ensure!(
+        raw.len() <= max_raw_len,
+        "decompressed protobuf exceeds max size for shape {shape:?}"
+    );
 
-    let mut floats: Vec<f64> = Vec::new();
+    let mut floats: Vec<f64> = Vec::with_capacity(expected);
+    let mut proto_shape: Vec<usize> = Vec::new();
     let mut offset = 0;
     while offset < raw.len() {
         let (tag, next) = read_varint(&raw, offset)?;
@@ -25,10 +42,16 @@ pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>>
             2 => {
                 let (len, next) = read_varint(&raw, offset)?;
                 offset = next;
+                let end = offset
+                    .checked_add(len)
+                    .context("length-delimited field overflow")?;
+                anyhow::ensure!(end <= raw.len(), "length-delimited field overflows buffer");
                 if field == 1 {
-                    let end = offset + len;
-                    anyhow::ensure!(end <= raw.len(), "packed field overflows buffer");
-                    while offset + 4 <= end {
+                    anyhow::ensure!(
+                        len % 4 == 0,
+                        "packed float field length {len} not a multiple of 4"
+                    );
+                    while offset < end {
                         let val = f32::from_le_bytes([
                             raw[offset],
                             raw[offset + 1],
@@ -38,13 +61,19 @@ pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>>
                         floats.push(val as f64);
                         offset += 4;
                     }
-                    offset = end;
-                } else {
-                    offset += len;
+                } else if field == 2 {
+                    let mut pos = offset;
+                    while pos < end {
+                        let (val, next) = read_varint(&raw, pos)?;
+                        proto_shape.push(val);
+                        pos = next;
+                    }
                 }
+                offset = end;
             }
             5 => {
-                anyhow::ensure!(offset + 4 <= raw.len(), "fixed32 overflows buffer");
+                let end = offset.checked_add(4).context("fixed32 overflow")?;
+                anyhow::ensure!(end <= raw.len(), "fixed32 overflows buffer");
                 if field == 1 {
                     let val = f32::from_le_bytes([
                         raw[offset],
@@ -54,20 +83,31 @@ pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>>
                     ]);
                     floats.push(val as f64);
                 }
-                offset += 4;
+                offset = end;
             }
             0 => {
-                let (_, next) = read_varint(&raw, offset)?;
+                let (val, next) = read_varint(&raw, offset)?;
+                if field == 2 {
+                    proto_shape.push(val);
+                }
                 offset = next;
             }
             1 => {
-                offset += 8;
+                let end = offset.checked_add(8).context("fixed64 overflow")?;
+                anyhow::ensure!(end <= raw.len(), "fixed64 overflows buffer");
+                offset = end;
             }
             _ => anyhow::bail!("unknown wire type {wire_type}"),
         }
     }
 
-    let expected: usize = shape.iter().product();
+    if !proto_shape.is_empty() {
+        anyhow::ensure!(
+            proto_shape == shape,
+            "protobuf shape {proto_shape:?} does not match declared shape {shape:?}"
+        );
+    }
+
     anyhow::ensure!(
         floats.len() == expected,
         "protobuf tensor has {} floats but shape {shape:?} expects {expected}",

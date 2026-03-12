@@ -521,16 +521,37 @@ impl ValidatorLoop {
 
         let input_tensor = match tensor_value.as_str() {
             Some(b64) => {
-                let shape: Vec<usize> = submission
-                    .inputs
-                    .get("shape")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as usize))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let shape_arr = match submission.inputs.get("shape").and_then(|v| v.as_array()) {
+                    Some(arr) => arr,
+                    None => {
+                        warn!("protobuf tensor input missing shape array");
+                        if let Some(req_id) = &submission.request_id {
+                            self.relay_send_response(
+                                req_id,
+                                serde_json::json!({"error": "protobuf tensor input requires shape array"}),
+                            )
+                            .await;
+                        }
+                        return;
+                    }
+                };
+                let mut shape = Vec::with_capacity(shape_arr.len());
+                for dim in shape_arr {
+                    match dim.as_u64().and_then(|n| usize::try_from(n).ok()) {
+                        Some(n) => shape.push(n),
+                        None => {
+                            warn!(?dim, "invalid dimension in shape array");
+                            if let Some(req_id) = &submission.request_id {
+                                self.relay_send_response(
+                                    req_id,
+                                    serde_json::json!({"error": "shape dimensions must be non-negative integers"}),
+                                )
+                                .await;
+                            }
+                            return;
+                        }
+                    }
+                }
                 match crate::tensor_json::decode_protobuf_tensor(b64, &shape) {
                     Ok(t) => t,
                     Err(e) => {
