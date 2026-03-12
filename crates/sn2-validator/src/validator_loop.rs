@@ -115,6 +115,7 @@ pub struct ValidatorLoop {
     verify_guard_hashes: HashMap<tokio::task::Id, Option<String>>,
     pending_verifications: VecDeque<TaskResult>,
     verification_concurrency: usize,
+    dslice_input_scales: HashMap<(String, String), f64>,
 }
 
 impl ValidatorLoop {
@@ -277,6 +278,7 @@ impl ValidatorLoop {
             verify_guard_hashes: HashMap::new(),
             pending_verifications: VecDeque::new(),
             verification_concurrency,
+            dslice_input_scales: HashMap::new(),
         })
     }
 
@@ -539,7 +541,7 @@ impl ValidatorLoop {
     async fn enqueue_next_dslice(&mut self, run_uid: &str, circuit: &Circuit) {
         let slices_dir = circuit.paths.base_path.join("slices");
         loop {
-            let slice_info = match self.run_manager.next_slice(run_uid) {
+            let mut slice_info = match self.run_manager.next_slice(run_uid) {
                 Ok(Some(info)) => info,
                 Ok(None) => {
                     warn!(run_uid = %run_uid, "no next slice available");
@@ -751,6 +753,27 @@ impl ValidatorLoop {
                 .run_manager
                 .get_run_source(run_uid)
                 .unwrap_or(RunSource::Benchmark);
+
+            let input_max_abs = slice_info
+                .input_tensor
+                .iter()
+                .fold(0.0_f64, |m, v| m.max(v.abs()));
+            if input_max_abs > 1.0 {
+                slice_info.input_tensor.mapv_inplace(|v| v / input_max_abs);
+                slice_info.inputs_json = serde_json::json!({
+                    "input_data": crate::tensor_json::arrayd_to_json(&slice_info.input_tensor)
+                });
+                self.dslice_input_scales.insert(
+                    (run_uid.to_string(), slice_info.slice_id.clone()),
+                    input_max_abs,
+                );
+                info!(
+                    run_uid = %run_uid,
+                    slice = %slice_info.slice_id,
+                    input_max_abs,
+                    "normalized circuit slice inputs to [-1, 1]"
+                );
+            }
 
             if let Some(ref tiling) = slice_info.tiling {
                 let input_4d = match slice_info
@@ -1731,7 +1754,17 @@ impl ValidatorLoop {
                 .buffer_tile_result(&run_uid, &slice_num, tile_idx, tile_output)
             {
                 TileBufferOutcome::Waiting => return,
-                TileBufferOutcome::Ready(full_output) => {
+                TileBufferOutcome::Ready(mut full_output) => {
+                    let scale_key = (run_uid.clone(), slice_num.clone());
+                    if let Some(scale) = self.dslice_input_scales.remove(&scale_key) {
+                        full_output.mapv_inplace(|v| v * scale);
+                        info!(
+                            run_uid = %run_uid,
+                            slice = %slice_num,
+                            scale,
+                            "denormalized tiled circuit output"
+                        );
+                    }
                     let full_json = crate::tensor_json::arrayd_to_json(&full_output);
                     self.apply_dslice_result(&run_uid, &slice_num, &full_json)
                         .await;
@@ -1754,6 +1787,25 @@ impl ValidatorLoop {
             .as_ref()
             .cloned()
             .unwrap_or(serde_json::Value::Null);
+
+        let scale_key = (run_uid.clone(), slice_num.clone());
+        let computed = if let Some(scale) = self.dslice_input_scales.remove(&scale_key) {
+            match crate::tensor_json::json_to_arrayd(&computed) {
+                Ok(mut arr) => {
+                    arr.mapv_inplace(|v| v * scale);
+                    info!(
+                        run_uid = %run_uid,
+                        slice = %slice_num,
+                        scale,
+                        "denormalized circuit output"
+                    );
+                    crate::tensor_json::arrayd_to_json(&arr)
+                }
+                Err(_) => computed,
+            }
+        } else {
+            computed
+        };
 
         self.apply_dslice_result(&run_uid, &slice_num, &computed)
             .await;
@@ -1961,6 +2013,8 @@ impl ValidatorLoop {
         self.stacked_dslice_queue
             .retain(|req| req.run_uid != run_uid);
         self.api_dslice_queue.retain(|req| req.run_uid != run_uid);
+        self.dslice_input_scales
+            .retain(|(uid, _), _| uid != run_uid);
         self.relay_remove_pending(run_uid).await;
     }
 

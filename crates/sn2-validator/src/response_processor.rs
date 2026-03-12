@@ -104,6 +104,19 @@ impl ResponseProcessor {
 
         let request_id = format!("verify-{}", response.uid);
 
+        let miner_outputs_stats = response.computed_outputs.as_ref().and_then(|v| {
+            let flat = sn2_types::json_tensor::flatten_json_to_f64(v);
+            if flat.is_empty() {
+                None
+            } else {
+                let max_abs = flat.iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
+                let inf_count = flat.iter().filter(|x| x.is_infinite()).count();
+                let nan_count = flat.iter().filter(|x| x.is_nan()).count();
+                let f32_overflow = flat.iter().filter(|&&x| x.abs() > f32::MAX as f64).count();
+                Some((flat.len(), max_abs, inf_count, nan_count, f32_overflow))
+            }
+        });
+
         match sn2_verify::verify_inner(
             &request_id,
             &circuit_path,
@@ -116,6 +129,38 @@ impl ResponseProcessor {
         .await
         {
             Ok(result) => {
+                let max_abs = result
+                    .rescaled_outputs
+                    .iter()
+                    .map(|x| x.abs())
+                    .fold(0.0_f64, f64::max);
+                let inf_count = result
+                    .rescaled_outputs
+                    .iter()
+                    .filter(|x| x.is_infinite())
+                    .count();
+                let f32_overflow = result
+                    .rescaled_outputs
+                    .iter()
+                    .filter(|&&x| x.abs() > f32::MAX as f64)
+                    .count();
+                let slice_num = response.dsperse_slice_num;
+                let sample: Vec<f64> = result.rescaled_outputs.iter().copied().take(8).collect();
+                tracing::info!(
+                    uid = response.uid,
+                    slice = ?slice_num,
+                    num_inputs,
+                    circuit_path = %circuit_path,
+                    scale_base = result.scale_base,
+                    scale_exponent = result.scale_exponent,
+                    num_outputs = result.rescaled_outputs.len(),
+                    max_abs,
+                    inf_count,
+                    f32_overflow,
+                    miner_stats = ?miner_outputs_stats,
+                    sample = ?sample,
+                    "circuit output extraction diagnostics"
+                );
                 response.computed_outputs =
                     Some(serde_json::to_value(&result.rescaled_outputs).unwrap_or_default());
                 Ok(true)
