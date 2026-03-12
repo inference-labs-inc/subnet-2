@@ -5,15 +5,26 @@ use ndarray::{ArrayD, IxDyn};
 use sn2_types::json_tensor::{flatten_json_to_f64, infer_json_shape};
 use std::io::Read;
 
+const MAX_TENSOR_ELEMENTS: usize = 16_777_216;
+const MAX_PROTOBUF_BYTES: usize = 128 * 1024 * 1024;
+
 pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>> {
     let expected = shape
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
         .context("shape overflow")?;
+    anyhow::ensure!(
+        expected <= MAX_TENSOR_ELEMENTS,
+        "tensor shape {shape:?} has {expected} elements, max is {MAX_TENSOR_ELEMENTS}"
+    );
     let max_raw_len = expected
         .checked_mul(5)
         .and_then(|n| n.checked_add(1024))
         .context("shape overflow")?;
+    anyhow::ensure!(
+        max_raw_len <= MAX_PROTOBUF_BYTES,
+        "protobuf payload size exceeds {MAX_PROTOBUF_BYTES} bytes"
+    );
 
     let compressed = base64::engine::general_purpose::STANDARD
         .decode(b64)
