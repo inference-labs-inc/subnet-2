@@ -931,6 +931,15 @@ impl ValidatorLoop {
                 let num_tiles = tiles.len();
 
                 if run_source == RunSource::Api {
+                    if tiles.is_empty() {
+                        warn!(
+                            run_uid = %run_uid,
+                            slice = %slice_info.slice_id,
+                            "split_into_tiles returned no tiles for API run"
+                        );
+                        self.teardown_run(run_uid).await;
+                        return;
+                    }
                     info!(
                         run_uid = %run_uid,
                         slice = %slice_info.slice_id,
