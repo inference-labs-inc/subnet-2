@@ -45,14 +45,14 @@ fn encode_frame(msg_type: u8, req_id: u32, payload: &[u8]) -> Vec<u8> {
 fn decode_submit_payload(payload: &[u8]) -> Result<(serde_json::Value, Option<&[u8]>)> {
     anyhow::ensure!(payload.len() >= 4, "submit payload too short");
     let meta_len = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
-    anyhow::ensure!(
-        payload.len() >= 4 + meta_len,
-        "submit payload meta truncated"
-    );
+    let meta_end = 4usize
+        .checked_add(meta_len)
+        .context("submit payload meta length overflow")?;
+    anyhow::ensure!(payload.len() >= meta_end, "submit payload meta truncated");
     let meta: serde_json::Value =
-        serde_json::from_slice(&payload[4..4 + meta_len]).context("parsing submit meta")?;
-    let tensor = if payload.len() > 4 + meta_len {
-        Some(&payload[4 + meta_len..])
+        serde_json::from_slice(&payload[4..meta_end]).context("parsing submit meta")?;
+    let tensor = if payload.len() > meta_end {
+        Some(&payload[meta_end..])
     } else {
         None
     };
@@ -387,11 +387,16 @@ impl RelayManager {
             }
 
             MSG_PROOF_REQ => {
-                let (meta, _tensor_data) = match decode_submit_payload(payload) {
+                let meta: serde_json::Value = match serde_json::from_slice(payload) {
                     Ok(v) => v,
                     Err(e) => {
-                        Self::send_error(ws_tx, req_id, -32602, &format!("Invalid payload: {e}"))
-                            .await;
+                        Self::send_error(
+                            ws_tx,
+                            req_id,
+                            -32602,
+                            &format!("Invalid proof payload: {e}"),
+                        )
+                        .await;
                         return;
                     }
                 };
