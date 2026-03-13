@@ -871,7 +871,7 @@ impl ValidatorLoop {
             if input_max_abs > 1.0 {
                 slice_info.input_tensor.mapv_inplace(|v| v / input_max_abs);
                 slice_info.inputs_json = serde_json::json!({
-                    "input_data": crate::tensor_json::arrayd_to_json(&slice_info.input_tensor)
+                    "input_data": crate::tensor::arrayd_to_json(&slice_info.input_tensor)
                 });
                 self.dslice_input_scales.insert(
                     (run_uid.to_string(), slice_info.slice_id.clone()),
@@ -1926,7 +1926,7 @@ impl ValidatorLoop {
         let scale_key = (run_uid.clone(), slice_num.clone());
         let scale = self.dslice_input_scales.remove(&scale_key);
 
-        let mut tensor = match crate::tensor_json::json_to_arrayd(&computed) {
+        let mut tensor = match crate::tensor::json_to_arrayd(&computed) {
             Ok(t) => t,
             Err(e) => {
                 warn!(run_uid = %run_uid, slice = %slice_num, error = %e, "output tensor conversion failed, removing run");

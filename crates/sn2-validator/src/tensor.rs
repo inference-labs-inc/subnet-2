@@ -142,12 +142,15 @@ fn read_varint(buf: &[u8], offset: usize) -> Result<(usize, usize)> {
     while pos < buf.len() {
         let byte = buf[pos];
         pos += 1;
+        anyhow::ensure!(
+            shift < usize::BITS as usize,
+            "varint exceeds platform usize"
+        );
         result |= ((byte & 0x7f) as usize) << shift;
         if byte & 0x80 == 0 {
             return Ok((result, pos));
         }
         shift += 7;
-        anyhow::ensure!(shift < 63, "varint exceeds 64-bit range");
     }
     anyhow::bail!("unterminated varint")
 }
@@ -163,7 +166,14 @@ pub fn json_to_arrayd(value: &serde_json::Value) -> Result<ArrayD<f64>> {
         );
         return ArrayD::from_shape_vec(IxDyn(&[]), flat).context("building 0-d array");
     }
-    let expected: usize = shape.iter().product();
+    let expected: usize = shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .context("shape overflow")?;
+    anyhow::ensure!(
+        expected <= MAX_TENSOR_ELEMENTS,
+        "tensor shape {shape:?} has {expected} elements, max is {MAX_TENSOR_ELEMENTS}"
+    );
     anyhow::ensure!(
         flat.len() == expected,
         "shape {shape:?} expects {expected} elements but got {}",
