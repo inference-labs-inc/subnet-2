@@ -1908,12 +1908,13 @@ impl ValidatorLoop {
         );
 
         if self.run_manager.get_run_source(&run_uid) == Some(RunSource::Api) {
+            self.dslice_input_scales
+                .retain(|(uid, _), _| uid != &run_uid);
             info!(
                 run_uid = %run_uid,
                 slice = %slice_num,
                 "API request: single proven tile complete, finalizing run"
             );
-            let computed = response.computed_outputs.clone();
             let mut active_run = self.run_manager.remove_run(&run_uid);
             if let Some(ref run) = active_run {
                 self.report_dsperse_completion(run);
@@ -1942,7 +1943,7 @@ impl ValidatorLoop {
                                 &circuit_id,
                                 &circuit_name,
                                 artifacts,
-                                computed,
+                                None,
                             )
                             .await
                         {
