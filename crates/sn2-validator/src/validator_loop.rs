@@ -934,7 +934,10 @@ impl ValidatorLoop {
                     if tiles.is_empty() {
                         let slice_path = slices_dir.join(&slice_info.slice_id);
                         sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
-                        sn2_circuit_store::cleanup_extracted_slice(&slices_dir, &slice_info.slice_id);
+                        sn2_circuit_store::cleanup_extracted_slice(
+                            &slices_dir,
+                            &slice_info.slice_id,
+                        );
                         warn!(
                             run_uid = %run_uid,
                             slice = %slice_info.slice_id,
