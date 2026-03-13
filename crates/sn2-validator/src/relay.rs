@@ -72,14 +72,14 @@ pub struct DsperseSubmission {
     pub circuit_id: String,
     pub inputs: serde_json::Value,
     pub tensor_data: Option<Vec<u8>>,
-    pub request_id: Option<String>,
+    pub request_id: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RwrSubmission {
     pub circuit_id: String,
     pub inputs: serde_json::Value,
-    pub request_id: Option<String>,
+    pub request_id: Option<u32>,
     pub retry_count: u32,
 }
 
@@ -371,17 +371,13 @@ impl RelayManager {
                     .cloned()
                     .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-                let req_id_str = if req_id > 0 {
-                    Some(req_id.to_string())
-                } else {
-                    None
-                };
+                let req_id_opt = if req_id > 0 { Some(req_id) } else { None };
 
                 let submission = DsperseSubmission {
                     circuit_id,
                     inputs,
                     tensor_data: tensor_data.map(|d| d.to_vec()),
-                    request_id: req_id_str,
+                    request_id: req_id_opt,
                 };
 
                 if let Err(e) = dsperse_tx.try_send(submission) {
@@ -419,16 +415,12 @@ impl RelayManager {
                     .cloned()
                     .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-                let req_id_str = if req_id > 0 {
-                    Some(req_id.to_string())
-                } else {
-                    None
-                };
+                let req_id_opt = if req_id > 0 { Some(req_id) } else { None };
 
                 let submission = RwrSubmission {
                     circuit_id,
                     inputs,
-                    request_id: req_id_str,
+                    request_id: req_id_opt,
                     retry_count: 0,
                 };
 
@@ -520,9 +512,8 @@ impl RelayManager {
         map.remove(hash);
     }
 
-    pub async fn send_response(&self, msg_type: u8, request_id: &str, result: serde_json::Value) {
+    pub async fn send_response(&self, msg_type: u8, req_id: u32, result: serde_json::Value) {
         if let Some(tx) = &self.ws_tx {
-            let req_id: u32 = request_id.parse().unwrap_or(0);
             let payload = serde_json::to_vec(&result).unwrap_or_default();
             let frame = encode_frame(msg_type, req_id, &payload);
             let _ = tx.try_send(Message::Binary(frame));

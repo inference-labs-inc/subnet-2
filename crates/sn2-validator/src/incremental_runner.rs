@@ -35,7 +35,7 @@ pub struct ActiveRun {
     pub started_at: Instant,
     pub last_activity: Instant,
     pub artifacts: Vec<SliceArtifact>,
-    pub relay_request_id: Option<String>,
+    pub relay_request_id: Option<u32>,
     pub incremental: Option<IncrementalRun>,
 }
 
@@ -84,7 +84,7 @@ impl IncrementalRunManager {
         circuit_id: String,
         circuit_name: String,
         run_source: RunSource,
-        relay_request_id: Option<String>,
+        relay_request_id: Option<u32>,
         incremental: Option<IncrementalRun>,
     ) {
         if self.runs.contains_key(&run_uid) {

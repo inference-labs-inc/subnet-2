@@ -52,7 +52,7 @@ struct TaskResult {
     uid: u16,
     request_type: RequestType,
     guard_hash: Option<String>,
-    external_request_hash: Option<String>,
+    external_request_hash: Option<u32>,
     retry_count: u32,
     was_at_capacity: bool,
     slice_num: Option<String>,
@@ -104,7 +104,7 @@ impl PeriodicTimings {
 struct DispatchedRequest {
     request_type: RequestType,
     guard_hash: Option<String>,
-    external_request_hash: Option<String>,
+    external_request_hash: Option<u32>,
     body: serde_json::Value,
     synapse_name: &'static str,
     retry_count: u32,
@@ -433,9 +433,9 @@ impl ValidatorLoop {
         Ok(())
     }
 
-    async fn relay_send_response(&self, msg_type: u8, request_id: &str, result: serde_json::Value) {
+    async fn relay_send_response(&self, msg_type: u8, req_id: u32, result: serde_json::Value) {
         if let Some(relay) = &self.relay {
-            relay.send_response(msg_type, request_id, result).await;
+            relay.send_response(msg_type, req_id, result).await;
         }
     }
 
@@ -492,7 +492,7 @@ impl ValidatorLoop {
             Ok(c) => c,
             Err(e) => {
                 warn!(circuit = %submission.circuit_id, error = %e, "unknown circuit in dsperse submission");
-                if let Some(req_id) = &submission.request_id {
+                if let Some(req_id) = submission.request_id {
                     self.relay_send_response(
                         FRAME_SUBMIT_RESULT,
                         req_id,
@@ -507,7 +507,7 @@ impl ValidatorLoop {
         if submission.tensor_data.is_none() {
             if let Err(msg) = circuit.validate_inputs(&submission.inputs) {
                 warn!(circuit = %circuit.id, error = %msg, "invalid inputs for dsperse submission");
-                if let Some(req_id) = &submission.request_id {
+                if let Some(req_id) = submission.request_id {
                     self.relay_send_response(
                         FRAME_SUBMIT_RESULT,
                         req_id,
@@ -535,7 +535,7 @@ impl ValidatorLoop {
                 Some(s) => s,
                 None => {
                     warn!(circuit = %circuit.id, "circuit schema missing valid shape for binary tensor");
-                    if let Some(req_id) = &submission.request_id {
+                    if let Some(req_id) = submission.request_id {
                         self.relay_send_response(
                             FRAME_SUBMIT_RESULT,
                             req_id,
@@ -550,7 +550,7 @@ impl ValidatorLoop {
                 Ok(t) => t,
                 Err(e) => {
                     warn!(error = %e, "failed to decode binary tensor");
-                    if let Some(req_id) = &submission.request_id {
+                    if let Some(req_id) = submission.request_id {
                         self.relay_send_response(
                             FRAME_SUBMIT_RESULT,
                             req_id,
@@ -570,7 +570,7 @@ impl ValidatorLoop {
                 Ok(t) => t,
                 Err(e) => {
                     warn!(error = %e, "failed to convert input to tensor");
-                    if let Some(req_id) = &submission.request_id {
+                    if let Some(req_id) = submission.request_id {
                         self.relay_send_response(
                             FRAME_SUBMIT_RESULT,
                             req_id,
@@ -587,7 +587,7 @@ impl ValidatorLoop {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, circuit = %circuit.id, "failed to create IncrementalRun");
-                if let Some(req_id) = &submission.request_id {
+                if let Some(req_id) = submission.request_id {
                     self.relay_send_response(
                         FRAME_SUBMIT_RESULT,
                         req_id,
@@ -607,7 +607,7 @@ impl ValidatorLoop {
             circuit.id.clone(),
             circuit.metadata.name.clone(),
             RunSource::Api,
-            submission.request_id.clone(),
+            submission.request_id,
             Some(incremental),
         );
 
@@ -625,7 +625,7 @@ impl ValidatorLoop {
 
         self.relay_register_pending(&run_uid).await;
 
-        if let Some(req_id) = &submission.request_id {
+        if let Some(req_id) = submission.request_id {
             self.relay_send_response(
                 FRAME_SUBMIT_RESULT,
                 req_id,
@@ -1228,7 +1228,7 @@ impl ValidatorLoop {
                 Ok(c) => c,
                 Err(e) => {
                     warn!(circuit = %rwr.circuit_id, error = %e, "unknown circuit for RWR");
-                    if let Some(req_id) = &rwr.request_id {
+                    if let Some(req_id) = rwr.request_id {
                         self.relay_send_response(
                             FRAME_PROOF_RESULT,
                             req_id,
@@ -1240,7 +1240,7 @@ impl ValidatorLoop {
             };
             if let Err(msg) = circuit.validate_inputs(&rwr.inputs) {
                 warn!(circuit = %rwr.circuit_id, error = %msg, "invalid inputs for RWR");
-                if let Some(req_id) = &rwr.request_id {
+                if let Some(req_id) = rwr.request_id {
                     self.relay_send_response(
                         FRAME_PROOF_RESULT,
                         req_id,
@@ -1262,7 +1262,7 @@ impl ValidatorLoop {
             return Some(DispatchedRequest {
                 request_type: RequestType::Rwr,
                 guard_hash,
-                external_request_hash: rwr.request_id.clone(),
+                external_request_hash: rwr.request_id,
                 body,
                 synapse_name: QueryZkProof::NAME,
                 retry_count: rwr.retry_count,
@@ -1442,7 +1442,9 @@ impl ValidatorLoop {
                     let mut response = MinerResponse {
                         uid,
                         verification_result: false,
-                        external_request_hash: external_request_hash.clone().unwrap_or_default(),
+                        external_request_hash: external_request_hash
+                            .map(|id| id.to_string())
+                            .unwrap_or_default(),
                         response_time: elapsed,
                         proof_size: 0,
                         circuit: task_circuit,
@@ -1496,7 +1498,7 @@ impl ValidatorLoop {
                 uid,
                 request_type,
                 guard_hash: guard_hash.clone(),
-                external_request_hash: external_request_hash.clone(),
+                external_request_hash,
                 retry_count,
                 was_at_capacity,
                 slice_num,
@@ -1639,7 +1641,7 @@ impl ValidatorLoop {
         let is_tile = result.is_tile;
         let task_id = result.task_id.clone();
         let tile_idx = result.tile_idx;
-        let external_request_hash = result.external_request_hash.clone();
+        let external_request_hash = result.external_request_hash;
         let retry_count = result.retry_count;
         let mut result = result;
         let retry_payload = std::mem::replace(&mut result.retry_payload, RetryPayload::None);
@@ -1713,7 +1715,7 @@ impl ValidatorLoop {
                             .await;
                         }
 
-                        if let Some(req_id) = &external_request_hash {
+                        if let Some(req_id) = external_request_hash {
                             self.relay_send_response(
                                 FRAME_PROOF_RESULT,
                                 req_id,
@@ -1762,7 +1764,7 @@ impl ValidatorLoop {
                 is_tile,
                 task_id.as_deref(),
                 tile_idx,
-                external_request_hash.as_deref(),
+                external_request_hash,
                 &reason,
             )
             .await;
@@ -2183,7 +2185,7 @@ impl ValidatorLoop {
         is_tile: bool,
         _task_id: Option<&str>,
         tile_idx: Option<u32>,
-        external_request_hash: Option<&str>,
+        external_request_hash: Option<u32>,
         reason: &str,
     ) {
         warn!(uid = uid, rtype = %request_type, retry = retry_count, error = reason, "miner query failed");
