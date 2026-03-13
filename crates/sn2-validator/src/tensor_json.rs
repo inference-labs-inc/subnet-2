@@ -26,6 +26,12 @@ pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>>
         "protobuf payload size exceeds {MAX_PROTOBUF_BYTES} bytes"
     );
 
+    let max_b64_len = MAX_PROTOBUF_BYTES.div_ceil(3) * 4;
+    anyhow::ensure!(
+        b64.len() <= max_b64_len,
+        "base64 input length {} exceeds limit",
+        b64.len()
+    );
     let compressed = base64::engine::general_purpose::STANDARD
         .decode(b64)
         .context("base64 decode")?;
@@ -42,6 +48,7 @@ pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>>
 
     let mut floats: Vec<f64> = Vec::with_capacity(expected);
     let mut proto_shape: Vec<usize> = Vec::new();
+    let mut proto_shape_seen = false;
     let mut offset = 0;
     while offset < raw.len() {
         let (tag, next) = read_varint(&raw, offset)?;
@@ -73,6 +80,7 @@ pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>>
                         offset += 4;
                     }
                 } else if field == 2 {
+                    proto_shape_seen = true;
                     let mut pos = offset;
                     while pos < end {
                         let (val, next) = read_varint(&raw, pos)?;
@@ -99,6 +107,7 @@ pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>>
             0 => {
                 let (val, next) = read_varint(&raw, offset)?;
                 if field == 2 {
+                    proto_shape_seen = true;
                     proto_shape.push(val);
                 }
                 offset = next;
@@ -112,7 +121,7 @@ pub fn decode_protobuf_tensor(b64: &str, shape: &[usize]) -> Result<ArrayD<f64>>
         }
     }
 
-    if !proto_shape.is_empty() {
+    if proto_shape_seen {
         anyhow::ensure!(
             proto_shape == shape,
             "protobuf shape {proto_shape:?} does not match declared shape {shape:?}"
