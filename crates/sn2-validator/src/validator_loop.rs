@@ -1919,6 +1919,18 @@ impl ValidatorLoop {
         if self.run_manager.get_run_source(&run_uid) == Some(RunSource::Api) {
             self.dslice_input_scales
                 .retain(|(uid, _), _| uid != &run_uid);
+
+            let slices_dir = self
+                .run_manager
+                .get_circuit_id(&run_uid)
+                .and_then(|cid| self.circuit_store.get_circuit(cid))
+                .map(|c| c.paths.base_path.join("slices"));
+            if let Some(ref sd) = slices_dir {
+                let slice_path = sd.join(&slice_num);
+                sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
+                sn2_circuit_store::cleanup_extracted_slice(sd, &slice_num);
+            }
+
             info!(
                 run_uid = %run_uid,
                 slice = %slice_num,
@@ -1980,6 +1992,7 @@ impl ValidatorLoop {
                 }),
             )
             .await;
+            self.relay_remove_pending(&run_uid).await;
             return;
         }
 
