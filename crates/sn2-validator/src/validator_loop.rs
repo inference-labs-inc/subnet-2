@@ -19,7 +19,9 @@ use crate::miner_client::MinerQueryClient;
 use crate::performance::PerformanceTracker;
 use crate::pow_manager::{PowItem, PowManager};
 use crate::proof_uploader::ProofUploader;
-use crate::relay::{DsperseSubmission, RelayManager, RwrSubmission};
+use crate::relay::{
+    DsperseSubmission, RelayManager, RwrSubmission, FRAME_PROOF_RESULT, FRAME_SUBMIT_RESULT,
+};
 use crate::request_pipeline::RequestPipeline;
 use crate::response_processor::ResponseProcessor;
 use crate::scoring::ScoreManager;
@@ -431,9 +433,9 @@ impl ValidatorLoop {
         Ok(())
     }
 
-    async fn relay_send_response(&self, request_id: &str, result: serde_json::Value) {
+    async fn relay_send_response(&self, msg_type: u8, request_id: &str, result: serde_json::Value) {
         if let Some(relay) = &self.relay {
-            relay.send_response(request_id, result).await;
+            relay.send_response(msg_type, request_id, result).await;
         }
     }
 
@@ -492,6 +494,7 @@ impl ValidatorLoop {
                 warn!(circuit = %submission.circuit_id, error = %e, "unknown circuit in dsperse submission");
                 if let Some(req_id) = &submission.request_id {
                     self.relay_send_response(
+                        FRAME_SUBMIT_RESULT,
                         req_id,
                         serde_json::json!({"error": format!("unknown circuit: {e}")}),
                     )
@@ -506,6 +509,7 @@ impl ValidatorLoop {
                 warn!(circuit = %circuit.id, error = %msg, "invalid inputs for dsperse submission");
                 if let Some(req_id) = &submission.request_id {
                     self.relay_send_response(
+                        FRAME_SUBMIT_RESULT,
                         req_id,
                         serde_json::json!({"error": format!("invalid input shape: {msg}")}),
                     )
@@ -533,6 +537,7 @@ impl ValidatorLoop {
                     warn!(circuit = %circuit.id, "circuit schema missing valid shape for binary tensor");
                     if let Some(req_id) = &submission.request_id {
                         self.relay_send_response(
+                            FRAME_SUBMIT_RESULT,
                             req_id,
                             serde_json::json!({"error": "circuit schema missing shape"}),
                         )
@@ -547,6 +552,7 @@ impl ValidatorLoop {
                     warn!(error = %e, "failed to decode binary tensor");
                     if let Some(req_id) = &submission.request_id {
                         self.relay_send_response(
+                            FRAME_SUBMIT_RESULT,
                             req_id,
                             serde_json::json!({"error": e.to_string()}),
                         )
@@ -566,6 +572,7 @@ impl ValidatorLoop {
                     warn!(error = %e, "failed to convert input to tensor");
                     if let Some(req_id) = &submission.request_id {
                         self.relay_send_response(
+                            FRAME_SUBMIT_RESULT,
                             req_id,
                             serde_json::json!({"error": e.to_string()}),
                         )
@@ -581,8 +588,12 @@ impl ValidatorLoop {
             Err(e) => {
                 warn!(error = %e, circuit = %circuit.id, "failed to create IncrementalRun");
                 if let Some(req_id) = &submission.request_id {
-                    self.relay_send_response(req_id, serde_json::json!({"error": e.to_string()}))
-                        .await;
+                    self.relay_send_response(
+                        FRAME_SUBMIT_RESULT,
+                        req_id,
+                        serde_json::json!({"error": e.to_string()}),
+                    )
+                    .await;
                 }
                 return;
             }
@@ -616,6 +627,7 @@ impl ValidatorLoop {
 
         if let Some(req_id) = &submission.request_id {
             self.relay_send_response(
+                FRAME_SUBMIT_RESULT,
                 req_id,
                 serde_json::json!({
                     "run_uid": run_uid,
@@ -1218,6 +1230,7 @@ impl ValidatorLoop {
                     warn!(circuit = %rwr.circuit_id, error = %e, "unknown circuit for RWR");
                     if let Some(req_id) = &rwr.request_id {
                         self.relay_send_response(
+                            FRAME_PROOF_RESULT,
                             req_id,
                             serde_json::json!({"success": false, "error": format!("unknown circuit: {e}")}),
                         ).await;
@@ -1229,6 +1242,7 @@ impl ValidatorLoop {
                 warn!(circuit = %rwr.circuit_id, error = %msg, "invalid inputs for RWR");
                 if let Some(req_id) = &rwr.request_id {
                     self.relay_send_response(
+                        FRAME_PROOF_RESULT,
                         req_id,
                         serde_json::json!({"success": false, "error": format!("invalid input shape: {msg}")}),
                     )
@@ -1701,6 +1715,7 @@ impl ValidatorLoop {
 
                         if let Some(req_id) = &external_request_hash {
                             self.relay_send_response(
+                                FRAME_PROOF_RESULT,
                                 req_id,
                                 serde_json::json!({
                                     "success": true,
@@ -2236,7 +2251,12 @@ impl ValidatorLoop {
         }
 
         if let Some(req_id) = external_request_hash {
+            let frame_type = match request_type {
+                RequestType::Rwr | RequestType::ProofOfWeights => FRAME_PROOF_RESULT,
+                _ => FRAME_SUBMIT_RESULT,
+            };
             self.relay_send_response(
+                frame_type,
                 req_id,
                 serde_json::json!({
                     "success": false,

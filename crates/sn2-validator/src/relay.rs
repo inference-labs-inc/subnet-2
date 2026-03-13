@@ -20,8 +20,12 @@ const MSG_SUBMIT_RESULT: u8 = 0x11;
 const MSG_STATUS_REQ: u8 = 0x20;
 const MSG_STATUS_RESULT: u8 = 0x21;
 const MSG_PROOF_REQ: u8 = 0x30;
+const MSG_PROOF_RESULT: u8 = 0x31;
 const MSG_BATCH_DONE: u8 = 0x40;
 const MSG_ERROR: u8 = 0xFE;
+
+pub const FRAME_SUBMIT_RESULT: u8 = MSG_SUBMIT_RESULT;
+pub const FRAME_PROOF_RESULT: u8 = MSG_PROOF_RESULT;
 
 fn decode_frame(data: &[u8]) -> Result<(u8, u32, &[u8])> {
     anyhow::ensure!(data.len() >= 5, "frame too short");
@@ -506,11 +510,11 @@ impl RelayManager {
         map.remove(hash);
     }
 
-    pub async fn send_response(&self, request_id: &str, result: serde_json::Value) {
+    pub async fn send_response(&self, msg_type: u8, request_id: &str, result: serde_json::Value) {
         if let Some(tx) = &self.ws_tx {
             let req_id: u32 = request_id.parse().unwrap_or(0);
             let payload = serde_json::to_vec(&result).unwrap_or_default();
-            let frame = encode_frame(MSG_SUBMIT_RESULT, req_id, &payload);
+            let frame = encode_frame(msg_type, req_id, &payload);
             let _ = tx.try_send(Message::Binary(frame));
         }
     }
