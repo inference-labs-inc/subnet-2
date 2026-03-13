@@ -13,6 +13,48 @@ use sn2_types::{
     RELAY_RECONNECT_MAX_DELAY,
 };
 
+const MSG_AUTH_RESPONSE: u8 = 0x02;
+const MSG_AUTH_SUCCESS: u8 = 0x03;
+const MSG_SUBMIT: u8 = 0x10;
+const MSG_SUBMIT_RESULT: u8 = 0x11;
+const MSG_STATUS_REQ: u8 = 0x20;
+const MSG_STATUS_RESULT: u8 = 0x21;
+const MSG_PROOF_REQ: u8 = 0x30;
+const MSG_BATCH_DONE: u8 = 0x40;
+const MSG_ERROR: u8 = 0xFE;
+
+fn decode_frame(data: &[u8]) -> Result<(u8, u32, &[u8])> {
+    anyhow::ensure!(data.len() >= 5, "frame too short");
+    let msg_type = data[0];
+    let req_id = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+    Ok((msg_type, req_id, &data[5..]))
+}
+
+fn encode_frame(msg_type: u8, req_id: u32, payload: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(5 + payload.len());
+    buf.push(msg_type);
+    buf.extend_from_slice(&req_id.to_be_bytes());
+    buf.extend_from_slice(payload);
+    buf
+}
+
+fn decode_submit_payload(payload: &[u8]) -> Result<(serde_json::Value, Option<&[u8]>)> {
+    anyhow::ensure!(payload.len() >= 4, "submit payload too short");
+    let meta_len = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+    anyhow::ensure!(
+        payload.len() >= 4 + meta_len,
+        "submit payload meta truncated"
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&payload[4..4 + meta_len]).context("parsing submit meta")?;
+    let tensor = if payload.len() > 4 + meta_len {
+        Some(&payload[4 + meta_len..])
+    } else {
+        None
+    };
+    Ok((meta, tensor))
+}
+
 type PendingMap = Arc<RwLock<HashMap<String, Arc<Mutex<PendingRequest>>>>>;
 
 pub(crate) struct PendingRequest {
@@ -24,6 +66,7 @@ pub(crate) struct PendingRequest {
 pub struct DsperseSubmission {
     pub circuit_id: String,
     pub inputs: serde_json::Value,
+    pub tensor_data: Option<Vec<u8>>,
     pub request_id: Option<String>,
 }
 
@@ -131,7 +174,14 @@ impl RelayManager {
         ws_tx: &tokio::sync::mpsc::Sender<Message>,
         rx: &mut tokio::sync::mpsc::Receiver<Message>,
     ) -> Result<bool> {
-        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
+        use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+
+        let config = WebSocketConfig {
+            max_message_size: Some(128 * 1024 * 1024),
+            max_frame_size: Some(128 * 1024 * 1024),
+            ..Default::default()
+        };
+        let (ws_stream, _) = tokio_tungstenite::connect_async_with_config(url, Some(config), false)
             .await
             .context("WebSocket connect")?;
 
@@ -149,11 +199,13 @@ impl RelayManager {
             tokio::select! {
                 msg = read.next() => {
                     match msg {
-                        Some(Ok(Message::Text(text))) => {
-                            match serde_json::from_str::<serde_json::Value>(&text) {
-                                Ok(json) => {
-                                    Self::handle_message(
-                                        &json,
+                        Some(Ok(Message::Binary(data))) => {
+                            match decode_frame(&data) {
+                                Ok((msg_type, req_id, payload)) => {
+                                    Self::handle_binary_message(
+                                        msg_type,
+                                        req_id,
+                                        payload,
                                         pending,
                                         dsperse_tx,
                                         rwr_tx,
@@ -162,7 +214,7 @@ impl RelayManager {
                                     ).await;
                                 }
                                 Err(e) => {
-                                    warn!(error = %e, "relay message JSON parse failed");
+                                    warn!(error = %e, "invalid binary frame from relay");
                                 }
                             }
                         }
@@ -209,16 +261,16 @@ impl RelayManager {
             .context("stream ended before auth")?
             .context("ws read error")?;
 
-        let text = match raw {
-            Message::Text(t) => t,
-            other => anyhow::bail!("expected text for auth challenge, got {:?}", other),
+        let data = match raw {
+            Message::Binary(d) => d,
+            other => anyhow::bail!("expected binary for auth challenge, got {:?}", other),
         };
 
-        let msg: serde_json::Value = serde_json::from_str(&text).context("parsing auth msg")?;
-        if msg.get("type").and_then(|v| v.as_str()) != Some("auth_challenge") {
-            anyhow::bail!("expected auth_challenge, got {}", text);
-        }
+        let (_msg_type, _req_id, payload) =
+            decode_frame(&data).context("decoding auth challenge frame")?;
 
+        let msg: serde_json::Value =
+            serde_json::from_slice(payload).context("parsing auth challenge JSON")?;
         let challenge_b64 = msg
             .get("challenge")
             .and_then(|v| v.as_str())
@@ -230,14 +282,15 @@ impl RelayManager {
 
         let sig_bytes = wallet.sign_hotkey(&challenge_bytes)?;
 
-        let response = serde_json::json!({
-            "type": "auth_response",
+        let response_json = serde_json::json!({
             "ss58": wallet.hotkey_ss58(),
             "signature": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &sig_bytes),
         });
+        let response_payload = serde_json::to_vec(&response_json)?;
+        let response_frame = encode_frame(MSG_AUTH_RESPONSE, 0, &response_payload);
 
         write
-            .send(Message::Text(serde_json::to_string(&response)?))
+            .send(Message::Binary(response_frame))
             .await
             .context("sending auth response")?;
 
@@ -247,199 +300,149 @@ impl RelayManager {
             .context("stream ended before confirm")?
             .context("ws read error on confirm")?;
 
-        let confirm_text = match confirm {
-            Message::Text(t) => t,
-            other => anyhow::bail!("expected text for auth confirm, got {:?}", other),
+        let confirm_data = match confirm {
+            Message::Binary(d) => d,
+            other => anyhow::bail!("expected binary for auth confirm, got {:?}", other),
         };
 
-        let confirm_msg: serde_json::Value =
-            serde_json::from_str(&confirm_text).context("parsing auth confirm")?;
-        if confirm_msg.get("type").and_then(|v| v.as_str()) != Some("auth_success") {
-            anyhow::bail!("auth failed: {}", confirm_text);
+        let (confirm_type, _, _) =
+            decode_frame(&confirm_data).context("decoding auth confirm frame")?;
+        if confirm_type != MSG_AUTH_SUCCESS {
+            anyhow::bail!(
+                "auth failed: expected MSG_AUTH_SUCCESS, got 0x{:02x}",
+                confirm_type
+            );
         }
 
         Ok(())
     }
 
-    async fn handle_message(
-        json: &serde_json::Value,
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_binary_message(
+        msg_type: u8,
+        req_id: u32,
+        payload: &[u8],
         pending: &PendingMap,
         dsperse_tx: &tokio::sync::mpsc::Sender<DsperseSubmission>,
         rwr_tx: &tokio::sync::mpsc::Sender<RwrSubmission>,
         dsperse_semaphore: &Arc<Semaphore>,
         ws_tx: &tokio::sync::mpsc::Sender<Message>,
     ) {
-        let method = json.get("method").and_then(|v| v.as_str()).unwrap_or("");
-        let request_id = json.get("id").and_then(|v| v.as_str()).map(String::from);
-
-        match method {
-            "subnet-2.dsperse_submit" => {
+        match msg_type {
+            MSG_SUBMIT => {
                 let permit = match dsperse_semaphore.try_acquire() {
                     Ok(p) => p,
                     Err(_) => {
-                        Self::send_jsonrpc_error(
-                            ws_tx,
-                            request_id.as_deref(),
-                            20,
-                            "Server busy, try again later",
-                        )
-                        .await;
+                        Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
                         return;
                     }
                 };
 
-                let params = match json.get("params") {
-                    Some(p) => p,
-                    None => {
+                let (meta, tensor_data) = match decode_submit_payload(payload) {
+                    Ok(v) => v,
+                    Err(e) => {
                         drop(permit);
-                        Self::send_jsonrpc_error(
-                            ws_tx,
-                            request_id.as_deref(),
-                            -32602,
-                            "Missing params",
-                        )
-                        .await;
+                        Self::send_error(ws_tx, req_id, -32602, &format!("Invalid payload: {e}"))
+                            .await;
                         return;
                     }
                 };
 
-                let circuit_id = match params.get("circuit_id").and_then(|v| v.as_str()) {
+                let circuit_id = match meta.get("circuit_id").and_then(|v| v.as_str()) {
                     Some(id) => id.to_string(),
                     None => {
                         drop(permit);
-                        Self::send_jsonrpc_error(
-                            ws_tx,
-                            request_id.as_deref(),
-                            -32602,
-                            "Missing circuit_id",
-                        )
-                        .await;
+                        Self::send_error(ws_tx, req_id, -32602, "Missing circuit_id").await;
                         return;
                     }
                 };
 
-                let inputs = match params.get("inputs") {
-                    Some(i) => i.clone(),
-                    None => {
-                        drop(permit);
-                        Self::send_jsonrpc_error(
-                            ws_tx,
-                            request_id.as_deref(),
-                            -32602,
-                            "Missing inputs",
-                        )
-                        .await;
-                        return;
-                    }
+                let inputs = meta
+                    .get("inputs")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+                let req_id_str = if req_id > 0 {
+                    Some(req_id.to_string())
+                } else {
+                    None
                 };
 
-                let req_id_for_err = request_id.clone();
                 let submission = DsperseSubmission {
                     circuit_id,
                     inputs,
-                    request_id,
+                    tensor_data: tensor_data.map(|d| d.to_vec()),
+                    request_id: req_id_str,
                 };
 
                 if let Err(e) = dsperse_tx.try_send(submission) {
                     warn!(error = %e, "dsperse submission channel full or closed");
-                    Self::send_jsonrpc_error(
-                        ws_tx,
-                        req_id_for_err.as_deref(),
-                        20,
-                        "Server busy, try again later",
-                    )
-                    .await;
+                    Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
                 }
                 drop(permit);
             }
 
-            "subnet-2.proof_of_computation" => {
-                let params = match json.get("params") {
-                    Some(p) => p,
-                    None => {
-                        Self::send_jsonrpc_error(
-                            ws_tx,
-                            request_id.as_deref(),
-                            -32602,
-                            "Missing params",
-                        )
-                        .await;
+            MSG_PROOF_REQ => {
+                let (meta, _tensor_data) = match decode_submit_payload(payload) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        Self::send_error(ws_tx, req_id, -32602, &format!("Invalid payload: {e}"))
+                            .await;
                         return;
                     }
                 };
 
-                let circuit_id = match params.get("circuit").and_then(|v| v.as_str()) {
+                let circuit_id = match meta.get("circuit_id").and_then(|v| v.as_str()) {
                     Some(id) => id.to_string(),
                     None => {
-                        Self::send_jsonrpc_error(
-                            ws_tx,
-                            request_id.as_deref(),
-                            -32602,
-                            "Missing circuit",
-                        )
-                        .await;
+                        Self::send_error(ws_tx, req_id, -32602, "Missing circuit_id").await;
                         return;
                     }
                 };
 
-                let inputs = match params.get("input") {
-                    Some(i) => i.clone(),
-                    None => {
-                        Self::send_jsonrpc_error(
-                            ws_tx,
-                            request_id.as_deref(),
-                            -32602,
-                            "Missing input",
-                        )
-                        .await;
-                        return;
-                    }
+                let inputs = meta
+                    .get("inputs")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+                let req_id_str = if req_id > 0 {
+                    Some(req_id.to_string())
+                } else {
+                    None
                 };
 
                 let submission = RwrSubmission {
                     circuit_id,
                     inputs,
-                    request_id: request_id.clone(),
+                    request_id: req_id_str,
                     retry_count: 0,
                 };
 
                 if let Err(e) = rwr_tx.try_send(submission) {
                     warn!(error = %e, "RWR submission channel full or closed");
-                    Self::send_jsonrpc_error(
-                        ws_tx,
-                        request_id.as_deref(),
-                        20,
-                        "Server busy, try again later",
-                    )
-                    .await;
+                    Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
                 }
             }
 
-            "subnet-2.run_status" => {
-                let params = match json.get("params") {
-                    Some(p) => p,
-                    None => {
-                        Self::send_jsonrpc_error(
+            MSG_STATUS_REQ => {
+                let meta: serde_json::Value = match serde_json::from_slice(payload) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        Self::send_error(
                             ws_tx,
-                            request_id.as_deref(),
+                            req_id,
                             -32602,
-                            "Missing params",
+                            &format!("Invalid status payload: {e}"),
                         )
                         .await;
                         return;
                     }
                 };
 
-                let run_uid = match params.get("run_uid").and_then(|v| v.as_str()) {
+                let run_uid = match meta.get("run_uid").and_then(|v| v.as_str()) {
                     Some(id) => id.to_string(),
                     None => {
-                        Self::send_jsonrpc_error(
-                            ws_tx,
-                            request_id.as_deref(),
-                            -32602,
-                            "Missing run_uid",
-                        )
-                        .await;
+                        Self::send_error(ws_tx, req_id, -32602, "Missing run_uid").await;
                         return;
                     }
                 };
@@ -452,33 +455,29 @@ impl RelayManager {
                         drop(lock);
                         pending_map.remove(&run_uid);
                         drop(pending_map);
-                        Self::send_jsonrpc_result(ws_tx, request_id.as_deref(), result).await;
+                        Self::send_result(ws_tx, MSG_STATUS_RESULT, req_id, result).await;
                     } else {
                         drop(lock);
                         drop(pending_map);
-                        Self::send_jsonrpc_result(
+                        Self::send_result(
                             ws_tx,
-                            request_id.as_deref(),
+                            MSG_STATUS_RESULT,
+                            req_id,
                             serde_json::json!({"run_uid": run_uid, "status": "processing"}),
                         )
                         .await;
                     }
                 } else {
                     drop(pending_map);
-                    Self::send_jsonrpc_error(ws_tx, request_id.as_deref(), 11, "Run not found")
-                        .await;
+                    Self::send_error(ws_tx, req_id, 11, "Run not found").await;
                 }
             }
 
             _ => {
-                if let Some(id) = json.get("id").and_then(|v| v.as_str()) {
-                    let map = pending.read().await;
-                    if let Some(req) = map.get(id) {
-                        let mut lock = req.lock().await;
-                        lock.result = Some(json.clone());
-                        lock.notify.notify_one();
-                    }
-                }
+                warn!(
+                    msg_type = msg_type,
+                    "unknown binary message type from relay"
+                );
             }
         }
     }
@@ -508,55 +507,52 @@ impl RelayManager {
     }
 
     pub async fn send_response(&self, request_id: &str, result: serde_json::Value) {
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "result": result,
-            "id": request_id,
-        });
         if let Some(tx) = &self.ws_tx {
-            let text = serde_json::to_string(&msg).unwrap_or_default();
-            let _ = tx.try_send(Message::Text(text));
+            let req_id: u32 = request_id.parse().unwrap_or(0);
+            let payload = serde_json::to_vec(&result).unwrap_or_default();
+            let frame = encode_frame(MSG_SUBMIT_RESULT, req_id, &payload);
+            let _ = tx.try_send(Message::Binary(frame));
         }
     }
 
     pub async fn send_notification(&self, method: &str, params: serde_json::Value) {
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        });
         if let Some(tx) = &self.ws_tx {
-            let text = serde_json::to_string(&msg).unwrap_or_default();
-            let _ = tx.try_send(Message::Text(text));
+            let msg_type = match method {
+                "subnet-2.batch_completed" => MSG_BATCH_DONE,
+                _ => {
+                    warn!(method = method, "unknown notification method");
+                    return;
+                }
+            };
+            let payload = serde_json::to_vec(&params).unwrap_or_default();
+            let frame = encode_frame(msg_type, 0, &payload);
+            let _ = tx.try_send(Message::Binary(frame));
         }
     }
 
-    async fn send_jsonrpc_error(
+    async fn send_error(
         ws_tx: &tokio::sync::mpsc::Sender<Message>,
-        request_id: Option<&str>,
+        req_id: u32,
         code: i32,
         message: &str,
     ) {
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "error": {"code": code, "message": message},
-            "id": request_id,
-        });
-        let text = serde_json::to_string(&msg).unwrap_or_default();
-        let _ = ws_tx.try_send(Message::Text(text));
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "code": code,
+            "message": message,
+        }))
+        .unwrap_or_default();
+        let frame = encode_frame(MSG_ERROR, req_id, &payload);
+        let _ = ws_tx.try_send(Message::Binary(frame));
     }
 
-    async fn send_jsonrpc_result(
+    async fn send_result(
         ws_tx: &tokio::sync::mpsc::Sender<Message>,
-        request_id: Option<&str>,
+        msg_type: u8,
+        req_id: u32,
         result: serde_json::Value,
     ) {
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "result": result,
-            "id": request_id,
-        });
-        let text = serde_json::to_string(&msg).unwrap_or_default();
-        let _ = ws_tx.try_send(Message::Text(text));
+        let payload = serde_json::to_vec(&result).unwrap_or_default();
+        let frame = encode_frame(msg_type, req_id, &payload);
+        let _ = ws_tx.try_send(Message::Binary(frame));
     }
 }

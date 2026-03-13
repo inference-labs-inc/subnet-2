@@ -49,6 +49,7 @@ dirs-next = "2"
 futures-util = "0.3"
 shellexpand = "3.1.2"
 openssl = { version = "0.10", features = ["vendored"] }
+flate2 = "1"
 dsperse = { git = "https://github.com/inference-labs-inc/dsperse", rev = "dff4480" }
 ndarray = { version = "0.16", features = ["serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }

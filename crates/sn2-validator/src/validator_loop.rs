@@ -501,32 +501,78 @@ impl ValidatorLoop {
             }
         };
 
-        if let Err(msg) = circuit.validate_inputs(&submission.inputs) {
-            warn!(circuit = %circuit.id, error = %msg, "invalid inputs for dsperse submission");
-            if let Some(req_id) = &submission.request_id {
-                self.relay_send_response(
-                    req_id,
-                    serde_json::json!({"error": format!("invalid input shape: {msg}")}),
-                )
-                .await;
+        if submission.tensor_data.is_none() {
+            if let Err(msg) = circuit.validate_inputs(&submission.inputs) {
+                warn!(circuit = %circuit.id, error = %msg, "invalid inputs for dsperse submission");
+                if let Some(req_id) = &submission.request_id {
+                    self.relay_send_response(
+                        req_id,
+                        serde_json::json!({"error": format!("invalid input shape: {msg}")}),
+                    )
+                    .await;
+                }
+                return;
             }
-            return;
         }
 
         let slices_dir = circuit.paths.base_path.join("slices");
-        let tensor_value = submission
-            .inputs
-            .get("input_data")
-            .unwrap_or(&submission.inputs);
-        let input_tensor = match crate::tensor_json::json_to_arrayd(tensor_value) {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(error = %e, "failed to convert input to tensor");
-                if let Some(req_id) = &submission.request_id {
-                    self.relay_send_response(req_id, serde_json::json!({"error": e.to_string()}))
+        let input_tensor = if let Some(tensor_bytes) = &submission.tensor_data {
+            let shape: Vec<usize> = match circuit
+                .metadata
+                .input_schema
+                .as_ref()
+                .and_then(|s| s.get("shape"))
+                .and_then(|v| v.as_array())
+                .and_then(|dims| {
+                    dims.iter()
+                        .map(|d| d.as_u64().and_then(|n| usize::try_from(n).ok()))
+                        .collect::<Option<Vec<_>>>()
+                }) {
+                Some(s) => s,
+                None => {
+                    warn!(circuit = %circuit.id, "circuit schema missing valid shape for binary tensor");
+                    if let Some(req_id) = &submission.request_id {
+                        self.relay_send_response(
+                            req_id,
+                            serde_json::json!({"error": "circuit schema missing shape"}),
+                        )
                         .await;
+                    }
+                    return;
                 }
-                return;
+            };
+            match crate::tensor::decode_gzipped_protobuf_tensor(tensor_bytes, &shape) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = %e, "failed to decode binary tensor");
+                    if let Some(req_id) = &submission.request_id {
+                        self.relay_send_response(
+                            req_id,
+                            serde_json::json!({"error": e.to_string()}),
+                        )
+                        .await;
+                    }
+                    return;
+                }
+            }
+        } else {
+            let tensor_value = submission
+                .inputs
+                .get("input_data")
+                .unwrap_or(&submission.inputs);
+            match crate::tensor::json_to_arrayd(tensor_value) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = %e, "failed to convert input to tensor");
+                    if let Some(req_id) = &submission.request_id {
+                        self.relay_send_response(
+                            req_id,
+                            serde_json::json!({"error": e.to_string()}),
+                        )
+                        .await;
+                    }
+                    return;
+                }
             }
         };
 
@@ -894,7 +940,7 @@ impl ValidatorLoop {
 
                 for (idx, tile) in tiles.into_iter().enumerate() {
                     let tile_json = serde_json::json!({
-                        "input_data": crate::tensor_json::arrayd_to_json(&tile.into_dyn())
+                        "input_data": crate::tensor::arrayd_to_json(&tile.into_dyn())
                     });
                     let request = DSliceRequest {
                         circuit: circuit.clone(),
@@ -1823,7 +1869,7 @@ impl ValidatorLoop {
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
 
-            let tile_output = match crate::tensor_json::json_to_arrayd(&computed) {
+            let tile_output = match crate::tensor::json_to_arrayd(&computed) {
                 Ok(t) => t,
                 Err(e) => {
                     warn!(
