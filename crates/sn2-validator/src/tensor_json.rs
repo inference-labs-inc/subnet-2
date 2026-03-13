@@ -139,7 +139,7 @@ fn read_varint(buf: &[u8], offset: usize) -> Result<(usize, usize)> {
             return Ok((result, pos));
         }
         shift += 7;
-        anyhow::ensure!(shift < 64, "varint too long");
+        anyhow::ensure!(shift < 63, "varint exceeds 64-bit range");
     }
     anyhow::bail!("unterminated varint")
 }
