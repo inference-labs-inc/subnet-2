@@ -13,6 +13,7 @@ use sn2_types::{
     RELAY_RECONNECT_MAX_DELAY,
 };
 
+const MSG_AUTH_CHALLENGE: u8 = 0x01;
 const MSG_AUTH_RESPONSE: u8 = 0x02;
 const MSG_AUTH_SUCCESS: u8 = 0x03;
 const MSG_SUBMIT: u8 = 0x10;
@@ -270,8 +271,12 @@ impl RelayManager {
             other => anyhow::bail!("expected binary for auth challenge, got {:?}", other),
         };
 
-        let (_msg_type, _req_id, payload) =
+        let (msg_type, _req_id, payload) =
             decode_frame(&data).context("decoding auth challenge frame")?;
+        anyhow::ensure!(
+            msg_type == MSG_AUTH_CHALLENGE,
+            "expected MSG_AUTH_CHALLENGE (0x01), got 0x{msg_type:02x}"
+        );
 
         let msg: serde_json::Value =
             serde_json::from_slice(payload).context("parsing auth challenge JSON")?;
