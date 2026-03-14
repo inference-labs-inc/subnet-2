@@ -360,6 +360,12 @@ impl CircuitStore {
         let mut deferred_downloads: Vec<(String, PathBuf)> = Vec::new();
 
         for (filename, url_val) in files {
+            let safe_name = Path::new(filename).file_name().and_then(|n| n.to_str());
+            if safe_name != Some(filename.as_str()) {
+                warn!(file = %filename, "rejecting filename with path traversal");
+                continue;
+            }
+
             let skip = if is_dsperse {
                 filename == "full_model.onnx"
             } else {
