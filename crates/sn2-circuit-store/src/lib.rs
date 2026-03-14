@@ -321,7 +321,7 @@ impl CircuitStore {
 
             let deferred_downloads = self
                 .download_circuit_files(files, &cache_path, is_dsperse, &checksums)
-                .await;
+                .await?;
 
             if !deferred_downloads.is_empty() {
                 self.spawn_deferred_downloads(circuit_id, deferred_downloads);
@@ -356,7 +356,7 @@ impl CircuitStore {
         cache_path: &Path,
         is_dsperse: bool,
         checksums: &serde_json::Map<String, serde_json::Value>,
-    ) -> Vec<(String, PathBuf)> {
+    ) -> Result<Vec<(String, PathBuf)>> {
         let mut deferred_downloads: Vec<(String, PathBuf)> = Vec::new();
 
         for (filename, url_val) in files {
@@ -405,9 +405,9 @@ impl CircuitStore {
             }
             match url_val.as_str() {
                 Some(url) => {
-                    if let Err(e) = self.download_file(url, &dest).await {
-                        warn!(file = %filename, error = %e, "failed to download circuit file");
-                    }
+                    self.download_file(url, &dest).await.with_context(|| {
+                        format!("downloading required circuit file: {filename}")
+                    })?;
                 }
                 None => {
                     warn!(file = %filename, value = ?url_val, "skipping file with non-string URL value");
@@ -415,7 +415,7 @@ impl CircuitStore {
             }
         }
 
-        deferred_downloads
+        Ok(deferred_downloads)
     }
 
     fn spawn_deferred_downloads(
