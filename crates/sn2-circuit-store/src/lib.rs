@@ -386,9 +386,14 @@ impl CircuitStore {
             if dest.exists() {
                 continue;
             }
-            if let Some(url) = url_val.as_str() {
-                if let Err(e) = self.download_file(url, &dest).await {
-                    warn!(file = %filename, error = %e, "failed to download circuit file");
+            match url_val.as_str() {
+                Some(url) => {
+                    if let Err(e) = self.download_file(url, &dest).await {
+                        warn!(file = %filename, error = %e, "failed to download circuit file");
+                    }
+                }
+                None => {
+                    warn!(file = %filename, value = ?url_val, "skipping file with non-string URL value");
                 }
             }
         }
