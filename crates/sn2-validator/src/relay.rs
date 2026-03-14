@@ -384,8 +384,7 @@ impl RelayManager {
             Ok(v) => v,
             Err(e) => {
                 drop(permit);
-                Self::send_error(ws_tx, req_id, -32602, &format!("Invalid payload: {e}"))
-                    .await;
+                Self::send_error(ws_tx, req_id, -32602, &format!("Invalid payload: {e}")).await;
                 return;
             }
         };

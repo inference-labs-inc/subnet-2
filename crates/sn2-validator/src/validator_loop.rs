@@ -1906,7 +1906,13 @@ impl ValidatorLoop {
             .unwrap_or_default();
         self.upload_tasks.spawn(async move {
             if let Err(e) = uploader
-                .upload_run_artifacts(&uid_clone, &circuit_id, &circuit_name, artifacts, final_output)
+                .upload_run_artifacts(
+                    &uid_clone,
+                    &circuit_id,
+                    &circuit_name,
+                    artifacts,
+                    final_output,
+                )
                 .await
             {
                 warn!(run_uid = %uid_clone, error = %e, "proof upload failed");

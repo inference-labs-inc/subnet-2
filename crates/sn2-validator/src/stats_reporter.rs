@@ -112,12 +112,7 @@ impl StatsReporter {
         self.flush_health_samples(now);
     }
 
-    fn flush_response_logs(
-        &mut self,
-        now: Instant,
-        block: u64,
-        scores: &HashMap<u16, f64>,
-    ) {
+    fn flush_response_logs(&mut self, now: Instant, block: u64, scores: &HashMap<u16, f64>) {
         if now.duration_since(self.last_response_log)
             < std::time::Duration::from_secs(LOG_INTERVAL_SECS)
             || self.recent_responses.is_empty()

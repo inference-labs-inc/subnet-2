@@ -57,15 +57,26 @@ fn parse_protobuf_floats(raw: &[u8], shape: &[usize], expected: usize) -> Result
 
         match wire_type {
             2 => {
-                offset =
-                    parse_length_delimited(raw, offset, field, &mut floats, &mut proto_shape, &mut proto_shape_seen)?;
+                offset = parse_length_delimited(
+                    raw,
+                    offset,
+                    field,
+                    &mut floats,
+                    &mut proto_shape,
+                    &mut proto_shape_seen,
+                )?;
             }
             5 => {
                 offset = parse_fixed32(raw, offset, field, &mut floats)?;
             }
             0 => {
-                offset =
-                    parse_varint_field(raw, offset, field, &mut proto_shape, &mut proto_shape_seen)?;
+                offset = parse_varint_field(
+                    raw,
+                    offset,
+                    field,
+                    &mut proto_shape,
+                    &mut proto_shape_seen,
+                )?;
             }
             1 => {
                 offset = skip_fixed64(raw, offset)?;

@@ -319,8 +319,9 @@ impl CircuitStore {
                 .cloned()
                 .unwrap_or_default();
 
-            let deferred_downloads =
-                self.download_circuit_files(files, &cache_path, is_dsperse, &checksums).await;
+            let deferred_downloads = self
+                .download_circuit_files(files, &cache_path, is_dsperse, &checksums)
+                .await;
 
             if !deferred_downloads.is_empty() {
                 self.spawn_deferred_downloads(circuit_id, deferred_downloads);
@@ -376,13 +377,12 @@ impl CircuitStore {
                 continue;
             }
 
-            let dest = if is_dsperse
-                && (filename == "metadata.json" || filename == "metadata.msgpack")
-            {
-                cache_path.join("slices").join(filename)
-            } else {
-                cache_path.join(filename)
-            };
+            let dest =
+                if is_dsperse && (filename == "metadata.json" || filename == "metadata.msgpack") {
+                    cache_path.join("slices").join(filename)
+                } else {
+                    cache_path.join(filename)
+                };
             if dest.exists() {
                 continue;
             }
@@ -701,9 +701,7 @@ fn resolve_dslice_download(
     } else if extracted_dir.exists() {
         return None;
     }
-    url_val
-        .as_str()
-        .map(|url| (url.to_string(), archive_dest))
+    url_val.as_str().map(|url| (url.to_string(), archive_dest))
 }
 
 fn file_checksum_valid(

@@ -130,10 +130,7 @@ async fn handle_verify_and_store(
     rmp_serde::to_vec_named(&resp)
 }
 
-fn handle_store(
-    sr: StoreRequest,
-    store: &TileStore,
-) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+fn handle_store(sr: StoreRequest, store: &TileStore) -> Result<Vec<u8>, rmp_serde::encode::Error> {
     let key = sr.store_key.clone();
     info!(store_key = %key, len = sr.data.len(), "processing store request");
     let resp = match store.insert(
@@ -182,10 +179,7 @@ fn handle_reconstruct(
     rmp_serde::to_vec_named(&resp)
 }
 
-fn handle_evict(
-    er: EvictRequest,
-    store: &TileStore,
-) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+fn handle_evict(er: EvictRequest, store: &TileStore) -> Result<Vec<u8>, rmp_serde::encode::Error> {
     let resp = match store.evict(&er.keys) {
         Ok(evicted) => EvictResponse {
             success: true,
