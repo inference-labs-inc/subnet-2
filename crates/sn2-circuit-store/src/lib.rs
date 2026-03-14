@@ -415,6 +415,20 @@ impl CircuitStore {
         let cid = circuit_id.to_string();
         info!(circuit = %circuit_id, files = count, "spawning background dslice downloads");
         tokio::spawn(async move {
+            struct InflightGuard {
+                inflight: Arc<Mutex<HashSet<String>>>,
+                cid: String,
+            }
+            impl Drop for InflightGuard {
+                fn drop(&mut self) {
+                    self.inflight.lock().unwrap().remove(&self.cid);
+                }
+            }
+            let _guard = InflightGuard {
+                inflight: Arc::clone(&inflight),
+                cid: cid.clone(),
+            };
+
             let mut downloaded = 0usize;
             let mut failed = 0usize;
             for (url, dest) in &deferred_downloads {
@@ -438,7 +452,6 @@ impl CircuitStore {
             if failed > 0 {
                 warn!(circuit = %cid, failed, "dslice downloads incomplete, will retry on next refresh");
             }
-            inflight.lock().unwrap().remove(&cid);
             info!(count = downloaded, "dslice background downloads complete");
         });
     }
