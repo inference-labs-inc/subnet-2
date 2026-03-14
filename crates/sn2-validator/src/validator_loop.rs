@@ -1977,7 +1977,6 @@ impl ValidatorLoop {
         }
         self.spawn_artifact_upload(run_uid, &mut active_run, None);
         self.notify_run_completed(run_uid, &active_run).await;
-        self.relay_remove_pending(run_uid).await;
     }
 
     async fn denormalize_and_apply_output(

@@ -401,10 +401,14 @@ impl CircuitStore {
         circuit_id: &str,
         deferred_downloads: Vec<(String, PathBuf)>,
     ) {
-        self.inflight_downloads
+        if !self
+            .inflight_downloads
             .lock()
             .unwrap()
-            .insert(circuit_id.to_string());
+            .insert(circuit_id.to_string())
+        {
+            return;
+        }
         let count = deferred_downloads.len();
         let http = self.http.clone();
         let inflight = Arc::clone(&self.inflight_downloads);
@@ -431,11 +435,10 @@ impl CircuitStore {
                     }
                 }
             }
-            if failed == 0 {
-                inflight.lock().unwrap().remove(&cid);
-            } else {
-                warn!(circuit = %cid, failed, "dslice downloads incomplete, circuit stays unavailable until next refresh");
+            if failed > 0 {
+                warn!(circuit = %cid, failed, "dslice downloads incomplete, will retry on next refresh");
             }
+            inflight.lock().unwrap().remove(&cid);
             info!(count = downloaded, "dslice background downloads complete");
         });
     }

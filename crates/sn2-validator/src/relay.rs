@@ -67,12 +67,14 @@ pub(crate) struct PendingRequest {
     notify: Arc<Notify>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DsperseSubmission {
     pub circuit_id: String,
     pub inputs: serde_json::Value,
     pub tensor_data: Option<Vec<u8>>,
     pub request_id: Option<u32>,
+    #[allow(dead_code)]
+    pub permit: tokio::sync::OwnedSemaphorePermit,
 }
 
 #[derive(Debug, Clone)]
@@ -372,7 +374,7 @@ impl RelayManager {
         dsperse_semaphore: &Arc<Semaphore>,
         ws_tx: &tokio::sync::mpsc::Sender<Message>,
     ) {
-        let permit = match dsperse_semaphore.try_acquire() {
+        let permit = match Arc::clone(dsperse_semaphore).try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
                 Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
@@ -383,7 +385,6 @@ impl RelayManager {
         let (meta, tensor_data) = match decode_submit_payload(payload) {
             Ok(v) => v,
             Err(e) => {
-                drop(permit);
                 Self::send_error(ws_tx, req_id, -32602, &format!("Invalid payload: {e}")).await;
                 return;
             }
@@ -392,7 +393,6 @@ impl RelayManager {
         let (circuit_id, inputs) = match Self::parse_circuit_payload(&meta) {
             Some(v) => v,
             None => {
-                drop(permit);
                 Self::send_error(ws_tx, req_id, -32602, "Missing circuit_id").await;
                 return;
             }
@@ -405,13 +405,13 @@ impl RelayManager {
             inputs,
             tensor_data: tensor_data.map(|d| d.to_vec()),
             request_id: req_id_opt,
+            permit,
         };
 
         if let Err(e) = dsperse_tx.try_send(submission) {
             warn!(error = %e, "dsperse submission channel full or closed");
             Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
         }
-        drop(permit);
     }
 
     async fn handle_proof_req(
@@ -485,15 +485,19 @@ impl RelayManager {
             }
         };
 
-        let mut pending_map = pending.write().await;
+        let pending_map = pending.read().await;
         if let Some(req) = pending_map.get(&run_uid) {
             let lock = req.lock().await;
             if let Some(result) = &lock.result {
                 let result = result.clone();
                 drop(lock);
-                pending_map.remove(&run_uid);
                 drop(pending_map);
-                Self::send_result(ws_tx, MSG_STATUS_RESULT, req_id, result).await;
+                if Self::send_result(ws_tx, MSG_STATUS_RESULT, req_id, result).await {
+                    let mut pending_map = pending.write().await;
+                    pending_map.remove(&run_uid);
+                } else {
+                    warn!(run_uid = %run_uid, "status result send failed, retaining pending entry");
+                }
             } else {
                 drop(lock);
                 drop(pending_map);
@@ -578,9 +582,9 @@ impl RelayManager {
         msg_type: u8,
         req_id: u32,
         result: serde_json::Value,
-    ) {
+    ) -> bool {
         let payload = serde_json::to_vec(&result).unwrap_or_default();
         let frame = encode_frame(msg_type, req_id, &payload);
-        let _ = ws_tx.try_send(Message::Binary(frame));
+        ws_tx.try_send(Message::Binary(frame)).is_ok()
     }
 }
