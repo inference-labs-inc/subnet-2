@@ -134,6 +134,7 @@ fn parse_length_delimited(
         let mut pos = offset;
         while pos < end {
             let (val, next) = read_varint(raw, pos)?;
+            anyhow::ensure!(next <= end, "packed shape varint crosses field boundary");
             proto_shape.push(val);
             pos = next;
         }
