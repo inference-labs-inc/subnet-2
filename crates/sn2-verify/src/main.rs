@@ -5,7 +5,10 @@ use std::path::Path;
 use tokio::net::UnixListener;
 use tracing::{error, info, warn};
 
-use sn2_verify::protocol::{EvictResponse, ReconstructResponse, ServiceRequest};
+use sn2_verify::protocol::{
+    EvictRequest, EvictResponse, ReconstructRequest, ReconstructResponse, ServiceRequest,
+    StoreRequest, VerifyAndStoreRequest, VerifyRequest,
+};
 use sn2_verify::store::TileStore;
 use sn2_verify::{codec, protocol, store, verify};
 
@@ -87,79 +90,11 @@ async fn handle_connection(stream: tokio::net::UnixStream, store: Arc<TileStore>
         };
 
         let response_data = match req {
-            ServiceRequest::Verify(vr) => {
-                let request_id = vr.request_id.clone();
-                info!(request_id = %request_id, "processing verify request");
-                let resp = verify::handle_request(vr).await;
-                rmp_serde::to_vec_named(&resp)
-            }
-            ServiceRequest::VerifyAndStore(vsr) => {
-                let request_id = vsr.request_id.clone();
-                let store_key = vsr.store_key.clone();
-                info!(request_id = %request_id, store_key = %store_key, "processing verify_and_store request");
-                let resp = verify::handle_store_request(vsr, &store).await;
-                rmp_serde::to_vec_named(&resp)
-            }
-            ServiceRequest::Store(sr) => {
-                let key = sr.store_key.clone();
-                info!(store_key = %key, len = sr.data.len(), "processing store request");
-                let resp = match store.insert(
-                    sr.store_key,
-                    store::StoredTile {
-                        data: sr.data,
-                        channels: sr.channels,
-                        height: sr.height,
-                        width: sr.width,
-                    },
-                ) {
-                    Ok(()) => protocol::StoreResponse::ok(String::new()),
-                    Err(e) => {
-                        warn!(error = %e, "tile store insert failed");
-                        protocol::StoreResponse::error(String::new(), format!("{e:#}"))
-                    }
-                };
-                rmp_serde::to_vec_named(&resp)
-            }
-            ServiceRequest::Reconstruct(rr) => {
-                info!(
-                    tile_count = rr.tile_keys.len(),
-                    tiles_y = rr.tiles_y,
-                    tiles_x = rr.tiles_x,
-                    "processing reconstruct request"
-                );
-                let resp = match store.reconstruct(&rr.tile_keys, rr.tiles_y, rr.tiles_x) {
-                    Ok(output) => ReconstructResponse {
-                        success: true,
-                        output: Some(output),
-                        error: None,
-                    },
-                    Err(e) => {
-                        warn!(error = %e, "reconstruct failed");
-                        ReconstructResponse {
-                            success: false,
-                            output: None,
-                            error: Some(format!("{e:#}")),
-                        }
-                    }
-                };
-                rmp_serde::to_vec_named(&resp)
-            }
-            ServiceRequest::Evict(er) => {
-                let resp = match store.evict(&er.keys) {
-                    Ok(evicted) => EvictResponse {
-                        success: true,
-                        evicted,
-                    },
-                    Err(e) => {
-                        warn!(error = %e, "tile store evict failed");
-                        EvictResponse {
-                            success: false,
-                            evicted: 0,
-                        }
-                    }
-                };
-                rmp_serde::to_vec_named(&resp)
-            }
+            ServiceRequest::Verify(vr) => handle_verify(vr).await,
+            ServiceRequest::VerifyAndStore(vsr) => handle_verify_and_store(vsr, &store).await,
+            ServiceRequest::Store(sr) => handle_store(sr, &store),
+            ServiceRequest::Reconstruct(rr) => handle_reconstruct(rr, &store),
+            ServiceRequest::Evict(er) => handle_evict(er, &store),
         };
 
         match response_data {
@@ -175,4 +110,94 @@ async fn handle_connection(stream: tokio::net::UnixStream, store: Arc<TileStore>
             }
         }
     }
+}
+
+async fn handle_verify(vr: VerifyRequest) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    let request_id = vr.request_id.clone();
+    info!(request_id = %request_id, "processing verify request");
+    let resp = verify::handle_request(vr).await;
+    rmp_serde::to_vec_named(&resp)
+}
+
+async fn handle_verify_and_store(
+    vsr: VerifyAndStoreRequest,
+    store: &Arc<TileStore>,
+) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    let request_id = vsr.request_id.clone();
+    let store_key = vsr.store_key.clone();
+    info!(request_id = %request_id, store_key = %store_key, "processing verify_and_store request");
+    let resp = verify::handle_store_request(vsr, store).await;
+    rmp_serde::to_vec_named(&resp)
+}
+
+fn handle_store(
+    sr: StoreRequest,
+    store: &TileStore,
+) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    let key = sr.store_key.clone();
+    info!(store_key = %key, len = sr.data.len(), "processing store request");
+    let resp = match store.insert(
+        sr.store_key,
+        store::StoredTile {
+            data: sr.data,
+            channels: sr.channels,
+            height: sr.height,
+            width: sr.width,
+        },
+    ) {
+        Ok(()) => protocol::StoreResponse::ok(String::new()),
+        Err(e) => {
+            warn!(error = %e, "tile store insert failed");
+            protocol::StoreResponse::error(String::new(), format!("{e:#}"))
+        }
+    };
+    rmp_serde::to_vec_named(&resp)
+}
+
+fn handle_reconstruct(
+    rr: ReconstructRequest,
+    store: &TileStore,
+) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    info!(
+        tile_count = rr.tile_keys.len(),
+        tiles_y = rr.tiles_y,
+        tiles_x = rr.tiles_x,
+        "processing reconstruct request"
+    );
+    let resp = match store.reconstruct(&rr.tile_keys, rr.tiles_y, rr.tiles_x) {
+        Ok(output) => ReconstructResponse {
+            success: true,
+            output: Some(output),
+            error: None,
+        },
+        Err(e) => {
+            warn!(error = %e, "reconstruct failed");
+            ReconstructResponse {
+                success: false,
+                output: None,
+                error: Some(format!("{e:#}")),
+            }
+        }
+    };
+    rmp_serde::to_vec_named(&resp)
+}
+
+fn handle_evict(
+    er: EvictRequest,
+    store: &TileStore,
+) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    let resp = match store.evict(&er.keys) {
+        Ok(evicted) => EvictResponse {
+            success: true,
+            evicted,
+        },
+        Err(e) => {
+            warn!(error = %e, "tile store evict failed");
+            EvictResponse {
+                success: false,
+                evicted: 0,
+            }
+        }
+    };
+    rmp_serde::to_vec_named(&resp)
 }

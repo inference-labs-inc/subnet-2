@@ -326,6 +326,15 @@ impl RelayManager {
         Ok(())
     }
 
+    fn parse_circuit_payload(meta: &serde_json::Value) -> Option<(String, serde_json::Value)> {
+        let circuit_id = meta.get("circuit_id").and_then(|v| v.as_str())?.to_string();
+        let inputs = meta
+            .get("inputs")
+            .cloned()
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        Some((circuit_id, inputs))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn handle_binary_message(
         msg_type: u8,
@@ -339,152 +348,167 @@ impl RelayManager {
     ) {
         match msg_type {
             MSG_SUBMIT => {
-                let permit = match dsperse_semaphore.try_acquire() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
-                        return;
-                    }
-                };
-
-                let (meta, tensor_data) = match decode_submit_payload(payload) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        drop(permit);
-                        Self::send_error(ws_tx, req_id, -32602, &format!("Invalid payload: {e}"))
-                            .await;
-                        return;
-                    }
-                };
-
-                let circuit_id = match meta.get("circuit_id").and_then(|v| v.as_str()) {
-                    Some(id) => id.to_string(),
-                    None => {
-                        drop(permit);
-                        Self::send_error(ws_tx, req_id, -32602, "Missing circuit_id").await;
-                        return;
-                    }
-                };
-
-                let inputs = meta
-                    .get("inputs")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-
-                let req_id_opt = if req_id > 0 { Some(req_id) } else { None };
-
-                let submission = DsperseSubmission {
-                    circuit_id,
-                    inputs,
-                    tensor_data: tensor_data.map(|d| d.to_vec()),
-                    request_id: req_id_opt,
-                };
-
-                if let Err(e) = dsperse_tx.try_send(submission) {
-                    warn!(error = %e, "dsperse submission channel full or closed");
-                    Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
-                }
-                drop(permit);
+                Self::handle_submit(req_id, payload, dsperse_tx, dsperse_semaphore, ws_tx).await;
             }
-
             MSG_PROOF_REQ => {
-                let meta: serde_json::Value = match serde_json::from_slice(payload) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        Self::send_error(
-                            ws_tx,
-                            req_id,
-                            -32602,
-                            &format!("Invalid proof payload: {e}"),
-                        )
-                        .await;
-                        return;
-                    }
-                };
-
-                let circuit_id = match meta.get("circuit_id").and_then(|v| v.as_str()) {
-                    Some(id) => id.to_string(),
-                    None => {
-                        Self::send_error(ws_tx, req_id, -32602, "Missing circuit_id").await;
-                        return;
-                    }
-                };
-
-                let inputs = meta
-                    .get("inputs")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-
-                let req_id_opt = if req_id > 0 { Some(req_id) } else { None };
-
-                let submission = RwrSubmission {
-                    circuit_id,
-                    inputs,
-                    request_id: req_id_opt,
-                    retry_count: 0,
-                };
-
-                if let Err(e) = rwr_tx.try_send(submission) {
-                    warn!(error = %e, "RWR submission channel full or closed");
-                    Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
-                }
+                Self::handle_proof_req(req_id, payload, rwr_tx, ws_tx).await;
             }
-
             MSG_STATUS_REQ => {
-                let meta: serde_json::Value = match serde_json::from_slice(payload) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        Self::send_error(
-                            ws_tx,
-                            req_id,
-                            -32602,
-                            &format!("Invalid status payload: {e}"),
-                        )
-                        .await;
-                        return;
-                    }
-                };
-
-                let run_uid = match meta.get("run_uid").and_then(|v| v.as_str()) {
-                    Some(id) => id.to_string(),
-                    None => {
-                        Self::send_error(ws_tx, req_id, -32602, "Missing run_uid").await;
-                        return;
-                    }
-                };
-
-                let mut pending_map = pending.write().await;
-                if let Some(req) = pending_map.get(&run_uid) {
-                    let lock = req.lock().await;
-                    if let Some(result) = &lock.result {
-                        let result = result.clone();
-                        drop(lock);
-                        pending_map.remove(&run_uid);
-                        drop(pending_map);
-                        Self::send_result(ws_tx, MSG_STATUS_RESULT, req_id, result).await;
-                    } else {
-                        drop(lock);
-                        drop(pending_map);
-                        Self::send_result(
-                            ws_tx,
-                            MSG_STATUS_RESULT,
-                            req_id,
-                            serde_json::json!({"run_uid": run_uid, "status": "processing"}),
-                        )
-                        .await;
-                    }
-                } else {
-                    drop(pending_map);
-                    Self::send_error(ws_tx, req_id, 11, "Run not found").await;
-                }
+                Self::handle_status_req(req_id, payload, pending, ws_tx).await;
             }
-
             _ => {
                 warn!(
                     msg_type = msg_type,
                     "unknown binary message type from relay"
                 );
             }
+        }
+    }
+
+    async fn handle_submit(
+        req_id: u32,
+        payload: &[u8],
+        dsperse_tx: &tokio::sync::mpsc::Sender<DsperseSubmission>,
+        dsperse_semaphore: &Arc<Semaphore>,
+        ws_tx: &tokio::sync::mpsc::Sender<Message>,
+    ) {
+        let permit = match dsperse_semaphore.try_acquire() {
+            Ok(p) => p,
+            Err(_) => {
+                Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
+                return;
+            }
+        };
+
+        let (meta, tensor_data) = match decode_submit_payload(payload) {
+            Ok(v) => v,
+            Err(e) => {
+                drop(permit);
+                Self::send_error(ws_tx, req_id, -32602, &format!("Invalid payload: {e}"))
+                    .await;
+                return;
+            }
+        };
+
+        let (circuit_id, inputs) = match Self::parse_circuit_payload(&meta) {
+            Some(v) => v,
+            None => {
+                drop(permit);
+                Self::send_error(ws_tx, req_id, -32602, "Missing circuit_id").await;
+                return;
+            }
+        };
+
+        let req_id_opt = if req_id > 0 { Some(req_id) } else { None };
+
+        let submission = DsperseSubmission {
+            circuit_id,
+            inputs,
+            tensor_data: tensor_data.map(|d| d.to_vec()),
+            request_id: req_id_opt,
+        };
+
+        if let Err(e) = dsperse_tx.try_send(submission) {
+            warn!(error = %e, "dsperse submission channel full or closed");
+            Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
+        }
+        drop(permit);
+    }
+
+    async fn handle_proof_req(
+        req_id: u32,
+        payload: &[u8],
+        rwr_tx: &tokio::sync::mpsc::Sender<RwrSubmission>,
+        ws_tx: &tokio::sync::mpsc::Sender<Message>,
+    ) {
+        let meta: serde_json::Value = match serde_json::from_slice(payload) {
+            Ok(v) => v,
+            Err(e) => {
+                Self::send_error(
+                    ws_tx,
+                    req_id,
+                    -32602,
+                    &format!("Invalid proof payload: {e}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let (circuit_id, inputs) = match Self::parse_circuit_payload(&meta) {
+            Some(v) => v,
+            None => {
+                Self::send_error(ws_tx, req_id, -32602, "Missing circuit_id").await;
+                return;
+            }
+        };
+
+        let req_id_opt = if req_id > 0 { Some(req_id) } else { None };
+
+        let submission = RwrSubmission {
+            circuit_id,
+            inputs,
+            request_id: req_id_opt,
+            retry_count: 0,
+        };
+
+        if let Err(e) = rwr_tx.try_send(submission) {
+            warn!(error = %e, "RWR submission channel full or closed");
+            Self::send_error(ws_tx, req_id, 20, "Server busy, try again later").await;
+        }
+    }
+
+    async fn handle_status_req(
+        req_id: u32,
+        payload: &[u8],
+        pending: &PendingMap,
+        ws_tx: &tokio::sync::mpsc::Sender<Message>,
+    ) {
+        let meta: serde_json::Value = match serde_json::from_slice(payload) {
+            Ok(v) => v,
+            Err(e) => {
+                Self::send_error(
+                    ws_tx,
+                    req_id,
+                    -32602,
+                    &format!("Invalid status payload: {e}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let run_uid = match meta.get("run_uid").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                Self::send_error(ws_tx, req_id, -32602, "Missing run_uid").await;
+                return;
+            }
+        };
+
+        let mut pending_map = pending.write().await;
+        if let Some(req) = pending_map.get(&run_uid) {
+            let lock = req.lock().await;
+            if let Some(result) = &lock.result {
+                let result = result.clone();
+                drop(lock);
+                pending_map.remove(&run_uid);
+                drop(pending_map);
+                Self::send_result(ws_tx, MSG_STATUS_RESULT, req_id, result).await;
+            } else {
+                drop(lock);
+                drop(pending_map);
+                Self::send_result(
+                    ws_tx,
+                    MSG_STATUS_RESULT,
+                    req_id,
+                    serde_json::json!({"run_uid": run_uid, "status": "processing"}),
+                )
+                .await;
+            }
+        } else {
+            drop(pending_map);
+            Self::send_error(ws_tx, req_id, 11, "Run not found").await;
         }
     }
 

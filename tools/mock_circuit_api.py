@@ -27,34 +27,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         sys.stderr.write(f"[mock-api] {format % args}\n")
 
+    def _send_json(self, status_code, body_dict):
+        body = json.dumps(body_dict).encode()
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         if self.path == "/circuits":
             with lock:
-                circuits = []
-                for cid in active_ids:
-                    if cid in all_circuits:
-                        circuits.append({
-                            "id": cid,
-                            "metadata": all_circuits[cid],
-                            "files": {},
-                        })
-            body = json.dumps({"circuits": circuits}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+                circuits = [
+                    {"id": cid, "metadata": all_circuits[cid], "files": {}}
+                    for cid in active_ids
+                    if cid in all_circuits
+                ]
+            self._send_json(200, {"circuits": circuits})
         elif self.path == "/admin/status":
             with lock:
                 status = {
                     "available": {cid: all_circuits[cid]["name"] for cid in all_circuits},
                     "active": {cid: all_circuits[cid]["name"] for cid in active_ids if cid in all_circuits},
                 }
-            body = json.dumps(status, indent=2).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(200, status)
         else:
             self.send_error(404)
 
@@ -64,43 +60,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with lock:
                 if cid in all_circuits:
                     active_ids.add(cid)
-                    name = all_circuits[cid]["name"]
-                    self.send_response(200)
-                    body = json.dumps({"activated": cid, "name": name}).encode()
+                    self._send_json(200, {"activated": cid, "name": all_circuits[cid]["name"]})
                 else:
-                    self.send_response(404)
-                    body = json.dumps({"error": f"unknown circuit {cid}"}).encode()
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
+                    self._send_json(404, {"error": f"unknown circuit {cid}"})
 
         elif self.path.startswith("/admin/deactivate/"):
             cid = self.path.split("/")[-1]
             with lock:
                 active_ids.discard(cid)
-            self.send_response(200)
-            body = json.dumps({"deactivated": cid}).encode()
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(200, {"deactivated": cid})
 
         elif self.path == "/admin/activate-all":
             with lock:
                 active_ids.update(all_circuits.keys())
-            self.send_response(200)
-            body = json.dumps({"activated": list(active_ids)}).encode()
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(200, {"activated": list(active_ids)})
 
         elif self.path == "/admin/deactivate-all":
             with lock:
                 active_ids.clear()
-            self.send_response(200)
-            body = json.dumps({"deactivated": "all"}).encode()
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(200, {"deactivated": "all"})
 
         else:
             self.send_error(404)

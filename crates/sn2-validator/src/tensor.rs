@@ -57,64 +57,18 @@ fn parse_protobuf_floats(raw: &[u8], shape: &[usize], expected: usize) -> Result
 
         match wire_type {
             2 => {
-                let (len, next) = read_varint(raw, offset)?;
-                offset = next;
-                let end = offset
-                    .checked_add(len)
-                    .context("length-delimited field overflow")?;
-                anyhow::ensure!(end <= raw.len(), "length-delimited field overflows buffer");
-                if field == 1 {
-                    anyhow::ensure!(
-                        len % 4 == 0,
-                        "packed float field length {len} not a multiple of 4"
-                    );
-                    while offset < end {
-                        let val = f32::from_le_bytes([
-                            raw[offset],
-                            raw[offset + 1],
-                            raw[offset + 2],
-                            raw[offset + 3],
-                        ]);
-                        floats.push(val as f64);
-                        offset += 4;
-                    }
-                } else if field == 2 {
-                    proto_shape_seen = true;
-                    let mut pos = offset;
-                    while pos < end {
-                        let (val, next) = read_varint(raw, pos)?;
-                        proto_shape.push(val);
-                        pos = next;
-                    }
-                }
-                offset = end;
+                offset =
+                    parse_length_delimited(raw, offset, field, &mut floats, &mut proto_shape, &mut proto_shape_seen)?;
             }
             5 => {
-                let end = offset.checked_add(4).context("fixed32 overflow")?;
-                anyhow::ensure!(end <= raw.len(), "fixed32 overflows buffer");
-                if field == 1 {
-                    let val = f32::from_le_bytes([
-                        raw[offset],
-                        raw[offset + 1],
-                        raw[offset + 2],
-                        raw[offset + 3],
-                    ]);
-                    floats.push(val as f64);
-                }
-                offset = end;
+                offset = parse_fixed32(raw, offset, field, &mut floats)?;
             }
             0 => {
-                let (val, next) = read_varint(raw, offset)?;
-                if field == 2 {
-                    proto_shape_seen = true;
-                    proto_shape.push(val);
-                }
-                offset = next;
+                offset =
+                    parse_varint_field(raw, offset, field, &mut proto_shape, &mut proto_shape_seen)?;
             }
             1 => {
-                let end = offset.checked_add(8).context("fixed64 overflow")?;
-                anyhow::ensure!(end <= raw.len(), "fixed64 overflows buffer");
-                offset = end;
+                offset = skip_fixed64(raw, offset)?;
             }
             _ => anyhow::bail!("unknown wire type {wire_type}"),
         }
@@ -133,6 +87,83 @@ fn parse_protobuf_floats(raw: &[u8], shape: &[usize], expected: usize) -> Result
         floats.len()
     );
     ArrayD::from_shape_vec(IxDyn(shape), floats).context("building array from protobuf")
+}
+
+fn parse_length_delimited(
+    raw: &[u8],
+    offset: usize,
+    field: usize,
+    floats: &mut Vec<f64>,
+    proto_shape: &mut Vec<usize>,
+    proto_shape_seen: &mut bool,
+) -> Result<usize> {
+    let (len, next) = read_varint(raw, offset)?;
+    let mut offset = next;
+    let end = offset
+        .checked_add(len)
+        .context("length-delimited field overflow")?;
+    anyhow::ensure!(end <= raw.len(), "length-delimited field overflows buffer");
+    if field == 1 {
+        anyhow::ensure!(
+            len % 4 == 0,
+            "packed float field length {len} not a multiple of 4"
+        );
+        while offset < end {
+            let val = f32::from_le_bytes([
+                raw[offset],
+                raw[offset + 1],
+                raw[offset + 2],
+                raw[offset + 3],
+            ]);
+            floats.push(val as f64);
+            offset += 4;
+        }
+    } else if field == 2 {
+        *proto_shape_seen = true;
+        let mut pos = offset;
+        while pos < end {
+            let (val, next) = read_varint(raw, pos)?;
+            proto_shape.push(val);
+            pos = next;
+        }
+    }
+    Ok(end)
+}
+
+fn parse_fixed32(raw: &[u8], offset: usize, field: usize, floats: &mut Vec<f64>) -> Result<usize> {
+    let end = offset.checked_add(4).context("fixed32 overflow")?;
+    anyhow::ensure!(end <= raw.len(), "fixed32 overflows buffer");
+    if field == 1 {
+        let val = f32::from_le_bytes([
+            raw[offset],
+            raw[offset + 1],
+            raw[offset + 2],
+            raw[offset + 3],
+        ]);
+        floats.push(val as f64);
+    }
+    Ok(end)
+}
+
+fn parse_varint_field(
+    raw: &[u8],
+    offset: usize,
+    field: usize,
+    proto_shape: &mut Vec<usize>,
+    proto_shape_seen: &mut bool,
+) -> Result<usize> {
+    let (val, next) = read_varint(raw, offset)?;
+    if field == 2 {
+        *proto_shape_seen = true;
+        proto_shape.push(val);
+    }
+    Ok(next)
+}
+
+fn skip_fixed64(raw: &[u8], offset: usize) -> Result<usize> {
+    let end = offset.checked_add(8).context("fixed64 overflow")?;
+    anyhow::ensure!(end <= raw.len(), "fixed64 overflows buffer");
+    Ok(end)
 }
 
 fn read_varint(buf: &[u8], offset: usize) -> Result<(usize, usize)> {

@@ -69,56 +69,56 @@ def download_file(url: str, dest: Path) -> None:
     print(f"  {dest.name}: {total:,} bytes", file=sys.stderr)
 
 
+def _is_eligible_circuit(entry: Path) -> str | None:
+    if not entry.name.startswith("model_") or not entry.is_dir():
+        return None
+    circuit_id = entry.name[6:]
+    if (
+        len(circuit_id) != 64
+        or not all(c in "0123456789abcdef" for c in circuit_id)
+        or circuit_id in IGNORED
+    ):
+        return None
+    metadata_path = entry / CIRCUIT_METADATA_FILENAME
+    if not metadata_path.exists():
+        return None
+    try:
+        meta = json.loads(metadata_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if meta.get("type") != "PROOF_OF_COMPUTATION":
+        return None
+    if meta.get("proof_system") != "JSTPROVE":
+        return None
+    if not all((entry / f).exists() for f in REQUIRED_FILES):
+        return None
+    return circuit_id
+
+
 def find_cached_circuit() -> str | None:
     if not CIRCUIT_CACHE_DIR.exists():
         return None
     for entry in sorted(CIRCUIT_CACHE_DIR.iterdir()):
-        if not entry.name.startswith("model_") or not entry.is_dir():
-            continue
-        circuit_id = entry.name[6:]
-        if (
-            len(circuit_id) != 64
-            or not all(c in "0123456789abcdef" for c in circuit_id)
-            or circuit_id in IGNORED
-        ):
-            continue
-        metadata_path = entry / CIRCUIT_METADATA_FILENAME
-        if not metadata_path.exists():
-            continue
-        try:
-            meta = json.loads(metadata_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        if meta.get("type") != "PROOF_OF_COMPUTATION":
-            continue
-        if meta.get("proof_system") != "JSTPROVE":
-            continue
-        if all((entry / f).exists() for f in REQUIRED_FILES):
+        circuit_id = _is_eligible_circuit(entry)
+        if circuit_id is not None:
             return circuit_id
     return None
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--force", action="store_true", help="Re-download even if cached")
-    args = parser.parse_args()
+def _try_use_cached() -> str | None:
+    cached = find_cached_circuit()
+    if not cached:
+        return None
+    model_dir = CIRCUIT_CACHE_DIR / f"model_{cached}"
+    print(f"Using cached circuit: {cached[:16]}...", file=sys.stderr)
+    for f in REQUIRED_FILES:
+        sz = (model_dir / f).stat().st_size
+        print(f"  {f}: cached ({sz:,} bytes)", file=sys.stderr)
+    print(cached)
+    return cached
 
-    if not args.force:
-        cached = find_cached_circuit()
-        if cached:
-            model_dir = CIRCUIT_CACHE_DIR / f"model_{cached}"
-            print(f"Using cached circuit: {cached[:16]}...", file=sys.stderr)
-            for f in REQUIRED_FILES:
-                sz = (model_dir / f).stat().st_size
-                print(f"  {f}: cached ({sz:,} bytes)", file=sys.stderr)
-            print(cached)
-            return
 
-    print(f"Fetching circuit list from {CIRCUIT_API_URL} ...", file=sys.stderr)
-    data = fetch_json(f"{CIRCUIT_API_URL}/circuits")
-    circuits = data.get("circuits", [])
-
-    chosen = None
+def _select_circuit(circuits: list) -> dict | None:
     for c in circuits:
         cid = c.get("id", "")
         if not cid or cid in IGNORED:
@@ -131,9 +131,37 @@ def main() -> None:
         files = c.get("files", {})
         if "model.compiled" not in files or "settings.json" not in files:
             continue
-        chosen = c
-        break
+        return c
+    return None
 
+
+def _download_circuit_files(model_dir: Path, files: dict, force: bool) -> None:
+    for filename in REQUIRED_FILES:
+        url = files.get(filename)
+        if not url:
+            print(f"  {filename}: not in API response, skipping", file=sys.stderr)
+            continue
+        dest = model_dir / filename
+        if dest.exists() and not force:
+            print(f"  {filename}: cached ({dest.stat().st_size:,} bytes)", file=sys.stderr)
+            continue
+        print(f"  {filename}: downloading ...", file=sys.stderr)
+        download_file(url, dest)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true", help="Re-download even if cached")
+    args = parser.parse_args()
+
+    if not args.force and _try_use_cached():
+        return
+
+    print(f"Fetching circuit list from {CIRCUIT_API_URL} ...", file=sys.stderr)
+    data = fetch_json(f"{CIRCUIT_API_URL}/circuits")
+    circuits = data.get("circuits", [])
+
+    chosen = _select_circuit(circuits)
     if chosen is None:
         print("No eligible PROOF_OF_COMPUTATION JSTPROVE circuit found", file=sys.stderr)
         sys.exit(1)
@@ -154,17 +182,7 @@ def main() -> None:
     metadata_path.write_text(json.dumps(metadata, indent=2))
     print(f"  {CIRCUIT_METADATA_FILENAME}: written", file=sys.stderr)
 
-    for filename in REQUIRED_FILES:
-        url = files.get(filename)
-        if not url:
-            print(f"  {filename}: not in API response, skipping", file=sys.stderr)
-            continue
-        dest = model_dir / filename
-        if dest.exists() and not args.force:
-            print(f"  {filename}: cached ({dest.stat().st_size:,} bytes)", file=sys.stderr)
-            continue
-        print(f"  {filename}: downloading ...", file=sys.stderr)
-        download_file(url, dest)
+    _download_circuit_files(model_dir, files, args.force)
 
     missing = [f for f in REQUIRED_FILES if not (model_dir / f).exists()]
     if missing:

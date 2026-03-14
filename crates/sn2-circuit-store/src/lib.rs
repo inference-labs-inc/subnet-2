@@ -313,98 +313,17 @@ impl CircuitStore {
                     .with_context(|| format!("creating slices dir {}", slices_dir.display()))?;
             }
 
-            let mut deferred_downloads: Vec<(String, PathBuf)> = Vec::new();
             let checksums = data
                 .get("checksums")
                 .and_then(|v| v.as_object())
                 .cloned()
                 .unwrap_or_default();
 
-            for (filename, url_val) in files {
-                let skip = if is_dsperse {
-                    filename == "full_model.onnx"
-                } else {
-                    SKIP_AUTO_DOWNLOAD.contains(&filename.as_str())
-                };
-                if skip {
-                    continue;
-                }
-
-                if is_dsperse && filename.ends_with(".dslice") {
-                    let archive_dest = cache_path.join("slices").join(filename);
-                    let slice_name = filename.trim_end_matches(".dslice");
-                    let extracted_dir = cache_path.join("slices").join(slice_name);
-                    if archive_dest.exists() {
-                        if file_checksum_valid(&archive_dest, &checksums, filename) {
-                            continue;
-                        }
-                        warn!(file = %filename, "SHA-256 mismatch, removing corrupted dslice");
-                        std::fs::remove_file(&archive_dest).ok();
-                        std::fs::remove_dir_all(&extracted_dir).ok();
-                    } else if extracted_dir.exists() {
-                        continue;
-                    }
-                    if let Some(url) = url_val.as_str() {
-                        deferred_downloads.push((url.to_string(), archive_dest));
-                    }
-                    continue;
-                }
-
-                let dest = if is_dsperse
-                    && (filename == "metadata.json" || filename == "metadata.msgpack")
-                {
-                    cache_path.join("slices").join(filename)
-                } else {
-                    cache_path.join(filename)
-                };
-                if dest.exists() {
-                    continue;
-                }
-                if let Some(url) = url_val.as_str() {
-                    if let Err(e) = self.download_file(url, &dest).await {
-                        warn!(file = %filename, error = %e, "failed to download circuit file");
-                    }
-                }
-            }
+            let deferred_downloads =
+                self.download_circuit_files(files, &cache_path, is_dsperse, &checksums).await;
 
             if !deferred_downloads.is_empty() {
-                self.inflight_downloads
-                    .lock()
-                    .unwrap()
-                    .insert(circuit_id.to_string());
-                let count = deferred_downloads.len();
-                let http = self.http.clone();
-                let inflight = Arc::clone(&self.inflight_downloads);
-                let cid = circuit_id.to_string();
-                info!(circuit = %circuit_id, files = count, "spawning background dslice downloads");
-                tokio::spawn(async move {
-                    let mut downloaded = 0usize;
-                    let mut failed = 0usize;
-                    for (url, dest) in &deferred_downloads {
-                        if dest.exists() {
-                            downloaded += 1;
-                            continue;
-                        }
-                        match download_file_static(&http, url, dest).await {
-                            Ok(()) => {
-                                downloaded += 1;
-                                if downloaded % 20 == 0 || downloaded == count {
-                                    info!(progress = %format!("{downloaded}/{count}"), "dslice download progress");
-                                }
-                            }
-                            Err(e) => {
-                                failed += 1;
-                                warn!(file = %dest.display(), error = %e, "failed to download dslice file");
-                            }
-                        }
-                    }
-                    if failed == 0 {
-                        inflight.lock().unwrap().remove(&cid);
-                    } else {
-                        warn!(circuit = %cid, failed, "dslice downloads incomplete, circuit stays unavailable until next refresh");
-                    }
-                    info!(count = downloaded, "dslice background downloads complete");
-                });
+                self.spawn_deferred_downloads(circuit_id, deferred_downloads);
             }
         }
 
@@ -430,6 +349,97 @@ impl CircuitStore {
         })
     }
 
+    async fn download_circuit_files(
+        &self,
+        files: &serde_json::Map<String, serde_json::Value>,
+        cache_path: &Path,
+        is_dsperse: bool,
+        checksums: &serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<(String, PathBuf)> {
+        let mut deferred_downloads: Vec<(String, PathBuf)> = Vec::new();
+
+        for (filename, url_val) in files {
+            let skip = if is_dsperse {
+                filename == "full_model.onnx"
+            } else {
+                SKIP_AUTO_DOWNLOAD.contains(&filename.as_str())
+            };
+            if skip {
+                continue;
+            }
+
+            if is_dsperse && filename.ends_with(".dslice") {
+                if let Some(url) = resolve_dslice_download(cache_path, filename, checksums, url_val)
+                {
+                    deferred_downloads.push(url);
+                }
+                continue;
+            }
+
+            let dest = if is_dsperse
+                && (filename == "metadata.json" || filename == "metadata.msgpack")
+            {
+                cache_path.join("slices").join(filename)
+            } else {
+                cache_path.join(filename)
+            };
+            if dest.exists() {
+                continue;
+            }
+            if let Some(url) = url_val.as_str() {
+                if let Err(e) = self.download_file(url, &dest).await {
+                    warn!(file = %filename, error = %e, "failed to download circuit file");
+                }
+            }
+        }
+
+        deferred_downloads
+    }
+
+    fn spawn_deferred_downloads(
+        &self,
+        circuit_id: &str,
+        deferred_downloads: Vec<(String, PathBuf)>,
+    ) {
+        self.inflight_downloads
+            .lock()
+            .unwrap()
+            .insert(circuit_id.to_string());
+        let count = deferred_downloads.len();
+        let http = self.http.clone();
+        let inflight = Arc::clone(&self.inflight_downloads);
+        let cid = circuit_id.to_string();
+        info!(circuit = %circuit_id, files = count, "spawning background dslice downloads");
+        tokio::spawn(async move {
+            let mut downloaded = 0usize;
+            let mut failed = 0usize;
+            for (url, dest) in &deferred_downloads {
+                if dest.exists() {
+                    downloaded += 1;
+                    continue;
+                }
+                match download_file_static(&http, url, dest).await {
+                    Ok(()) => {
+                        downloaded += 1;
+                        if downloaded % 20 == 0 || downloaded == count {
+                            info!(progress = %format!("{downloaded}/{count}"), "dslice download progress");
+                        }
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        warn!(file = %dest.display(), error = %e, "failed to download dslice file");
+                    }
+                }
+            }
+            if failed == 0 {
+                inflight.lock().unwrap().remove(&cid);
+            } else {
+                warn!(circuit = %cid, failed, "dslice downloads incomplete, circuit stays unavailable until next refresh");
+            }
+            info!(count = downloaded, "dslice background downloads complete");
+        });
+    }
+
     fn load_from_cache(&mut self, active_ids: &HashSet<String>) {
         let cache_dir = &self.cache_dir;
         let entries = match std::fs::read_dir(cache_dir) {
@@ -438,34 +448,48 @@ impl CircuitStore {
         };
 
         for entry in entries.flatten() {
-            let dir_name = entry.file_name().to_string_lossy().to_string();
-            let circuit_id = match dir_name.strip_prefix("model_") {
-                Some(id) if id.len() == 64 => id.to_string(),
-                _ => continue,
-            };
-
-            if !active_ids.is_empty() && !active_ids.contains(&circuit_id) {
-                continue;
+            if let Some((circuit_id, circuit)) =
+                self.try_load_cache_entry(&entry, active_ids, cache_dir)
+            {
+                self.circuits.insert(circuit_id, circuit);
             }
-            if self.circuits.contains_key(&circuit_id) {
-                continue;
-            }
+        }
+    }
 
-            let metadata_path = entry.path().join(CIRCUIT_METADATA_FILENAME);
-            if !metadata_path.exists() {
-                continue;
-            }
+    fn try_load_cache_entry(
+        &self,
+        entry: &std::fs::DirEntry,
+        active_ids: &HashSet<String>,
+        cache_dir: &Path,
+    ) -> Option<(String, Circuit)> {
+        let dir_name = entry.file_name().to_string_lossy().to_string();
+        let circuit_id = match dir_name.strip_prefix("model_") {
+            Some(id) if id.len() == 64 => id.to_string(),
+            _ => return None,
+        };
 
-            match load_circuit_from_cache(&circuit_id, &entry.path(), &self.cache_dir) {
-                Ok(circuit) => {
-                    if circuit.metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION {
-                        migrate_dslice_layout(&entry.path());
-                    }
-                    self.circuits.insert(circuit_id, circuit);
+        if !active_ids.is_empty() && !active_ids.contains(&circuit_id) {
+            return None;
+        }
+        if self.circuits.contains_key(&circuit_id) {
+            return None;
+        }
+
+        let metadata_path = entry.path().join(CIRCUIT_METADATA_FILENAME);
+        if !metadata_path.exists() {
+            return None;
+        }
+
+        match load_circuit_from_cache(&circuit_id, &entry.path(), cache_dir) {
+            Ok(circuit) => {
+                if circuit.metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION {
+                    migrate_dslice_layout(&entry.path());
                 }
-                Err(e) => {
-                    warn!(id = circuit_id, error = %e, "failed to load cached circuit");
-                }
+                Some((circuit_id, circuit))
+            }
+            Err(e) => {
+                warn!(id = circuit_id, error = %e, "failed to load cached circuit");
+                None
             }
         }
     }
@@ -656,6 +680,30 @@ pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn resolve_dslice_download(
+    cache_path: &Path,
+    filename: &str,
+    checksums: &serde_json::Map<String, serde_json::Value>,
+    url_val: &serde_json::Value,
+) -> Option<(String, PathBuf)> {
+    let archive_dest = cache_path.join("slices").join(filename);
+    let slice_name = filename.trim_end_matches(".dslice");
+    let extracted_dir = cache_path.join("slices").join(slice_name);
+    if archive_dest.exists() {
+        if file_checksum_valid(&archive_dest, checksums, filename) {
+            return None;
+        }
+        warn!(file = %filename, "SHA-256 mismatch, removing corrupted dslice");
+        std::fs::remove_file(&archive_dest).ok();
+        std::fs::remove_dir_all(&extracted_dir).ok();
+    } else if extracted_dir.exists() {
+        return None;
+    }
+    url_val
+        .as_str()
+        .map(|url| (url.to_string(), archive_dest))
 }
 
 fn file_checksum_valid(

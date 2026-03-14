@@ -1878,6 +1878,179 @@ impl ValidatorLoop {
         }
     }
 
+    fn spawn_artifact_upload(
+        &mut self,
+        run_uid: &str,
+        active_run: &mut Option<crate::incremental_runner::ActiveRun>,
+        final_output: Option<serde_json::Value>,
+    ) {
+        let artifacts = active_run
+            .as_mut()
+            .map(|r| std::mem::take(&mut r.artifacts))
+            .unwrap_or_default();
+        if artifacts.is_empty() {
+            return;
+        }
+        let Some(uploader) = &self.proof_uploader else {
+            return;
+        };
+        let uploader = Arc::clone(uploader);
+        let uid_clone = run_uid.to_string();
+        let circuit_id = active_run
+            .as_ref()
+            .map(|r| r.circuit_id.clone())
+            .unwrap_or_default();
+        let circuit_name = active_run
+            .as_ref()
+            .map(|r| r.circuit_name.clone())
+            .unwrap_or_default();
+        self.upload_tasks.spawn(async move {
+            if let Err(e) = uploader
+                .upload_run_artifacts(&uid_clone, &circuit_id, &circuit_name, artifacts, final_output)
+                .await
+            {
+                warn!(run_uid = %uid_clone, error = %e, "proof upload failed");
+            }
+        });
+    }
+
+    async fn notify_run_completed(
+        &mut self,
+        run_uid: &str,
+        active_run: &Option<crate::incremental_runner::ActiveRun>,
+    ) {
+        let notify_circuit_id = active_run
+            .as_ref()
+            .map(|r| r.circuit_id.as_str())
+            .unwrap_or_default()
+            .to_string();
+        self.relay_set_request_result(
+            run_uid,
+            serde_json::json!({"run_uid": run_uid, "status": "complete"}),
+        )
+        .await;
+        self.relay_send_notification(
+            "subnet-2.batch_completed",
+            serde_json::json!({
+                "run_uid": run_uid,
+                "circuit_id": notify_circuit_id,
+                "status": "completed",
+            }),
+        )
+        .await;
+    }
+
+    fn evict_slice_cache(&self, run_uid: &str, slice_num: &str) {
+        let slices_dir = self
+            .run_manager
+            .get_circuit_id(run_uid)
+            .and_then(|cid| self.circuit_store.get_circuit(cid))
+            .map(|c| c.paths.base_path.join("slices"));
+        if let Some(ref sd) = slices_dir {
+            let slice_path = sd.join(slice_num);
+            sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
+            sn2_circuit_store::cleanup_extracted_slice(sd, slice_num);
+        }
+    }
+
+    async fn finalize_api_run(&mut self, run_uid: &str, slice_num: &str) {
+        self.dslice_input_scales
+            .retain(|(uid, _), _| uid != run_uid);
+
+        self.evict_slice_cache(run_uid, slice_num);
+
+        info!(
+            run_uid = %run_uid,
+            slice = %slice_num,
+            "API request: single proven tile complete, finalizing run"
+        );
+        let mut active_run = self.run_manager.remove_run(run_uid);
+        if let Some(ref run) = active_run {
+            self.report_dsperse_completion(run);
+            self.spawn_emit_run_complete(run, true);
+        }
+        self.spawn_artifact_upload(run_uid, &mut active_run, None);
+        self.notify_run_completed(run_uid, &active_run).await;
+        self.relay_remove_pending(run_uid).await;
+    }
+
+    async fn denormalize_and_apply_output(
+        &mut self,
+        run_uid: &str,
+        slice_num: &str,
+        computed: &serde_json::Value,
+    ) {
+        let scale_key = (run_uid.to_string(), slice_num.to_string());
+        let scale = self.dslice_input_scales.remove(&scale_key);
+
+        let mut tensor = match crate::tensor::json_to_arrayd(computed) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(run_uid = %run_uid, slice = %slice_num, error = %e, "output tensor conversion failed, removing run");
+                self.teardown_run(run_uid).await;
+                return;
+            }
+        };
+
+        if let Some(scale) = scale {
+            tensor.mapv_inplace(|v| v * scale);
+            info!(
+                run_uid = %run_uid,
+                slice = %slice_num,
+                scale,
+                "denormalized circuit output"
+            );
+        }
+
+        self.apply_dslice_result_tensor(run_uid, slice_num, tensor)
+            .await;
+    }
+
+    fn attempt_retry(&mut self, retry_payload: RetryPayload, next_retry: u32) -> bool {
+        match retry_payload {
+            RetryPayload::Rwr(mut rwr) => {
+                rwr.retry_count = next_retry;
+                self.rwr_queue.push_back(rwr);
+                self.dispatch_notify.notify_one();
+                true
+            }
+            RetryPayload::DSlice(mut dslice) => {
+                if self.run_manager.has_run(&dslice.run_uid) {
+                    dslice.retry_count = next_retry;
+                    match dslice.run_source {
+                        RunSource::Api => self.api_dslice_queue.push_back(*dslice),
+                        RunSource::Benchmark => self.stacked_dslice_queue.push_back(*dslice),
+                    }
+                    self.dispatch_notify.notify_one();
+                }
+                true
+            }
+            RetryPayload::None => true,
+        }
+    }
+
+    async fn handle_dslice_max_retries(
+        &mut self,
+        run_uid: &Option<String>,
+        slice_num: &Option<String>,
+        is_tile: bool,
+        tile_idx: Option<u32>,
+        reason: &str,
+    ) {
+        if let Some(run_uid) = run_uid {
+            if let Some(snum) = slice_num {
+                let ruid = run_uid.clone();
+                let event_snum = event_slice_num(snum, is_tile, tile_idx);
+                let err = reason.to_string();
+                self.emit_event(move |ev| async move {
+                    ev.emit_slice_failed(&ruid, &event_snum, &err).await;
+                });
+            }
+            warn!(run_uid = %run_uid, "dslice max retries exceeded, removing run");
+            self.teardown_run(run_uid).await;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn handle_dslice_success(
         &mut self,
@@ -1923,82 +2096,7 @@ impl ValidatorLoop {
         );
 
         if self.run_manager.get_run_source(&run_uid) == Some(RunSource::Api) {
-            self.dslice_input_scales
-                .retain(|(uid, _), _| uid != &run_uid);
-
-            let slices_dir = self
-                .run_manager
-                .get_circuit_id(&run_uid)
-                .and_then(|cid| self.circuit_store.get_circuit(cid))
-                .map(|c| c.paths.base_path.join("slices"));
-            if let Some(ref sd) = slices_dir {
-                let slice_path = sd.join(&slice_num);
-                sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
-                sn2_circuit_store::cleanup_extracted_slice(sd, &slice_num);
-            }
-
-            info!(
-                run_uid = %run_uid,
-                slice = %slice_num,
-                "API request: single proven tile complete, finalizing run"
-            );
-            let mut active_run = self.run_manager.remove_run(&run_uid);
-            if let Some(ref run) = active_run {
-                self.report_dsperse_completion(run);
-                self.spawn_emit_run_complete(run, true);
-            }
-            let artifacts = active_run
-                .as_mut()
-                .map(|r| std::mem::take(&mut r.artifacts))
-                .unwrap_or_default();
-            if !artifacts.is_empty() {
-                if let Some(uploader) = &self.proof_uploader {
-                    let uploader = Arc::clone(uploader);
-                    let uid_clone = run_uid.clone();
-                    let circuit_id = active_run
-                        .as_ref()
-                        .map(|r| r.circuit_id.clone())
-                        .unwrap_or_default();
-                    let circuit_name = active_run
-                        .as_ref()
-                        .map(|r| r.circuit_name.clone())
-                        .unwrap_or_default();
-                    self.upload_tasks.spawn(async move {
-                        if let Err(e) = uploader
-                            .upload_run_artifacts(
-                                &uid_clone,
-                                &circuit_id,
-                                &circuit_name,
-                                artifacts,
-                                None,
-                            )
-                            .await
-                        {
-                            warn!(run_uid = %uid_clone, error = %e, "proof upload failed");
-                        }
-                    });
-                }
-            }
-            let notify_circuit_id = active_run
-                .as_ref()
-                .map(|r| r.circuit_id.as_str())
-                .unwrap_or_default()
-                .to_string();
-            self.relay_set_request_result(
-                &run_uid,
-                serde_json::json!({"run_uid": run_uid, "status": "complete"}),
-            )
-            .await;
-            self.relay_send_notification(
-                "subnet-2.batch_completed",
-                serde_json::json!({
-                    "run_uid": run_uid,
-                    "circuit_id": notify_circuit_id,
-                    "status": "completed",
-                }),
-            )
-            .await;
-            self.relay_remove_pending(&run_uid).await;
+            self.finalize_api_run(&run_uid, &slice_num).await;
             return;
         }
 
@@ -2072,29 +2170,7 @@ impl ValidatorLoop {
             .cloned()
             .unwrap_or(serde_json::Value::Null);
 
-        let scale_key = (run_uid.clone(), slice_num.clone());
-        let scale = self.dslice_input_scales.remove(&scale_key);
-
-        let mut tensor = match crate::tensor::json_to_arrayd(&computed) {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(run_uid = %run_uid, slice = %slice_num, error = %e, "output tensor conversion failed, removing run");
-                self.teardown_run(&run_uid).await;
-                return;
-            }
-        };
-
-        if let Some(scale) = scale {
-            tensor.mapv_inplace(|v| v * scale);
-            info!(
-                run_uid = %run_uid,
-                slice = %slice_num,
-                scale,
-                "denormalized circuit output"
-            );
-        }
-
-        self.apply_dslice_result_tensor(&run_uid, &slice_num, tensor)
+        self.denormalize_and_apply_output(&run_uid, &slice_num, &computed)
             .await;
     }
 
@@ -2104,16 +2180,7 @@ impl ValidatorLoop {
         slice_num: &str,
         output: ndarray::ArrayD<f64>,
     ) {
-        let slices_dir = self
-            .run_manager
-            .get_circuit_id(run_uid)
-            .and_then(|cid| self.circuit_store.get_circuit(cid))
-            .map(|c| c.paths.base_path.join("slices"));
-        if let Some(ref sd) = slices_dir {
-            let slice_path = sd.join(slice_num);
-            sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
-            sn2_circuit_store::cleanup_extracted_slice(sd, slice_num);
-        }
+        self.evict_slice_cache(run_uid, slice_num);
 
         match self
             .run_manager
@@ -2131,61 +2198,8 @@ impl ValidatorLoop {
                         self.spawn_emit_run_complete(run, true);
                     }
 
-                    let artifacts = active_run
-                        .as_mut()
-                        .map(|r| std::mem::take(&mut r.artifacts))
-                        .unwrap_or_default();
-
-                    if !artifacts.is_empty() {
-                        if let Some(uploader) = &self.proof_uploader {
-                            let uploader = Arc::clone(uploader);
-                            let uid_clone = run_uid.to_string();
-                            let circuit_id = active_run
-                                .as_ref()
-                                .map(|r| r.circuit_id.clone())
-                                .unwrap_or_default();
-                            let circuit_name = active_run
-                                .as_ref()
-                                .map(|r| r.circuit_name.clone())
-                                .unwrap_or_default();
-
-                            self.upload_tasks.spawn(async move {
-                                if let Err(e) = uploader
-                                    .upload_run_artifacts(
-                                        &uid_clone,
-                                        &circuit_id,
-                                        &circuit_name,
-                                        artifacts,
-                                        final_output,
-                                    )
-                                    .await
-                                {
-                                    warn!(run_uid = %uid_clone, error = %e, "proof upload failed");
-                                }
-                            });
-                        }
-                    }
-
-                    let notify_circuit_id = active_run
-                        .as_ref()
-                        .map(|r| r.circuit_id.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-
-                    self.relay_set_request_result(
-                        run_uid,
-                        serde_json::json!({"run_uid": run_uid, "status": "complete"}),
-                    )
-                    .await;
-                    self.relay_send_notification(
-                        "subnet-2.batch_completed",
-                        serde_json::json!({
-                            "run_uid": run_uid,
-                            "circuit_id": notify_circuit_id,
-                            "status": "completed",
-                        }),
-                    )
-                    .await;
+                    self.spawn_artifact_upload(run_uid, &mut active_run, final_output);
+                    self.notify_run_completed(run_uid, &active_run).await;
                 } else {
                     self.enqueue_next_dslice_from_run(run_uid).await;
                 }
@@ -2348,40 +2362,13 @@ impl ValidatorLoop {
         let next_retry = retry_count + 1;
 
         if next_retry <= max_retries {
-            match retry_payload {
-                RetryPayload::Rwr(mut rwr) => {
-                    rwr.retry_count = next_retry;
-                    self.rwr_queue.push_back(rwr);
-                    self.dispatch_notify.notify_one();
-                }
-                RetryPayload::DSlice(mut dslice) => {
-                    if self.run_manager.has_run(&dslice.run_uid) {
-                        dslice.retry_count = next_retry;
-                        match dslice.run_source {
-                            RunSource::Api => self.api_dslice_queue.push_back(*dslice),
-                            RunSource::Benchmark => self.stacked_dslice_queue.push_back(*dslice),
-                        }
-                        self.dispatch_notify.notify_one();
-                    }
-                }
-                RetryPayload::None => {}
-            }
+            self.attempt_retry(retry_payload, next_retry);
             return;
         }
 
         if request_type == RequestType::DSlice {
-            if let Some(run_uid) = run_uid {
-                if let Some(snum) = slice_num {
-                    let ruid = run_uid.clone();
-                    let event_snum = event_slice_num(snum, is_tile, tile_idx);
-                    let err = reason.to_string();
-                    self.emit_event(move |ev| async move {
-                        ev.emit_slice_failed(&ruid, &event_snum, &err).await;
-                    });
-                }
-                warn!(run_uid = %run_uid, "dslice max retries exceeded, removing run");
-                self.teardown_run(run_uid).await;
-            }
+            self.handle_dslice_max_retries(run_uid, slice_num, is_tile, tile_idx, reason)
+                .await;
         }
 
         if let Some(req_id) = external_request_hash {

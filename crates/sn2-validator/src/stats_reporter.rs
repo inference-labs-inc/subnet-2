@@ -108,71 +108,86 @@ impl StatsReporter {
 
     pub fn flush_if_ready(&mut self, block: u64, _metagraph_n: u16, scores: &HashMap<u16, f64>) {
         let now = Instant::now();
+        self.flush_response_logs(now, block, scores);
+        self.flush_health_samples(now);
+    }
 
+    fn flush_response_logs(
+        &mut self,
+        now: Instant,
+        block: u64,
+        scores: &HashMap<u16, f64>,
+    ) {
         if now.duration_since(self.last_response_log)
-            >= std::time::Duration::from_secs(LOG_INTERVAL_SECS)
-            && !self.recent_responses.is_empty()
+            < std::time::Duration::from_secs(LOG_INTERVAL_SECS)
+            || self.recent_responses.is_empty()
         {
-            let response_logs = std::mem::take(&mut self.recent_responses);
-            self.last_response_log = now;
-
-            let overhead_duration = LOG_INTERVAL_SECS as f64;
-
-            let scores_map: serde_json::Map<String, serde_json::Value> = scores
-                .iter()
-                .filter(|(_, &v)| v > 0.0)
-                .map(|(&uid, &v)| (uid.to_string(), serde_json::Value::from(v)))
-                .collect();
-
-            let count = response_logs.len();
-            let body = serde_json::json!({
-                "validator_key": self.wallet.hotkey_ss58(),
-                "validator_uid": self.validator_uid,
-                "overhead_duration": overhead_duration,
-                "block": block,
-                "responses": response_logs,
-                "scores": scores_map,
-                "software_version": SOFTWARE_VERSION,
-            });
-
-            self.spawn_post("/statistics/log/", body, move |ok| {
-                if ok {
-                    info!(count, "submitted response stats");
-                }
-            });
+            return;
         }
 
+        let response_logs = std::mem::take(&mut self.recent_responses);
+        self.last_response_log = now;
+
+        let overhead_duration = LOG_INTERVAL_SECS as f64;
+
+        let scores_map: serde_json::Map<String, serde_json::Value> = scores
+            .iter()
+            .filter(|(_, &v)| v > 0.0)
+            .map(|(&uid, &v)| (uid.to_string(), serde_json::Value::from(v)))
+            .collect();
+
+        let count = response_logs.len();
+        let body = serde_json::json!({
+            "validator_key": self.wallet.hotkey_ss58(),
+            "validator_uid": self.validator_uid,
+            "overhead_duration": overhead_duration,
+            "block": block,
+            "responses": response_logs,
+            "scores": scores_map,
+            "software_version": SOFTWARE_VERSION,
+        });
+
+        self.spawn_post("/statistics/log/", body, move |ok| {
+            if ok {
+                info!(count, "submitted response stats");
+            }
+        });
+    }
+
+    fn flush_health_samples(&mut self, now: Instant) {
         if now.duration_since(self.last_health_flush)
-            >= std::time::Duration::from_secs(HEALTH_FLUSH_INTERVAL_SECS)
-            && !self.health_samples.is_empty()
+            < std::time::Duration::from_secs(HEALTH_FLUSH_INTERVAL_SECS)
+            || self.health_samples.is_empty()
         {
-            let samples = std::mem::take(&mut self.health_samples);
-            self.last_health_flush = now;
-            let count = samples.len() as f64;
-
-            let avg_rss_mb = samples.iter().map(|s| s.rss_mb).sum::<f64>() / count;
-            let min_rss_mb = samples.iter().map(|s| s.rss_mb).fold(f64::MAX, f64::min);
-            let max_rss_mb = samples.iter().map(|s| s.rss_mb).fold(0.0f64, f64::max);
-            let avg_active_tasks = samples.iter().map(|s| s.active_tasks).sum::<f64>() / count;
-            let avg_queue_size = samples.iter().map(|s| s.queue_size).sum::<f64>() / count;
-
-            let body = serde_json::json!({
-                "validator_key": self.wallet.hotkey_ss58(),
-                "validator_uid": self.validator_uid,
-                "sample_count": samples.len(),
-                "avg_rss_mb": avg_rss_mb,
-                "min_rss_mb": min_rss_mb,
-                "max_rss_mb": max_rss_mb,
-                "avg_tensor_cache_keys": 0.0,
-                "avg_timing_entries": 0.0,
-                "avg_active_tasks": avg_active_tasks,
-                "avg_current_concurrency": avg_active_tasks,
-                "avg_queue_size": avg_queue_size,
-                "software_version": SOFTWARE_VERSION,
-            });
-
-            self.spawn_post("/statistics/health/log/", body, |_| {});
+            return;
         }
+
+        let samples = std::mem::take(&mut self.health_samples);
+        self.last_health_flush = now;
+        let count = samples.len() as f64;
+
+        let avg_rss_mb = samples.iter().map(|s| s.rss_mb).sum::<f64>() / count;
+        let min_rss_mb = samples.iter().map(|s| s.rss_mb).fold(f64::MAX, f64::min);
+        let max_rss_mb = samples.iter().map(|s| s.rss_mb).fold(0.0f64, f64::max);
+        let avg_active_tasks = samples.iter().map(|s| s.active_tasks).sum::<f64>() / count;
+        let avg_queue_size = samples.iter().map(|s| s.queue_size).sum::<f64>() / count;
+
+        let body = serde_json::json!({
+            "validator_key": self.wallet.hotkey_ss58(),
+            "validator_uid": self.validator_uid,
+            "sample_count": samples.len(),
+            "avg_rss_mb": avg_rss_mb,
+            "min_rss_mb": min_rss_mb,
+            "max_rss_mb": max_rss_mb,
+            "avg_tensor_cache_keys": 0.0,
+            "avg_timing_entries": 0.0,
+            "avg_active_tasks": avg_active_tasks,
+            "avg_current_concurrency": avg_active_tasks,
+            "avg_queue_size": avg_queue_size,
+            "software_version": SOFTWARE_VERSION,
+        });
+
+        self.spawn_post("/statistics/health/log/", body, |_| {});
     }
 
     pub fn report_dsperse_run(&self, report: DsperseRunReport) {
