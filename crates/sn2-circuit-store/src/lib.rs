@@ -371,15 +371,19 @@ impl CircuitStore {
 
             if is_dsperse && filename.ends_with(".dslice") {
                 let cache_path = cache_path.to_path_buf();
-                let filename = filename.clone();
+                let filename_owned = filename.clone();
                 let checksums = checksums.clone();
                 let url_val = url_val.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    resolve_dslice_download(&cache_path, &filename, &checksums, &url_val)
+                match tokio::task::spawn_blocking(move || {
+                    resolve_dslice_download(&cache_path, &filename_owned, &checksums, &url_val)
                 })
-                .await;
-                if let Ok(Some(url)) = result {
-                    deferred_downloads.push(url);
+                .await
+                {
+                    Ok(Some(url)) => deferred_downloads.push(url),
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!(file = %filename, error = %e, "spawn_blocking failed for dslice check");
+                    }
                 }
                 continue;
             }
