@@ -370,8 +370,15 @@ impl CircuitStore {
             }
 
             if is_dsperse && filename.ends_with(".dslice") {
-                if let Some(url) = resolve_dslice_download(cache_path, filename, checksums, url_val)
-                {
+                let cache_path = cache_path.to_path_buf();
+                let filename = filename.clone();
+                let checksums = checksums.clone();
+                let url_val = url_val.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    resolve_dslice_download(&cache_path, &filename, &checksums, &url_val)
+                })
+                .await;
+                if let Ok(Some(url)) = result {
                     deferred_downloads.push(url);
                 }
                 continue;
@@ -722,7 +729,13 @@ fn resolve_dslice_download(
     } else if extracted_dir.exists() {
         return None;
     }
-    url_val.as_str().map(|url| (url.to_string(), archive_dest))
+    match url_val.as_str() {
+        Some(url) => Some((url.to_string(), archive_dest)),
+        None => {
+            warn!(file = %filename, value = ?url_val, "skipping dslice with non-string URL value");
+            None
+        }
+    }
 }
 
 fn file_checksum_valid(
