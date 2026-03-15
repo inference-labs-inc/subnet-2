@@ -75,42 +75,14 @@ impl CircuitStore {
             .filter(|id| !IGNORED_MODEL_HASHES.contains(&id.as_str()))
             .collect();
 
-        for pinned_id in &self.pinned_ids {
-            if active_ids.contains(pinned_id) {
-                continue;
-            }
-            info!(id = %pinned_id, "fetching pinned circuit from API");
-            let url = format!("{}/circuits/{}", self.api_url, pinned_id);
-            match self.http.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.json::<serde_json::Value>().await {
-                        Ok(data) => {
-                            active_ids.insert(pinned_id.clone());
-                            api_circuits.push(data);
-                        }
-                        Err(e) => {
-                            warn!(id = %pinned_id, error = %e, "failed to parse pinned circuit response");
-                        }
-                    }
-                }
-                Ok(resp) => {
-                    warn!(id = %pinned_id, status = %resp.status(), "failed to fetch pinned circuit");
-                }
-                Err(e) => {
-                    warn!(id = %pinned_id, error = %e, "failed to fetch pinned circuit");
-                }
-            }
-        }
+        self.fetch_pinned_circuits(&mut active_ids, &mut api_circuits)
+            .await;
 
-        if active_ids.is_empty() {
-            self.load_from_cache(&active_ids);
-        } else {
-            let mut load_ids = active_ids.clone();
-            for id in &self.pinned_ids {
-                load_ids.insert(id.clone());
-            }
-            self.load_from_cache(&load_ids);
+        let mut load_ids = active_ids.clone();
+        for id in &self.pinned_ids {
+            load_ids.insert(id.clone());
         }
+        self.load_from_cache(&load_ids);
 
         for circuit_data in &api_circuits {
             if let Some(id) = circuit_data.get("id").and_then(|v| v.as_str()) {
@@ -280,6 +252,39 @@ impl CircuitStore {
             .unwrap_or_default();
 
         Ok(circuits)
+    }
+
+    async fn fetch_pinned_circuits(
+        &self,
+        active_ids: &mut HashSet<String>,
+        api_circuits: &mut Vec<serde_json::Value>,
+    ) {
+        for pinned_id in &self.pinned_ids {
+            if active_ids.contains(pinned_id) {
+                continue;
+            }
+            info!(id = %pinned_id, "fetching pinned circuit from API");
+            let url = format!("{}/circuits/{}", self.api_url, pinned_id);
+            match self.http.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    match resp.json::<serde_json::Value>().await {
+                        Ok(data) => {
+                            active_ids.insert(pinned_id.clone());
+                            api_circuits.push(data);
+                        }
+                        Err(e) => {
+                            warn!(id = %pinned_id, error = %e, "failed to parse pinned circuit response");
+                        }
+                    }
+                }
+                Ok(resp) => {
+                    warn!(id = %pinned_id, status = %resp.status(), "failed to fetch pinned circuit");
+                }
+                Err(e) => {
+                    warn!(id = %pinned_id, error = %e, "failed to fetch pinned circuit");
+                }
+            }
+        }
     }
 
     async fn cache_and_load_circuit(
