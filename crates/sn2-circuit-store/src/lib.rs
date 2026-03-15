@@ -14,6 +14,7 @@ use tracing::{info, warn};
 
 const SKIP_AUTO_DOWNLOAD: &[&str] = &["metadata.json", "full_model.onnx"];
 const CIRCUIT_METADATA_FILENAME: &str = "circuit_metadata.json";
+const DSLICE_READY_MARKER: &str = ".dslice_ready";
 const REFRESH_INTERVAL_SECS: u64 = 600;
 
 pub struct CircuitStore {
@@ -287,6 +288,7 @@ impl CircuitStore {
         data: &serde_json::Value,
     ) -> Result<Circuit> {
         let cache_path = self.cache_dir.join(format!("model_{circuit_id}"));
+        let is_fresh = !cache_path.exists();
         std::fs::create_dir_all(&cache_path)
             .with_context(|| format!("creating cache dir {}", cache_path.display()))?;
 
@@ -325,13 +327,15 @@ impl CircuitStore {
             {
                 Ok(d) => d,
                 Err(e) => {
-                    let _ = std::fs::remove_dir_all(&cache_path);
+                    if is_fresh {
+                        let _ = std::fs::remove_dir_all(&cache_path);
+                    }
                     return Err(e);
                 }
             };
 
             if !deferred_downloads.is_empty() {
-                self.spawn_deferred_downloads(circuit_id, deferred_downloads);
+                self.spawn_deferred_downloads(circuit_id, &cache_path, deferred_downloads);
             }
         }
 
@@ -392,8 +396,11 @@ impl CircuitStore {
                 })
                 .await
                 {
-                    Ok(Some(url)) => deferred_downloads.push(url),
-                    Ok(None) => {}
+                    Ok(Ok(Some(url))) => deferred_downloads.push(url),
+                    Ok(Ok(None)) => {}
+                    Ok(Err(e)) => {
+                        warn!(file = %filename, error = %e, "dslice cleanup failed");
+                    }
                     Err(e) => {
                         warn!(file = %filename, error = %e, "spawn_blocking failed for dslice check");
                     }
@@ -428,6 +435,7 @@ impl CircuitStore {
     fn spawn_deferred_downloads(
         &self,
         circuit_id: &str,
+        cache_path: &Path,
         deferred_downloads: Vec<(String, PathBuf)>,
     ) {
         if !self
@@ -438,33 +446,14 @@ impl CircuitStore {
         {
             return;
         }
+        let _ = std::fs::remove_file(cache_path.join(DSLICE_READY_MARKER));
         let count = deferred_downloads.len();
         let http = self.http.clone();
         let inflight = Arc::clone(&self.inflight_downloads);
         let cid = circuit_id.to_string();
+        let marker_path = cache_path.join(DSLICE_READY_MARKER);
         info!(circuit = %circuit_id, files = count, "spawning background dslice downloads");
         tokio::spawn(async move {
-            struct InflightGuard {
-                inflight: Arc<Mutex<HashSet<String>>>,
-                cid: String,
-            }
-            impl Drop for InflightGuard {
-                fn drop(&mut self) {
-                    match self.inflight.lock() {
-                        Ok(mut set) => {
-                            set.remove(&self.cid);
-                        }
-                        Err(poisoned) => {
-                            poisoned.into_inner().remove(&self.cid);
-                        }
-                    }
-                }
-            }
-            let _guard = InflightGuard {
-                inflight: Arc::clone(&inflight),
-                cid: cid.clone(),
-            };
-
             let mut downloaded = 0usize;
             let mut failed = 0usize;
             for (url, dest) in &deferred_downloads {
@@ -486,9 +475,22 @@ impl CircuitStore {
                 }
             }
             if failed > 0 {
-                warn!(circuit = %cid, failed, "dslice downloads incomplete, will retry on next refresh");
+                warn!(circuit = %cid, failed, "dslice downloads incomplete, circuit stays in inflight until next refresh");
+            } else {
+                let _ = std::fs::write(&marker_path, b"");
+                match inflight.lock() {
+                    Ok(mut set) => {
+                        set.remove(&cid);
+                    }
+                    Err(poisoned) => {
+                        poisoned.into_inner().remove(&cid);
+                    }
+                }
             }
-            info!(count = downloaded, "dslice background downloads complete");
+            info!(
+                count = downloaded,
+                failed, "dslice background downloads complete"
+            );
         });
     }
 
@@ -536,6 +538,10 @@ impl CircuitStore {
             Ok(circuit) => {
                 if circuit.metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION {
                     migrate_dslice_layout(&entry.path());
+                    if !entry.path().join(DSLICE_READY_MARKER).exists() {
+                        warn!(id = %circuit_id, "skipping incomplete DSPERSE circuit from cache");
+                        return None;
+                    }
                 }
                 Some((circuit_id, circuit))
             }
@@ -739,25 +745,30 @@ fn resolve_dslice_download(
     filename: &str,
     checksums: &serde_json::Map<String, serde_json::Value>,
     url_val: &serde_json::Value,
-) -> Option<(String, PathBuf)> {
+) -> Result<Option<(String, PathBuf)>> {
     let archive_dest = cache_path.join("slices").join(filename);
     let slice_name = filename.trim_end_matches(".dslice");
     let extracted_dir = cache_path.join("slices").join(slice_name);
     if archive_dest.exists() {
         if file_checksum_valid(&archive_dest, checksums, filename) {
-            return None;
+            return Ok(None);
         }
         warn!(file = %filename, "SHA-256 mismatch, removing corrupted dslice");
-        std::fs::remove_file(&archive_dest).ok();
-        std::fs::remove_dir_all(&extracted_dir).ok();
+        std::fs::remove_file(&archive_dest)
+            .with_context(|| format!("removing corrupted archive {}", archive_dest.display()))?;
+        if extracted_dir.exists() {
+            std::fs::remove_dir_all(&extracted_dir).with_context(|| {
+                format!("removing stale extracted dir {}", extracted_dir.display())
+            })?;
+        }
     } else if extracted_dir.exists() {
-        return None;
+        return Ok(None);
     }
     match url_val.as_str() {
-        Some(url) => Some((url.to_string(), archive_dest)),
+        Some(url) => Ok(Some((url.to_string(), archive_dest))),
         None => {
             warn!(file = %filename, value = ?url_val, "skipping dslice with non-string URL value");
-            None
+            Ok(None)
         }
     }
 }
