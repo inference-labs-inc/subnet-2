@@ -483,45 +483,23 @@ impl ValidatorLoop {
         }
     }
 
-    async fn handle_dsperse_submission(&mut self, submission: DsperseSubmission) {
-        let circuit = match self
-            .circuit_store
-            .ensure_circuit(&submission.circuit_id)
-            .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(circuit = %submission.circuit_id, error = %e, "unknown circuit in dsperse submission");
-                if let Some(req_id) = submission.request_id {
-                    self.relay_send_response(
-                        FRAME_SUBMIT_RESULT,
-                        req_id,
-                        serde_json::json!({"error": format!("unknown circuit: {e}")}),
-                    )
-                    .await;
-                }
-                return;
-            }
-        };
-
-        if submission.tensor_data.is_none() {
-            if let Err(msg) = circuit.validate_inputs(&submission.inputs) {
-                warn!(circuit = %circuit.id, error = %msg, "invalid inputs for dsperse submission");
-                if let Some(req_id) = submission.request_id {
-                    self.relay_send_response(
-                        FRAME_SUBMIT_RESULT,
-                        req_id,
-                        serde_json::json!({"error": format!("invalid input shape: {msg}")}),
-                    )
-                    .await;
-                }
-                return;
-            }
+    async fn send_submit_error(&self, req_id: Option<u32>, error: &str) {
+        if let Some(req_id) = req_id {
+            self.relay_send_response(
+                FRAME_SUBMIT_RESULT,
+                req_id,
+                serde_json::json!({"error": error}),
+            )
+            .await;
         }
+    }
 
-        let slices_dir = circuit.paths.base_path.join("slices");
-        let input_tensor = if let Some(tensor_bytes) = &submission.tensor_data {
-            let shape: Vec<usize> = match circuit
+    fn decode_submission_tensor(
+        submission: &DsperseSubmission,
+        circuit: &Circuit,
+    ) -> Result<ndarray::ArrayD<f64>> {
+        if let Some(tensor_bytes) = &submission.tensor_data {
+            let shape: Vec<usize> = circuit
                 .metadata
                 .input_schema
                 .as_ref()
@@ -531,55 +509,53 @@ impl ValidatorLoop {
                     dims.iter()
                         .map(|d| d.as_u64().and_then(|n| usize::try_from(n).ok()))
                         .collect::<Option<Vec<_>>>()
-                }) {
-                Some(s) => s,
-                None => {
-                    warn!(circuit = %circuit.id, "circuit schema missing valid shape for binary tensor");
-                    if let Some(req_id) = submission.request_id {
-                        self.relay_send_response(
-                            FRAME_SUBMIT_RESULT,
-                            req_id,
-                            serde_json::json!({"error": "circuit schema missing shape"}),
-                        )
-                        .await;
-                    }
-                    return;
-                }
-            };
-            match crate::tensor::decode_gzipped_protobuf_tensor(tensor_bytes, &shape) {
-                Ok(t) => t,
-                Err(e) => {
-                    warn!(error = %e, "failed to decode binary tensor");
-                    if let Some(req_id) = submission.request_id {
-                        self.relay_send_response(
-                            FRAME_SUBMIT_RESULT,
-                            req_id,
-                            serde_json::json!({"error": e.to_string()}),
-                        )
-                        .await;
-                    }
-                    return;
-                }
-            }
+                })
+                .ok_or_else(|| anyhow::anyhow!("circuit schema missing shape"))?;
+            crate::tensor::decode_gzipped_protobuf_tensor(tensor_bytes, &shape)
         } else {
             let tensor_value = submission
                 .inputs
                 .get("input_data")
                 .unwrap_or(&submission.inputs);
-            match crate::tensor::json_to_arrayd(tensor_value) {
-                Ok(t) => t,
-                Err(e) => {
-                    warn!(error = %e, "failed to convert input to tensor");
-                    if let Some(req_id) = submission.request_id {
-                        self.relay_send_response(
-                            FRAME_SUBMIT_RESULT,
-                            req_id,
-                            serde_json::json!({"error": e.to_string()}),
-                        )
-                        .await;
-                    }
-                    return;
-                }
+            crate::tensor::json_to_arrayd(tensor_value)
+        }
+    }
+
+    async fn handle_dsperse_submission(&mut self, submission: DsperseSubmission) {
+        let circuit = match self
+            .circuit_store
+            .ensure_circuit(&submission.circuit_id)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(circuit = %submission.circuit_id, error = %e, "unknown circuit in dsperse submission");
+                self.send_submit_error(submission.request_id, &format!("unknown circuit: {e}"))
+                    .await;
+                return;
+            }
+        };
+
+        if submission.tensor_data.is_none() {
+            if let Err(msg) = circuit.validate_inputs(&submission.inputs) {
+                warn!(circuit = %circuit.id, error = %msg, "invalid inputs for dsperse submission");
+                self.send_submit_error(
+                    submission.request_id,
+                    &format!("invalid input shape: {msg}"),
+                )
+                .await;
+                return;
+            }
+        }
+
+        let slices_dir = circuit.paths.base_path.join("slices");
+        let input_tensor = match Self::decode_submission_tensor(&submission, &circuit) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(error = %e, "failed to decode submission tensor");
+                self.send_submit_error(submission.request_id, &e.to_string())
+                    .await;
+                return;
             }
         };
 
@@ -587,14 +563,8 @@ impl ValidatorLoop {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, circuit = %circuit.id, "failed to create IncrementalRun");
-                if let Some(req_id) = submission.request_id {
-                    self.relay_send_response(
-                        FRAME_SUBMIT_RESULT,
-                        req_id,
-                        serde_json::json!({"error": e.to_string()}),
-                    )
+                self.send_submit_error(submission.request_id, &e.to_string())
                     .await;
-                }
                 return;
             }
         };
@@ -715,95 +685,22 @@ impl ValidatorLoop {
                         "ONNX slice input tensor stats"
                     );
                 }
-                let inference_result = if slice_info.named_inputs.len() > 1 {
-                    let inputs: Vec<(String, Vec<f64>, Vec<usize>)> = slice_info
-                        .named_inputs
-                        .iter()
-                        .map(|(name, arr)| {
-                            (
-                                name.clone(),
-                                arr.iter().copied().collect(),
-                                arr.shape().to_vec(),
-                            )
-                        })
-                        .collect();
-                    let onnx = onnx_path.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let refs: Vec<(&str, Vec<f64>, Vec<usize>)> = inputs
-                            .iter()
-                            .map(|(n, d, s)| (n.as_str(), d.clone(), s.clone()))
-                            .collect();
-                        dsperse::backend::onnx::run_inference_multi(
-                            std::path::Path::new(&onnx),
-                            &refs,
-                        )
-                    })
-                    .await
-                } else {
-                    let input_flat: Vec<f64> = slice_info.input_tensor.iter().copied().collect();
-                    let input_shape: Vec<usize> = slice_info.input_tensor.shape().to_vec();
-                    let onnx = onnx_path.clone();
-                    tokio::task::spawn_blocking(move || {
-                        dsperse::backend::onnx::run_inference(
-                            std::path::Path::new(&onnx),
-                            &input_flat,
-                            &input_shape,
-                        )
-                    })
-                    .await
-                };
-                let (output_data, output_shape) = match inference_result {
-                    Ok(Ok(r)) => r,
-                    Ok(Err(e)) => {
-                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference failed");
-                        self.teardown_run(run_uid).await;
-                        return;
-                    }
-                    Err(e) => {
-                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX inference task panicked");
-                        self.teardown_run(run_uid).await;
-                        return;
-                    }
-                };
-                let output_tensor = match ndarray::ArrayD::from_shape_vec(
-                    ndarray::IxDyn(&output_shape),
-                    output_data,
-                ) {
+                let output_tensor = match Self::run_onnx_slice_inference(
+                    run_uid,
+                    &slice_info.slice_id,
+                    &onnx_path,
+                    &slice_info.named_inputs,
+                    &slice_info.input_tensor,
+                )
+                .await
+                {
                     Ok(t) => t,
                     Err(e) => {
-                        warn!(
-                            run_uid = %run_uid,
-                            slice = %slice_info.slice_id,
-                            output_shape = ?output_shape,
-                            error = %e,
-                            "ONNX output shape mismatch"
-                        );
+                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "ONNX slice inference failed");
                         self.teardown_run(run_uid).await;
                         return;
                     }
                 };
-                let nan_count = output_tensor.iter().filter(|v| v.is_nan()).count();
-                let inf_count = output_tensor.iter().filter(|v| v.is_infinite()).count();
-                let total_elems = output_tensor.len();
-                if nan_count > 0 || inf_count > 0 {
-                    warn!(
-                        run_uid = %run_uid,
-                        slice = %slice_info.slice_id,
-                        output_shape = ?output_shape,
-                        nan_count = nan_count,
-                        inf_count = inf_count,
-                        total_elems = total_elems,
-                        "ONNX output contains non-finite values"
-                    );
-                } else {
-                    info!(
-                        run_uid = %run_uid,
-                        slice = %slice_info.slice_id,
-                        output_shape = ?output_shape,
-                        total_elems = total_elems,
-                        "ran ONNX inference for non-circuit slice"
-                    );
-                }
                 match self.run_manager.apply_result_tensor(
                     run_uid,
                     &slice_info.slice_id,
@@ -928,114 +825,17 @@ impl ValidatorLoop {
                     }
                 };
 
-                let num_tiles = tiles.len();
-
-                if run_source == RunSource::Api {
-                    if tiles.is_empty() {
-                        let slice_path = slices_dir.join(&slice_info.slice_id);
-                        sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
-                        sn2_circuit_store::cleanup_extracted_slice(
-                            &slices_dir,
-                            &slice_info.slice_id,
-                        );
-                        warn!(
-                            run_uid = %run_uid,
-                            slice = %slice_info.slice_id,
-                            "split_into_tiles returned no tiles for API run"
-                        );
-                        self.teardown_run(run_uid).await;
-                        return;
-                    }
-                    info!(
-                        run_uid = %run_uid,
-                        slice = %slice_info.slice_id,
-                        num_tiles,
-                        "API request: dispatching single tile for proven inference"
-                    );
-                    let tile = &tiles[0];
-                    let tile_json = serde_json::json!({
-                        "input_data": crate::tensor::arrayd_to_json(&tile.clone().into_dyn())
-                    });
-                    let request = DSliceRequest {
-                        circuit: circuit.clone(),
-                        inputs: tile_json,
-                        request_type: RequestType::DSlice,
-                        proof_system: circuit.proof_system,
-                        slice_num: slice_info.slice_id.clone(),
-                        run_uid: run_uid.to_string(),
-                        outputs: None,
-                        is_tile: false,
-                        tile_idx: None,
-                        task_id: None,
-                        run_source,
-                        retry_count: 0,
-                        circuit_path: slice_info.circuit_path.clone(),
-                    };
-                    self.api_dslice_queue.push_back(request);
-
-                    {
-                        let uid = run_uid.to_string();
-                        let snum = slice_info.slice_id.clone();
-                        self.emit_event(move |ev| async move {
-                            ev.emit_work_items_created(&uid, &snum, 1).await;
-                        });
-                    }
-
-                    return;
-                }
-
-                info!(
-                    run_uid = %run_uid,
-                    slice = %slice_info.slice_id,
-                    num_tiles,
-                    "dispatching spatial tiles"
-                );
-
-                if let Err(e) =
-                    self.run_manager
-                        .init_tile_buffer(run_uid, &slice_info.slice_id, tiling.clone())
-                {
-                    warn!(
-                        run_uid = %run_uid,
-                        slice = %slice_info.slice_id,
-                        error = %e,
-                        "init_tile_buffer failed"
-                    );
-                    self.teardown_run(run_uid).await;
-                    return;
-                }
-
-                for (idx, tile) in tiles.into_iter().enumerate() {
-                    let tile_json = serde_json::json!({
-                        "input_data": crate::tensor::arrayd_to_json(&tile.into_dyn())
-                    });
-                    let request = DSliceRequest {
-                        circuit: circuit.clone(),
-                        inputs: tile_json,
-                        request_type: RequestType::DSlice,
-                        proof_system: circuit.proof_system,
-                        slice_num: slice_info.slice_id.clone(),
-                        run_uid: run_uid.to_string(),
-                        outputs: None,
-                        is_tile: true,
-                        tile_idx: Some(idx as u32),
-                        task_id: None,
-                        run_source,
-                        retry_count: 0,
-                        circuit_path: slice_info.circuit_path.clone(),
-                    };
-                    self.stacked_dslice_queue.push_back(request);
-                }
-
-                {
-                    let uid = run_uid.to_string();
-                    let snum = slice_info.slice_id.clone();
-                    let nt = num_tiles;
-                    self.emit_event(move |ev| async move {
-                        ev.emit_work_items_created(&uid, &snum, nt).await;
-                    });
-                }
-
+                self.dispatch_tiled_slice(
+                    run_uid,
+                    circuit,
+                    &slice_info.slice_id,
+                    slice_info.circuit_path.as_deref(),
+                    tiling,
+                    &slices_dir,
+                    tiles,
+                    run_source,
+                )
+                .await;
                 return;
             }
 
@@ -1059,6 +859,201 @@ impl ValidatorLoop {
                 RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
             };
             return;
+        }
+    }
+
+    async fn run_onnx_slice_inference(
+        run_uid: &str,
+        slice_id: &str,
+        onnx_path: &str,
+        named_inputs: &[(String, ndarray::ArrayD<f64>)],
+        input_tensor: &ndarray::ArrayD<f64>,
+    ) -> Result<ndarray::ArrayD<f64>> {
+        let inference_result = if named_inputs.len() > 1 {
+            let inputs: Vec<(String, Vec<f64>, Vec<usize>)> = named_inputs
+                .iter()
+                .map(|(name, arr)| {
+                    (
+                        name.clone(),
+                        arr.iter().copied().collect(),
+                        arr.shape().to_vec(),
+                    )
+                })
+                .collect();
+            let onnx = onnx_path.to_string();
+            tokio::task::spawn_blocking(move || {
+                let refs: Vec<(&str, Vec<f64>, Vec<usize>)> = inputs
+                    .iter()
+                    .map(|(n, d, s)| (n.as_str(), d.clone(), s.clone()))
+                    .collect();
+                dsperse::backend::onnx::run_inference_multi(std::path::Path::new(&onnx), &refs)
+            })
+            .await
+        } else {
+            let input_flat: Vec<f64> = input_tensor.iter().copied().collect();
+            let input_shape: Vec<usize> = input_tensor.shape().to_vec();
+            let onnx = onnx_path.to_string();
+            tokio::task::spawn_blocking(move || {
+                dsperse::backend::onnx::run_inference(
+                    std::path::Path::new(&onnx),
+                    &input_flat,
+                    &input_shape,
+                )
+            })
+            .await
+        };
+        let (output_data, output_shape) = match inference_result {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                return Err(anyhow::anyhow!("ONNX inference failed: {e}"));
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("ONNX inference task panicked: {e}"));
+            }
+        };
+        let output_tensor =
+            ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&output_shape), output_data).map_err(
+                |e| anyhow::anyhow!("ONNX output shape mismatch (shape={output_shape:?}): {e}"),
+            )?;
+        let nan_count = output_tensor.iter().filter(|v| v.is_nan()).count();
+        let inf_count = output_tensor.iter().filter(|v| v.is_infinite()).count();
+        let total_elems = output_tensor.len();
+        if nan_count > 0 || inf_count > 0 {
+            warn!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                output_shape = ?output_tensor.shape(),
+                nan_count = nan_count,
+                inf_count = inf_count,
+                total_elems = total_elems,
+                "ONNX output contains non-finite values"
+            );
+        } else {
+            info!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                output_shape = ?output_tensor.shape(),
+                total_elems = total_elems,
+                "ran ONNX inference for non-circuit slice"
+            );
+        }
+        Ok(output_tensor)
+    }
+
+    async fn dispatch_tiled_slice(
+        &mut self,
+        run_uid: &str,
+        circuit: &Circuit,
+        slice_id: &str,
+        circuit_path: Option<&str>,
+        tiling: &dsperse::schema::tiling::TilingInfo,
+        slices_dir: &std::path::Path,
+        tiles: Vec<ndarray::Array4<f64>>,
+        run_source: RunSource,
+    ) {
+        let num_tiles = tiles.len();
+
+        if run_source == RunSource::Api {
+            if tiles.is_empty() {
+                let slice_path = slices_dir.join(slice_id);
+                sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
+                sn2_circuit_store::cleanup_extracted_slice(slices_dir, slice_id);
+                warn!(
+                    run_uid = %run_uid,
+                    slice = %slice_id,
+                    "split_into_tiles returned no tiles for API run"
+                );
+                self.teardown_run(run_uid).await;
+                return;
+            }
+            info!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                num_tiles,
+                "API request: dispatching single tile for proven inference"
+            );
+            let tile = &tiles[0];
+            let tile_json = serde_json::json!({
+                "input_data": crate::tensor::arrayd_to_json(&tile.clone().into_dyn())
+            });
+            let request = DSliceRequest {
+                circuit: circuit.clone(),
+                inputs: tile_json,
+                request_type: RequestType::DSlice,
+                proof_system: circuit.proof_system,
+                slice_num: slice_id.to_string(),
+                run_uid: run_uid.to_string(),
+                outputs: None,
+                is_tile: false,
+                tile_idx: None,
+                task_id: None,
+                run_source,
+                retry_count: 0,
+                circuit_path: circuit_path.map(String::from),
+            };
+            self.api_dslice_queue.push_back(request);
+
+            {
+                let uid = run_uid.to_string();
+                let snum = slice_id.to_string();
+                self.emit_event(move |ev| async move {
+                    ev.emit_work_items_created(&uid, &snum, 1).await;
+                });
+            }
+
+            return;
+        }
+
+        info!(
+            run_uid = %run_uid,
+            slice = %slice_id,
+            num_tiles,
+            "dispatching spatial tiles"
+        );
+
+        if let Err(e) = self
+            .run_manager
+            .init_tile_buffer(run_uid, slice_id, tiling.clone())
+        {
+            warn!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                error = %e,
+                "init_tile_buffer failed"
+            );
+            self.teardown_run(run_uid).await;
+            return;
+        }
+
+        for (idx, tile) in tiles.into_iter().enumerate() {
+            let tile_json = serde_json::json!({
+                "input_data": crate::tensor::arrayd_to_json(&tile.into_dyn())
+            });
+            let request = DSliceRequest {
+                circuit: circuit.clone(),
+                inputs: tile_json,
+                request_type: RequestType::DSlice,
+                proof_system: circuit.proof_system,
+                slice_num: slice_id.to_string(),
+                run_uid: run_uid.to_string(),
+                outputs: None,
+                is_tile: true,
+                tile_idx: Some(idx as u32),
+                task_id: None,
+                run_source,
+                retry_count: 0,
+                circuit_path: circuit_path.map(String::from),
+            };
+            self.stacked_dslice_queue.push_back(request);
+        }
+
+        {
+            let uid = run_uid.to_string();
+            let snum = slice_id.to_string();
+            let nt = num_tiles;
+            self.emit_event(move |ev| async move {
+                ev.emit_work_items_created(&uid, &snum, nt).await;
+            });
         }
     }
 
@@ -1709,32 +1704,7 @@ impl ValidatorLoop {
                         let elapsed = response.response_time;
                         let verification_time = response.verification_time.unwrap_or(0.0);
 
-                        self.performance_tracker
-                            .record(uid, true, elapsed, was_at_capacity);
-                        let previous_score = self.score_manager.get_score(uid);
-                        self.score_manager.update_score(
-                            uid,
-                            true,
-                            elapsed,
-                            VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
-                            0.0,
-                            self.config.metagraph.n,
-                        );
-                        metrics::record_response(true, elapsed);
-
-                        let n = self.config.metagraph.n.max(1) as f64;
-                        self.pow_manager.push(PowItem {
-                            miner_uid: uid,
-                            validator_uid: self.config.user_uid,
-                            verified: true,
-                            response_time: elapsed,
-                            proof_size: response.proof_size as u64,
-                            previous_score,
-                            maximum_score: 1.0 / n,
-                            maximum_response_time: VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
-                            minimum_response_time: 0.0,
-                            block_number: self.config.metagraph.block,
-                        });
+                        self.record_verified_score(uid, response, was_at_capacity);
 
                         info!(uid = uid, elapsed = format!("{elapsed:.3}s"), rtype = %request_type, "proof verified");
 
@@ -1827,6 +1797,36 @@ impl ValidatorLoop {
                 self.pipeline.release_hash(hash);
             }
         }
+    }
+
+    fn record_verified_score(&mut self, uid: u16, response: &MinerResponse, was_at_capacity: bool) {
+        let elapsed = response.response_time;
+        self.performance_tracker
+            .record(uid, true, elapsed, was_at_capacity);
+        let previous_score = self.score_manager.get_score(uid);
+        self.score_manager.update_score(
+            uid,
+            true,
+            elapsed,
+            VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
+            0.0,
+            self.config.metagraph.n,
+        );
+        metrics::record_response(true, elapsed);
+
+        let n = self.config.metagraph.n.max(1) as f64;
+        self.pow_manager.push(PowItem {
+            miner_uid: uid,
+            validator_uid: self.config.user_uid,
+            verified: true,
+            response_time: elapsed,
+            proof_size: response.proof_size as u64,
+            previous_score,
+            maximum_score: 1.0 / n,
+            maximum_response_time: VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
+            minimum_response_time: 0.0,
+            block_number: self.config.metagraph.block,
+        });
     }
 
     async fn handle_pow_success(&mut self, response: &MinerResponse) {
@@ -2451,27 +2451,7 @@ impl ValidatorLoop {
         {
             match self.circuit_store.refresh_circuits().await {
                 Ok(removed) => {
-                    for circuit_id in &removed {
-                        let prefix = self.circuit_store.cache_dir().join(circuit_id);
-                        sn2_verify::evict_circuit_cache(&prefix.to_string_lossy());
-                        let evicted = self.run_manager.evict_by_circuit(circuit_id);
-                        if !evicted.is_empty() {
-                            info!(circuit = %circuit_id, runs = ?evicted, "evicted in-flight runs for deactivated circuit");
-                            for run_id in &evicted {
-                                self.dslice_input_scales.retain(|(uid, _), _| uid != run_id);
-                                self.relay_remove_pending(run_id).await;
-                            }
-                        }
-                        let before = self.api_dslice_queue.len() + self.stacked_dslice_queue.len();
-                        self.api_dslice_queue
-                            .retain(|r| r.circuit.id != *circuit_id);
-                        self.stacked_dslice_queue
-                            .retain(|r| r.circuit.id != *circuit_id);
-                        let after = self.api_dslice_queue.len() + self.stacked_dslice_queue.len();
-                        if before != after {
-                            info!(circuit = %circuit_id, drained = before - after, "drained queued dslice requests for deactivated circuit");
-                        }
-                    }
+                    self.evict_deactivated_circuits(&removed).await;
                 }
                 Err(e) => {
                     warn!(error = %e, "refreshing circuits");
@@ -2494,28 +2474,7 @@ impl ValidatorLoop {
         }
 
         if now.duration_since(self.timings.gc) > Duration::from_secs(120) {
-            let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
-            for uid in &evicted {
-                self.dslice_input_scales
-                    .retain(|(run_uid, _), _| run_uid != uid);
-                self.relay_remove_pending(uid).await;
-            }
-            if !evicted.is_empty() {
-                let evicted_set: HashSet<&str> = evicted.iter().map(|s| s.as_str()).collect();
-                let before = self.stacked_dslice_queue.len() + self.api_dslice_queue.len();
-                self.stacked_dslice_queue
-                    .retain(|req| !evicted_set.contains(req.run_uid.as_str()));
-                self.api_dslice_queue
-                    .retain(|req| !evicted_set.contains(req.run_uid.as_str()));
-                let drained =
-                    before - self.stacked_dslice_queue.len() - self.api_dslice_queue.len();
-                if drained > 0 {
-                    info!(
-                        drained = drained,
-                        "drained orphaned requests from evicted runs"
-                    );
-                }
-            }
+            self.gc_stale_runs().await;
             self.timings.gc = now;
         }
 
@@ -2565,6 +2524,54 @@ impl ValidatorLoop {
         }
 
         Ok(())
+    }
+
+    async fn evict_deactivated_circuits(&mut self, removed: &[String]) {
+        for circuit_id in removed {
+            let prefix = self.circuit_store.cache_dir().join(circuit_id);
+            sn2_verify::evict_circuit_cache(&prefix.to_string_lossy());
+            let evicted = self.run_manager.evict_by_circuit(circuit_id);
+            if !evicted.is_empty() {
+                info!(circuit = %circuit_id, runs = ?evicted, "evicted in-flight runs for deactivated circuit");
+                for run_id in &evicted {
+                    self.dslice_input_scales.retain(|(uid, _), _| uid != run_id);
+                    self.relay_remove_pending(run_id).await;
+                }
+            }
+            let before = self.api_dslice_queue.len() + self.stacked_dslice_queue.len();
+            self.api_dslice_queue
+                .retain(|r| r.circuit.id != *circuit_id);
+            self.stacked_dslice_queue
+                .retain(|r| r.circuit.id != *circuit_id);
+            let after = self.api_dslice_queue.len() + self.stacked_dslice_queue.len();
+            if before != after {
+                info!(circuit = %circuit_id, drained = before - after, "drained queued dslice requests for deactivated circuit");
+            }
+        }
+    }
+
+    async fn gc_stale_runs(&mut self) {
+        let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
+        for uid in &evicted {
+            self.dslice_input_scales
+                .retain(|(run_uid, _), _| run_uid != uid);
+            self.relay_remove_pending(uid).await;
+        }
+        if !evicted.is_empty() {
+            let evicted_set: HashSet<&str> = evicted.iter().map(|s| s.as_str()).collect();
+            let before = self.stacked_dslice_queue.len() + self.api_dslice_queue.len();
+            self.stacked_dslice_queue
+                .retain(|req| !evicted_set.contains(req.run_uid.as_str()));
+            self.api_dslice_queue
+                .retain(|req| !evicted_set.contains(req.run_uid.as_str()));
+            let drained = before - self.stacked_dslice_queue.len() - self.api_dslice_queue.len();
+            if drained > 0 {
+                info!(
+                    drained = drained,
+                    "drained orphaned requests from evicted runs"
+                );
+            }
+        }
     }
 
     async fn sync_metagraph(&mut self) -> Result<()> {
