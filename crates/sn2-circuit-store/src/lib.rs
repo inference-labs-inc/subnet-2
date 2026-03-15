@@ -319,9 +319,16 @@ impl CircuitStore {
                 .cloned()
                 .unwrap_or_default();
 
-            let deferred_downloads = self
+            let deferred_downloads = match self
                 .download_circuit_files(files, &cache_path, is_dsperse, &checksums)
-                .await?;
+                .await
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&cache_path);
+                    return Err(e);
+                }
+            };
 
             if !deferred_downloads.is_empty() {
                 self.spawn_deferred_downloads(circuit_id, deferred_downloads);
@@ -443,7 +450,14 @@ impl CircuitStore {
             }
             impl Drop for InflightGuard {
                 fn drop(&mut self) {
-                    self.inflight.lock().unwrap().remove(&self.cid);
+                    match self.inflight.lock() {
+                        Ok(mut set) => {
+                            set.remove(&self.cid);
+                        }
+                        Err(poisoned) => {
+                            poisoned.into_inner().remove(&self.cid);
+                        }
+                    }
                 }
             }
             let _guard = InflightGuard {
