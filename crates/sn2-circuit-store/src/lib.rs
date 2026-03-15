@@ -336,6 +336,8 @@ impl CircuitStore {
 
             if !deferred_downloads.is_empty() {
                 self.spawn_deferred_downloads(circuit_id, &cache_path, deferred_downloads);
+            } else if is_dsperse {
+                let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
             }
         }
 
@@ -373,8 +375,7 @@ impl CircuitStore {
         for (filename, url_val) in files {
             let safe_name = Path::new(filename).file_name().and_then(|n| n.to_str());
             if safe_name != Some(filename.as_str()) {
-                warn!(file = %filename, "rejecting filename with path traversal");
-                continue;
+                anyhow::bail!("rejecting filename with path traversal: {filename}");
             }
 
             let skip = if is_dsperse {
@@ -417,16 +418,12 @@ impl CircuitStore {
             if dest.exists() {
                 continue;
             }
-            match url_val.as_str() {
-                Some(url) => {
-                    self.download_file(url, &dest).await.with_context(|| {
-                        format!("downloading required circuit file: {filename}")
-                    })?;
-                }
-                None => {
-                    warn!(file = %filename, value = ?url_val, "skipping file with non-string URL value");
-                }
-            }
+            let url = url_val.as_str().with_context(|| {
+                format!("circuit file {filename} has non-string URL value: {url_val}")
+            })?;
+            self.download_file(url, &dest)
+                .await
+                .with_context(|| format!("downloading required circuit file: {filename}"))?;
         }
 
         Ok(deferred_downloads)
@@ -522,6 +519,9 @@ impl CircuitStore {
             _ => return None,
         };
 
+        if IGNORED_MODEL_HASHES.contains(&circuit_id.as_str()) {
+            return None;
+        }
         if !active_ids.is_empty() && !active_ids.contains(&circuit_id) {
             return None;
         }
@@ -764,13 +764,10 @@ fn resolve_dslice_download(
     } else if extracted_dir.exists() {
         return Ok(None);
     }
-    match url_val.as_str() {
-        Some(url) => Ok(Some((url.to_string(), archive_dest))),
-        None => {
-            warn!(file = %filename, value = ?url_val, "skipping dslice with non-string URL value");
-            Ok(None)
-        }
-    }
+    let url = url_val
+        .as_str()
+        .with_context(|| format!("dslice {filename} has non-string URL value: {url_val}"))?;
+    Ok(Some((url.to_string(), archive_dest)))
 }
 
 fn file_checksum_valid(
