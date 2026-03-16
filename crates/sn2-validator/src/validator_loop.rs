@@ -553,7 +553,7 @@ impl ValidatorLoop {
             Ok(t) => t,
             Err(e) => {
                 warn!(error = %e, "failed to decode submission tensor");
-                self.send_submit_error(submission.request_id, &e.to_string())
+                self.send_submit_error(submission.request_id, "invalid tensor payload")
                     .await;
                 return;
             }
@@ -563,8 +563,11 @@ impl ValidatorLoop {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, circuit = %circuit.id, "failed to create IncrementalRun");
-                self.send_submit_error(submission.request_id, &e.to_string())
-                    .await;
+                self.send_submit_error(
+                    submission.request_id,
+                    "failed to initialize incremental run",
+                )
+                .await;
                 return;
             }
         };
@@ -928,15 +931,17 @@ impl ValidatorLoop {
                 total_elems = total_elems,
                 "ONNX output contains non-finite values"
             );
-        } else {
-            info!(
-                run_uid = %run_uid,
-                slice = %slice_id,
-                output_shape = ?output_tensor.shape(),
-                total_elems = total_elems,
-                "ran ONNX inference for non-circuit slice"
+            anyhow::bail!(
+                "ONNX output contains non-finite values (nan={nan_count}, inf={inf_count}, total={total_elems})"
             );
         }
+        info!(
+            run_uid = %run_uid,
+            slice = %slice_id,
+            output_shape = ?output_tensor.shape(),
+            total_elems = total_elems,
+            "ran ONNX inference for non-circuit slice"
+        );
         Ok(output_tensor)
     }
 
