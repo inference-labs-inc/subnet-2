@@ -2081,6 +2081,17 @@ impl ValidatorLoop {
                 });
             }
             warn!(run_uid = %run_uid, "dslice max retries exceeded, removing run");
+            if self.run_manager.get_run_source(run_uid) == Some(RunSource::Api) {
+                self.relay_set_request_result(
+                    run_uid,
+                    serde_json::json!({
+                        "run_uid": run_uid,
+                        "status": "failed",
+                        "error": "max retries exceeded",
+                    }),
+                )
+                .await;
+            }
             self.teardown_run(run_uid).await;
         }
     }
@@ -2556,7 +2567,10 @@ impl ValidatorLoop {
 
     async fn evict_deactivated_circuits(&mut self, removed: &[String]) {
         for circuit_id in removed {
-            let prefix = self.circuit_store.cache_dir().join(circuit_id);
+            let prefix = self
+                .circuit_store
+                .cache_dir()
+                .join(format!("model_{circuit_id}"));
             sn2_verify::evict_circuit_cache(&prefix.to_string_lossy());
             let evicted = self.run_manager.evict_by_circuit(circuit_id);
             if !evicted.is_empty() {
