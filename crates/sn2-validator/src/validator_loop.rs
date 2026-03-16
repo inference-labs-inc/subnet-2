@@ -2033,12 +2033,13 @@ impl ValidatorLoop {
             .await;
     }
 
-    fn attempt_retry(&mut self, retry_payload: RetryPayload, next_retry: u32) {
+    fn attempt_retry(&mut self, retry_payload: RetryPayload, next_retry: u32) -> bool {
         match retry_payload {
             RetryPayload::Rwr(mut rwr) => {
                 rwr.retry_count = next_retry;
                 self.rwr_queue.push_back(rwr);
                 self.dispatch_notify.notify_one();
+                true
             }
             RetryPayload::DSlice(mut dslice) => {
                 if self.run_manager.has_run(&dslice.run_uid) {
@@ -2048,9 +2049,12 @@ impl ValidatorLoop {
                         RunSource::Benchmark => self.stacked_dslice_queue.push_back(*dslice),
                     }
                     self.dispatch_notify.notify_one();
+                    true
+                } else {
+                    false
                 }
             }
-            RetryPayload::None => {}
+            RetryPayload::None => false,
         }
     }
 
@@ -2386,8 +2390,7 @@ impl ValidatorLoop {
 
         let next_retry = retry_count + 1;
 
-        if next_retry <= max_retries {
-            self.attempt_retry(retry_payload, next_retry);
+        if next_retry <= max_retries && self.attempt_retry(retry_payload, next_retry) {
             return;
         }
 
