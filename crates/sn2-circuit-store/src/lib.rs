@@ -476,17 +476,17 @@ impl CircuitStore {
                     }
                 }
             }
-            if failed > 0 {
-                warn!(circuit = %cid, failed, "dslice downloads incomplete, circuit stays in inflight until next refresh");
-            } else {
+            if failed == 0 {
                 let _ = std::fs::write(&marker_path, b"");
-                match inflight.lock() {
-                    Ok(mut set) => {
-                        set.remove(&cid);
-                    }
-                    Err(poisoned) => {
-                        poisoned.into_inner().remove(&cid);
-                    }
+            } else {
+                warn!(circuit = %cid, failed, "dslice downloads incomplete, will retry on next refresh");
+            }
+            match inflight.lock() {
+                Ok(mut set) => {
+                    set.remove(&cid);
+                }
+                Err(poisoned) => {
+                    poisoned.into_inner().remove(&cid);
                 }
             }
             info!(
