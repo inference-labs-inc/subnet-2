@@ -1071,7 +1071,7 @@ impl ValidatorLoop {
             .circuit_store
             .get_dsperse_circuits()
             .into_iter()
-            .filter(|c| !self.circuit_store.is_downloading(&c.id))
+            .filter(|c| self.circuit_store.is_dsperse_ready(&c.id))
             .collect();
         if dsperse_circuits.is_empty() {
             return;

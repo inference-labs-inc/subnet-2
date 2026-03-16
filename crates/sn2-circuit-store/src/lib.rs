@@ -225,6 +225,11 @@ impl CircuitStore {
         self.inflight_downloads.lock().unwrap().contains(circuit_id)
     }
 
+    pub fn is_dsperse_ready(&self, circuit_id: &str) -> bool {
+        let cache_path = self.cache_dir.join(format!("model_{circuit_id}"));
+        cache_path.join(DSLICE_READY_MARKER).exists()
+    }
+
     pub fn cache_dir(&self) -> &Path {
         &self.cache_dir
     }
@@ -304,13 +309,7 @@ impl CircuitStore {
         let metadata: CircuitMetadata =
             serde_json::from_value(metadata_value.clone()).context("parsing circuit metadata")?;
 
-        let metadata_path = cache_path.join(CIRCUIT_METADATA_FILENAME);
-        std::fs::write(
-            &metadata_path,
-            serde_json::to_string_pretty(metadata_value)?,
-        )
-        .context("writing metadata")?;
-
+        let metadata_json = serde_json::to_string_pretty(metadata_value)?;
         let is_dsperse = metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION;
 
         if let Some(files) = data.get("files").and_then(|v| v.as_object()) {
@@ -345,6 +344,9 @@ impl CircuitStore {
                 let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
             }
         }
+
+        let metadata_path = cache_path.join(CIRCUIT_METADATA_FILENAME);
+        std::fs::write(&metadata_path, metadata_json).context("writing metadata")?;
 
         let settings = load_settings(&cache_path);
         let proof_system = metadata
@@ -405,10 +407,10 @@ impl CircuitStore {
                     Ok(Ok(Some(url))) => deferred_downloads.push(url),
                     Ok(Ok(None)) => {}
                     Ok(Err(e)) => {
-                        warn!(file = %filename, error = %e, "dslice cleanup failed");
+                        return Err(e.context(format!("dslice preflight failed: {filename}")));
                     }
                     Err(e) => {
-                        warn!(file = %filename, error = %e, "spawn_blocking failed for dslice check");
+                        anyhow::bail!("spawn_blocking panicked for dslice check: {filename}: {e}");
                     }
                 }
                 continue;
