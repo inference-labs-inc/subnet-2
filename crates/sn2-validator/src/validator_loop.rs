@@ -953,19 +953,20 @@ impl ValidatorLoop {
     ) {
         let num_tiles = tiles.len();
 
+        if num_tiles == 0 {
+            let slice_path = slices_dir.join(slice_id);
+            sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
+            sn2_circuit_store::cleanup_extracted_slice(slices_dir, slice_id);
+            warn!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                "split_into_tiles returned no tiles"
+            );
+            self.teardown_run(run_uid).await;
+            return;
+        }
+
         if run_source == RunSource::Api {
-            if tiles.is_empty() {
-                let slice_path = slices_dir.join(slice_id);
-                sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
-                sn2_circuit_store::cleanup_extracted_slice(slices_dir, slice_id);
-                warn!(
-                    run_uid = %run_uid,
-                    slice = %slice_id,
-                    "split_into_tiles returned no tiles for API run"
-                );
-                self.teardown_run(run_uid).await;
-                return;
-            }
             info!(
                 run_uid = %run_uid,
                 slice = %slice_id,
@@ -1960,6 +1961,8 @@ impl ValidatorLoop {
     }
 
     async fn finalize_api_run(&mut self, run_uid: &str, slice_num: &str) {
+        let scale_key = (run_uid.to_string(), slice_num.to_string());
+        let scale = self.dslice_input_scales.remove(&scale_key);
         self.dslice_input_scales
             .retain(|(uid, _), _| uid != run_uid);
 
@@ -1971,6 +1974,25 @@ impl ValidatorLoop {
             "API request: single proven tile complete, finalizing run"
         );
         let mut active_run = self.run_manager.remove_run(run_uid);
+
+        if let Some(input_scale) = scale {
+            if let Some(ref mut run) = active_run {
+                for artifact in &mut run.artifacts {
+                    if let Some(ref mut outputs) = artifact.computed_outputs {
+                        if let Ok(mut tensor) = crate::tensor::json_to_arrayd(outputs) {
+                            tensor.mapv_inplace(|v| v * input_scale);
+                            *outputs = crate::tensor::arrayd_to_json(&tensor);
+                        }
+                    }
+                }
+                info!(
+                    run_uid = %run_uid,
+                    scale = input_scale,
+                    "denormalized API run artifact outputs"
+                );
+            }
+        }
+
         if let Some(ref run) = active_run {
             self.report_dsperse_completion(run);
             self.spawn_emit_run_complete(run, true);
