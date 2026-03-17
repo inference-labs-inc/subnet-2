@@ -16,7 +16,6 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -28,7 +27,7 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
-          publish_results: true
+          publish_results: false
 
       - name: Upload SARIF results
         uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
