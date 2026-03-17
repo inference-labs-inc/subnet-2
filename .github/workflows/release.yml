@@ -31,12 +31,23 @@ jobs:
         with:
           path: artifacts
 
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - name: Collect binaries and generate SHA256SUMS
         run: |
           cd artifacts
           find . -type f -name 'sn2-*' -exec cp {} ../ \;
           cd ..
           sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-linux-aarch64 sn2-miner-linux-aarch64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@57aae528053a48a3f6235f2d9461b05fbcb7366d # v0.23.1
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          artifact-name: sbom-release
 
       - name: Attest Linux binaries
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
@@ -59,6 +70,7 @@ jobs:
             sn2-validator-macos-aarch64
             sn2-miner-macos-aarch64
             SHA256SUMS
+            sbom.cdx.json
 
   release-testnet:
     name: Create Testnet Release

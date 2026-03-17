@@ -57,6 +57,15 @@ jobs:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
           category: trivy-image-testnet
 
+      - name: Generate container SBOM
+        if: github.event_name == 'push'
+        uses: anchore/sbom-action@57aae528053a48a3f6235f2d9461b05fbcb7366d # v0.23.1
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom-dev.cdx.json
+          artifact-name: sbom-container-dev
+
       - name: Generate artifact attestation
         if: github.event_name == 'push'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
@@ -174,6 +183,14 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy-image-release
+
+      - name: Generate container SBOM
+        uses: anchore/sbom-action@57aae528053a48a3f6235f2d9461b05fbcb7366d # v0.23.1
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
+          format: cyclonedx-json
+          output-file: sbom-release.cdx.json
+          artifact-name: sbom-container-release
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
