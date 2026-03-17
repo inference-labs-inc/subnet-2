@@ -21,7 +21,8 @@ pub fn init_tracing(log_level: &str) {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::try_new(log_level).unwrap_or_else(|e| {
+                let filter = format!("{log_level},gkr=warn");
+                tracing_subscriber::EnvFilter::try_new(&filter).unwrap_or_else(|e| {
                     eprintln!("invalid --log-level \"{log_level}\": {e}");
                     std::process::exit(1);
                 })

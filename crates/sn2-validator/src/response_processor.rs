@@ -157,7 +157,7 @@ impl ResponseProcessor {
                     .count();
                 let slice_num = response.dsperse_slice_num;
                 let sample: Vec<f64> = result.rescaled_outputs.iter().copied().take(8).collect();
-                tracing::info!(
+                tracing::debug!(
                     uid = response.uid,
                     slice = ?slice_num,
                     num_inputs,

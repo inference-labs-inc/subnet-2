@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use btlightning::{LightningClient, QuicAxonInfo, QuicRequest, Signer};
 use sha2::{Digest, Sha256};
 use sn2_chain::Wallet;
-use tracing::info;
+use tracing::{debug, info};
 
 struct WalletSigner(Arc<Wallet>);
 
@@ -117,7 +117,7 @@ impl MinerQueryClient {
         let (resp, elapsed) = self
             .query_miner_quic(&axon, synapse_type, data, timeout_secs)
             .await?;
-        info!(
+        debug!(
             addr = %format!("{ip}:{port}"),
             transport = "quic",
             synapse = synapse_type,

@@ -4,7 +4,7 @@ use crate::stats_reporter::collect_environment;
 use base64::Engine;
 use sn2_chain::Wallet;
 use sn2_types::DEFAULT_API_URL;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 const BATCH_SIZE: usize = 20;
 const MAX_BUFFERED_EVENTS: usize = 10_000;
@@ -117,7 +117,7 @@ impl DsperseEventClient {
             .await
         {
             Ok(resp) if resp.status().is_success() => {
-                info!(count, "flushed dsperse events");
+                debug!(count, "flushed dsperse events");
             }
             Ok(resp) => {
                 let status = resp.status();

@@ -6,7 +6,7 @@ use dsperse::pipeline::{IncrementalRun, SliceExecutionResult, SliceWork};
 use dsperse::schema::execution::{ExecutionInfo, ExecutionMethod};
 use dsperse::schema::tiling::TilingInfo;
 use sn2_types::{BoundedFifoSet, ProofSystem, RunSource};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub enum TileBufferOutcome {
     Waiting,
@@ -247,7 +247,7 @@ impl IncrementalRunManager {
 
         let received = buf.tiles.iter().filter(|t| t.is_some()).count();
         let total = buf.tiles.len();
-        info!(
+        debug!(
             run_uid = %run_uid,
             slice = %slice_id,
             tile_idx = tile_idx,
