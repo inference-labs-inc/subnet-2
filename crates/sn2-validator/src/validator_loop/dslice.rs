@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use sn2_types::*;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::ValidatorLoop;
 use crate::relay::DsperseSubmission;
@@ -144,7 +144,7 @@ impl ValidatorLoop {
             let mut slice_info = match self.run_manager.next_slice(run_uid) {
                 Ok(Some(info)) => info,
                 Ok(None) => {
-                    warn!(run_uid = %run_uid, "no next slice available");
+                    debug!(run_uid = %run_uid, "no next slice available");
                     return;
                 }
                 Err(e) => {

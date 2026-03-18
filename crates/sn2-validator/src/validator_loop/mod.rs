@@ -351,7 +351,7 @@ impl ValidatorLoop {
                 _ = tick.tick() => {
                     if let Err(e) = self.step().await {
                         error!(error = %e, "validator step error");
-                        tokio::time::sleep(Duration::from_secs(EXCEPTION_DELAY_SECONDS)).await;
+                        tick.reset_after(Duration::from_secs(EXCEPTION_DELAY_SECONDS));
                     }
                 }
                 Some(result) = self.tasks.join_next() => {

@@ -84,6 +84,9 @@ impl ValidatorLoop {
         active_run: &mut Option<crate::incremental_runner::ActiveRun>,
         final_output: Option<serde_json::Value>,
     ) {
+        let Some(uploader) = &self.proof_uploader else {
+            return;
+        };
         let artifacts = active_run
             .as_mut()
             .map(|r| std::mem::take(&mut r.artifacts))
@@ -91,9 +94,6 @@ impl ValidatorLoop {
         if artifacts.is_empty() {
             return;
         }
-        let Some(uploader) = &self.proof_uploader else {
-            return;
-        };
         let uploader = Arc::clone(uploader);
         let uid_clone = run_uid.to_string();
         let circuit_id = active_run

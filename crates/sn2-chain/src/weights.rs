@@ -191,6 +191,14 @@ pub(crate) struct SubxtSr25519Signer {
 impl SubxtSr25519Signer {
     pub(crate) fn new(wallet: &Arc<Wallet>) -> Result<Self> {
         let account_id = wallet.hotkey_account_id()?;
+        let test_sig = wallet
+            .sign_hotkey(b"signer_validation")
+            .context("hotkey cannot produce signatures")?;
+        anyhow::ensure!(
+            test_sig.len() == 64,
+            "hotkey signature length {} != 64",
+            test_sig.len()
+        );
         Ok(Self {
             wallet: Arc::clone(wallet),
             account_id,

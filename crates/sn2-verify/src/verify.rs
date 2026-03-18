@@ -23,8 +23,8 @@ use crate::protocol::{StoreResponse, VerifyAndStoreRequest, VerifyRequest, Verif
 use crate::store::{StoredTile, TileStore};
 
 pub fn evict_circuit_cache(path_prefix: &str) {
-    EVICTION_GEN.fetch_add(1, Ordering::SeqCst);
     let mut cache = CIRCUIT_CACHE.write().unwrap();
+    EVICTION_GEN.fetch_add(1, Ordering::SeqCst);
     let before = cache.len();
     cache.retain(|k, _| !k.starts_with(path_prefix));
     let evicted = before - cache.len();
@@ -34,8 +34,8 @@ pub fn evict_circuit_cache(path_prefix: &str) {
 }
 
 pub fn clear_circuit_cache() {
-    EVICTION_GEN.fetch_add(1, Ordering::SeqCst);
     let mut cache = CIRCUIT_CACHE.write().unwrap();
+    EVICTION_GEN.fetch_add(1, Ordering::SeqCst);
     let count = cache.len();
     cache.clear();
     if count > 0 {
@@ -82,8 +82,8 @@ fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
 
     let arc = Arc::new(flat);
 
+    let mut cache = CIRCUIT_CACHE.write().unwrap();
     if EVICTION_GEN.load(Ordering::SeqCst) == gen_before {
-        let mut cache = CIRCUIT_CACHE.write().unwrap();
         info!(
             path = %circuit_path,
             size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),

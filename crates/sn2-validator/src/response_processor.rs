@@ -145,7 +145,7 @@ impl ResponseProcessor {
         .await
         {
             Ok(result) => {
-                let (max_abs, inf_count, _nan_count, f32_overflow) =
+                let (max_abs, inf_count, nan_count, f32_overflow) =
                     compute_slice_stats(&result.rescaled_outputs);
                 let slice_num = response.dsperse_slice_num;
                 let sample: Vec<f64> = result.rescaled_outputs.iter().copied().take(8).collect();
@@ -159,6 +159,7 @@ impl ResponseProcessor {
                     num_outputs = result.rescaled_outputs.len(),
                     max_abs,
                     inf_count,
+                    nan_count,
                     f32_overflow,
                     miner_stats = ?miner_outputs_stats,
                     sample = ?sample,
