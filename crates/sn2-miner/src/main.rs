@@ -1,9 +1,7 @@
 mod cli;
 mod dsperse;
 mod handlers;
-mod http_server;
 mod lightning_server;
-mod signature;
 
 use std::sync::Arc;
 
@@ -199,16 +197,23 @@ async fn run_loopback(cli: Cli) -> Result<()> {
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
 
-    let metagraph = Arc::new(RwLock::new(sn2_chain::Metagraph::new(cli.netuid)));
-
-    let http_handle = {
+    let handler_timeout = cli.handler_timeout;
+    let quic_handle = {
         let handlers = handlers.clone();
-        let axon_host = cli.axon_host.clone();
+        let host = cli.axon_host.clone();
         let port = cli.axon_port;
-        let meta = metagraph.clone();
         tokio::spawn(async move {
-            http_server::run_http_server(&axon_host, port, handlers, "loopback", meta, true, true)
-                .await
+            lightning_server::run_lightning_server(
+                "loopback",
+                "default",
+                "",
+                "default",
+                &host,
+                port,
+                handler_timeout,
+                handlers,
+            )
+            .await
         })
     };
 
@@ -217,8 +222,8 @@ async fn run_loopback(cli: Cli) -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
 
     tokio::select! {
-        r = http_handle => {
-            r?.context("HTTP server")?;
+        r = quic_handle => {
+            r?.context("QUIC server")?;
         }
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down miner");

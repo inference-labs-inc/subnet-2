@@ -47,6 +47,38 @@ fn extract_input_json(inputs: &serde_json::Value) -> &serde_json::Value {
     inputs
 }
 
+fn prove_and_build_response(
+    backend: &dsperse::backend::jstprove::JstproveBackend,
+    circuit_path: &Path,
+    witness_bytes: &[u8],
+    effective_input_dims: Option<usize>,
+) -> Result<serde_json::Value> {
+    let proof_bytes = backend
+        .prove(circuit_path, witness_bytes)
+        .map_err(|e| anyhow::anyhow!("proof generation: {e}"))?;
+
+    let computed_outputs = if let Some(num_model_inputs) = effective_input_dims {
+        backend
+            .extract_outputs(witness_bytes, num_model_inputs)
+            .map_err(|e| anyhow::anyhow!("extracting outputs: {e}"))?
+    } else {
+        Vec::new()
+    };
+
+    info!(
+        witness_size = witness_bytes.len(),
+        proof_size = proof_bytes.len(),
+        num_outputs = computed_outputs.len(),
+        "witness and proof generated"
+    );
+
+    Ok(serde_json::json!({
+        "proof": hex::encode(&proof_bytes),
+        "witness": hex::encode(witness_bytes),
+        "computed_outputs": computed_outputs,
+    }))
+}
+
 impl DSperseClient {
     pub fn new() -> Self {
         let cache_dir = PathBuf::from(shellexpand::tilde(sn2_types::CIRCUIT_CACHE_DIR).to_string());
@@ -129,31 +161,8 @@ impl DSperseClient {
                 .witness_f64(&circuit_path, &input_flat, &inits)
                 .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?;
 
-            let proof_bytes = backend
-                .prove(&circuit_path, &witness_bytes)
-                .map_err(|e| anyhow::anyhow!("proof generation: {e}"))?;
-
-            let computed_outputs = if let Some(ref p) = params {
-                let num_model_inputs = p.effective_input_dims();
-                backend
-                    .extract_outputs(&witness_bytes, num_model_inputs)
-                    .map_err(|e| anyhow::anyhow!("extracting outputs: {e}"))?
-            } else {
-                Vec::new()
-            };
-
-            info!(
-                witness_size = witness_bytes.len(),
-                proof_size = proof_bytes.len(),
-                num_outputs = computed_outputs.len(),
-                "witness and proof generated"
-            );
-
-            Ok(serde_json::json!({
-                "proof": hex::encode(&proof_bytes),
-                "witness": hex::encode(&witness_bytes),
-                "computed_outputs": computed_outputs,
-            }))
+            let dims = params.as_ref().map(|p| p.effective_input_dims());
+            prove_and_build_response(&backend, &circuit_path, &witness_bytes, dims)
         })
         .await
         .context("blocking task panicked")?
@@ -194,24 +203,8 @@ impl DSperseClient {
                 .witness(&circuit_path, &inputs_bytes, &[])
                 .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?;
 
-            let proof_bytes = backend
-                .prove(&circuit_path, &witness_bytes)
-                .map_err(|e| anyhow::anyhow!("proof generation: {e}"))?;
-
-            let computed_outputs = if let Some(ref p) = params {
-                let num_model_inputs = p.effective_input_dims();
-                backend
-                    .extract_outputs(&witness_bytes, num_model_inputs)
-                    .map_err(|e| anyhow::anyhow!("extracting outputs: {e}"))?
-            } else {
-                Vec::new()
-            };
-
-            Ok(serde_json::json!({
-                "proof": hex::encode(&proof_bytes),
-                "witness": hex::encode(&witness_bytes),
-                "computed_outputs": computed_outputs,
-            }))
+            let dims = params.as_ref().map(|p| p.effective_input_dims());
+            prove_and_build_response(&backend, &circuit_path, &witness_bytes, dims)
         })
         .await
         .context("blocking task panicked")?

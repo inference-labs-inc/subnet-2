@@ -208,8 +208,20 @@ impl Signer<PolkadotConfig> for SubxtSr25519Signer {
     }
 
     fn sign(&self, payload: &[u8]) -> <PolkadotConfig as subxt::Config>::Signature {
-        let sig = self.wallet.sign_hotkey(payload).expect("signing failed");
-        let sig_arr: [u8; 64] = sig.try_into().expect("signature not 64 bytes");
+        let sig = match self.wallet.sign_hotkey(payload) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, "hotkey signing failed in Signer trait");
+                return subxt::utils::MultiSignature::Sr25519([0u8; 64]);
+            }
+        };
+        let sig_arr: [u8; 64] = match sig.try_into() {
+            Ok(arr) => arr,
+            Err(v) => {
+                tracing::error!(len = v.len(), "unexpected signature length from hotkey");
+                return subxt::utils::MultiSignature::Sr25519([0u8; 64]);
+            }
+        };
         subxt::utils::MultiSignature::Sr25519(sig_arr)
     }
 }

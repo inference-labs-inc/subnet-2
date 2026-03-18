@@ -40,15 +40,20 @@ fn resolve_num_inputs(circuit: &Circuit, inputs: &Option<serde_json::Value>) -> 
         })
 }
 
+fn compute_slice_stats(data: &[f64]) -> (f64, usize, usize, usize) {
+    let max_abs = data.iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
+    let inf_count = data.iter().filter(|x| x.is_infinite()).count();
+    let nan_count = data.iter().filter(|x| x.is_nan()).count();
+    let f32_overflow = data.iter().filter(|&&x| x.abs() > f32::MAX as f64).count();
+    (max_abs, inf_count, nan_count, f32_overflow)
+}
+
 fn compute_output_stats(value: &serde_json::Value) -> Option<(usize, f64, usize, usize, usize)> {
     let flat = sn2_types::json_tensor::flatten_json_to_f64(value);
     if flat.is_empty() {
         return None;
     }
-    let max_abs = flat.iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
-    let inf_count = flat.iter().filter(|x| x.is_infinite()).count();
-    let nan_count = flat.iter().filter(|x| x.is_nan()).count();
-    let f32_overflow = flat.iter().filter(|&&x| x.abs() > f32::MAX as f64).count();
+    let (max_abs, inf_count, nan_count, f32_overflow) = compute_slice_stats(&flat);
     Some((flat.len(), max_abs, inf_count, nan_count, f32_overflow))
 }
 
@@ -140,21 +145,8 @@ impl ResponseProcessor {
         .await
         {
             Ok(result) => {
-                let max_abs = result
-                    .rescaled_outputs
-                    .iter()
-                    .map(|x| x.abs())
-                    .fold(0.0_f64, f64::max);
-                let inf_count = result
-                    .rescaled_outputs
-                    .iter()
-                    .filter(|x| x.is_infinite())
-                    .count();
-                let f32_overflow = result
-                    .rescaled_outputs
-                    .iter()
-                    .filter(|&&x| x.abs() > f32::MAX as f64)
-                    .count();
+                let (max_abs, inf_count, _nan_count, f32_overflow) =
+                    compute_slice_stats(&result.rescaled_outputs);
                 let slice_num = response.dsperse_slice_num;
                 let sample: Vec<f64> = result.rescaled_outputs.iter().copied().take(8).collect();
                 tracing::debug!(

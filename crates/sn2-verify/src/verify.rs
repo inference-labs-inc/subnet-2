@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use anyhow::{Context, Result};
 use tracing::{info, warn};
@@ -11,8 +11,8 @@ use jstprove_circuits::onnx::{
 };
 use jstprove_circuits::runner::main_runner::read_circuit_msgpack;
 
-static CIRCUIT_CACHE: LazyLock<Mutex<HashMap<String, Arc<FlatCircuitBN254>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static CIRCUIT_CACHE: LazyLock<RwLock<HashMap<String, Arc<FlatCircuitBN254>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 static LOADING_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -24,7 +24,7 @@ use crate::store::{StoredTile, TileStore};
 
 pub fn evict_circuit_cache(path_prefix: &str) {
     EVICTION_GEN.fetch_add(1, Ordering::SeqCst);
-    let mut cache = CIRCUIT_CACHE.lock().unwrap();
+    let mut cache = CIRCUIT_CACHE.write().unwrap();
     let before = cache.len();
     cache.retain(|k, _| !k.starts_with(path_prefix));
     let evicted = before - cache.len();
@@ -35,7 +35,7 @@ pub fn evict_circuit_cache(path_prefix: &str) {
 
 pub fn clear_circuit_cache() {
     EVICTION_GEN.fetch_add(1, Ordering::SeqCst);
-    let mut cache = CIRCUIT_CACHE.lock().unwrap();
+    let mut cache = CIRCUIT_CACHE.write().unwrap();
     let count = cache.len();
     cache.clear();
     if count > 0 {
@@ -45,7 +45,7 @@ pub fn clear_circuit_cache() {
 
 fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
     {
-        let cache = CIRCUIT_CACHE.lock().unwrap();
+        let cache = CIRCUIT_CACHE.read().unwrap();
         if let Some(cached) = cache.get(circuit_path) {
             return Ok(Arc::clone(cached));
         }
@@ -58,7 +58,7 @@ fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
     let _guard = path_lock.lock().unwrap();
 
     {
-        let cache = CIRCUIT_CACHE.lock().unwrap();
+        let cache = CIRCUIT_CACHE.read().unwrap();
         if let Some(cached) = cache.get(circuit_path) {
             return Ok(Arc::clone(cached));
         }
@@ -83,7 +83,7 @@ fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
     let arc = Arc::new(flat);
 
     if EVICTION_GEN.load(Ordering::SeqCst) == gen_before {
-        let mut cache = CIRCUIT_CACHE.lock().unwrap();
+        let mut cache = CIRCUIT_CACHE.write().unwrap();
         info!(
             path = %circuit_path,
             size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),
