@@ -39,7 +39,7 @@ jobs:
           sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-linux-aarch64 sn2-miner-linux-aarch64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
 
       - name: Attest Linux binaries
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: |
             sn2-validator-linux-x86_64
