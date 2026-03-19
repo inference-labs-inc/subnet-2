@@ -29,14 +29,9 @@ impl MinerQueryClient {
         Ok(Self { lightning })
     }
 
-    pub fn new_unsigned() -> Result<Self> {
-        let lightning = LightningClient::new("loopback".to_string());
-        Ok(Self { lightning })
-    }
-
-    pub async fn init_quic(&mut self) -> Result<()> {
+    pub async fn init_quic(&mut self, initial_miners: Vec<QuicAxonInfo>) -> Result<()> {
         self.lightning
-            .initialize_connections(vec![])
+            .initialize_connections(initial_miners)
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
             .context("initializing QUIC endpoint")?;

@@ -209,12 +209,13 @@ async fn run_loopback(cli: Cli) -> Result<()> {
         let handlers = handlers.clone();
         let host = cli.axon_host.clone();
         let port = cli.axon_port;
+        let hotkey_ss58 = wallet.hotkey_ss58().to_string();
         let w_name = wallet.name.clone();
         let w_path = wallet.wallet_path.clone();
         let w_hotkey = wallet.hotkey_name.clone();
         tokio::spawn(async move {
             lightning_server::run_lightning_server(
-                "loopback",
+                &hotkey_ss58,
                 &w_name,
                 &w_path,
                 &w_hotkey,
@@ -252,6 +253,9 @@ async fn init_circuit_store(
 ) -> sn2_circuit_store::CircuitStore {
     let mut store =
         sn2_circuit_store::CircuitStore::new(None, loopback, additional_circuits.to_vec());
+    if let Err(e) = store.load_circuits().await {
+        warn!(error = %e, "failed to load circuits from cache");
+    }
     for id in additional_circuits {
         if let Err(e) = store.ensure_circuit(id).await {
             warn!(id = %id, error = %e, "failed to preload pinned circuit");

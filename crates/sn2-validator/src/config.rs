@@ -98,11 +98,21 @@ impl ValidatorConfig {
         })
     }
 
-    pub fn from_cli_loopback(cli: &Cli, miner_ip: &str, miner_port: u16) -> Self {
+    pub fn from_cli_loopback(cli: &Cli, miner_ip: &str, miner_port: u16) -> Result<Self> {
+        let wallet = Arc::new(
+            Wallet::from_paths(
+                &cli.wallet_name,
+                &cli.wallet_hotkey,
+                cli.wallet_path.as_deref(),
+            )
+            .context("loading wallet for loopback QUIC signing")?,
+        );
+
+        let miner_hotkey = wallet.hotkey_ss58().to_string();
         let miner_neuron = NeuronInfo {
             uid: 0,
-            hotkey: "loopback_miner".to_string(),
-            coldkey: "loopback_coldkey".to_string(),
+            hotkey: miner_hotkey,
+            coldkey: String::new(),
             hotkey_bytes: [0u8; 32],
             stake: 0,
             rank: 0,
@@ -127,9 +137,9 @@ impl ValidatorConfig {
             "constructed loopback metagraph with synthetic miner neuron"
         );
 
-        Self {
+        Ok(Self {
             netuid: cli.netuid,
-            wallet: None,
+            wallet: Some(wallet),
             chain_client: None,
             chain_endpoint: String::new(),
             metagraph,
@@ -146,7 +156,7 @@ impl ValidatorConfig {
             disable_metric_logging: true,
             loopback: true,
             additional_circuits: cli.additional_circuits.clone(),
-        }
+        })
     }
 
     pub async fn reconnect_chain_client(&mut self) -> Result<()> {

@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
         );
 
         let (ip, port) = parse_miner_address(&cli.miner_address)?;
-        config::ValidatorConfig::from_cli_loopback(&cli, &ip, port)
+        config::ValidatorConfig::from_cli_loopback(&cli, &ip, port)?
     } else {
         info!(
             netuid = cli.netuid,

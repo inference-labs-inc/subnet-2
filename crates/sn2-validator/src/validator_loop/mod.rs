@@ -197,7 +197,11 @@ impl ValidatorLoop {
             dsperse_events,
             dsperse_flush_task,
         ) = if config.loopback {
-            let client = MinerQueryClient::new_unsigned()?;
+            let wallet = config
+                .wallet
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("wallet required for loopback QUIC signing"))?;
+            let client = MinerQueryClient::new(wallet)?;
             (Arc::new(RwLock::new(client)), None, None, None, None, None)
         } else {
             let wallet = config
@@ -324,10 +328,27 @@ impl ValidatorLoop {
             relay.start().await?;
         }
 
-        if !self.config.loopback {
+        {
+            let initial_miners = if self.config.loopback {
+                self.config
+                    .metagraph
+                    .neurons
+                    .iter()
+                    .map(|n| {
+                        btlightning::QuicAxonInfo::new(
+                            n.hotkey.clone(),
+                            n.axon_ip.clone(),
+                            n.axon_port,
+                            4,
+                        )
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
             let mut client = self.miner_client.write().await;
             client
-                .init_quic()
+                .init_quic(initial_miners)
                 .await
                 .context("initializing QUIC endpoint")?;
         }
