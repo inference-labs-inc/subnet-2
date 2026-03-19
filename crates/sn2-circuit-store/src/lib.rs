@@ -710,6 +710,19 @@ fn validate_slice_id(slice_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn ensure_all_slices_extracted(slices_dir: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(slices_dir)
+        .with_context(|| format!("reading slices dir {}", slices_dir.display()))?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if let Some(slice_id) = name_str.strip_suffix(".dslice") {
+            ensure_slice_extracted(slices_dir, slice_id)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
     validate_slice_id(slice_id)?;
     let extract_dir = slices_dir.join(slice_id);

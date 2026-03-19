@@ -73,6 +73,35 @@ impl ValidatorLoop {
             }
         };
 
+        {
+            let dir = slices_dir.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                sn2_circuit_store::ensure_all_slices_extracted(&dir)
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    warn!(error = %e, circuit = %circuit.id, "failed to extract dslice archives");
+                    self.send_submit_error(
+                        submission.request_id,
+                        "failed to extract circuit slices",
+                    )
+                    .await;
+                    return;
+                }
+                Err(e) => {
+                    warn!(error = %e, circuit = %circuit.id, "dslice extraction task panicked");
+                    self.send_submit_error(
+                        submission.request_id,
+                        "failed to extract circuit slices",
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+
         let incremental = match dsperse::pipeline::IncrementalRun::new(&slices_dir, input_tensor) {
             Ok(r) => r,
             Err(e) => {
@@ -630,6 +659,27 @@ impl ValidatorLoop {
             rand::Rng::gen_range(&mut rng, 0.0_f64..1.0)
         });
         let slices_dir = circuit.paths.base_path.join("slices");
+
+        {
+            let dir = slices_dir.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                sn2_circuit_store::ensure_all_slices_extracted(&dir)
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    warn!(error = %e, circuit = %circuit.id, "failed to extract dslice archives for benchmark");
+                    self.dsperse_benchmark_backoff_until = Instant::now() + Duration::from_secs(60);
+                    return;
+                }
+                Err(e) => {
+                    warn!(error = %e, circuit = %circuit.id, "dslice extraction task panicked");
+                    self.dsperse_benchmark_backoff_until = Instant::now() + Duration::from_secs(60);
+                    return;
+                }
+            }
+        }
 
         let incremental = match dsperse::pipeline::IncrementalRun::new(&slices_dir, input) {
             Ok(r) => r,
