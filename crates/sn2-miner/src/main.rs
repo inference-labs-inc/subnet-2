@@ -202,12 +202,15 @@ async fn run_loopback(cli: Cli) -> Result<()> {
         let handlers = handlers.clone();
         let host = cli.axon_host.clone();
         let port = cli.axon_port;
+        let w_name = cli.wallet_name.clone();
+        let w_path = cli.wallet_path.clone().unwrap_or_default();
+        let w_hotkey = cli.wallet_hotkey.clone();
         tokio::spawn(async move {
             lightning_server::run_lightning_server(
                 "loopback",
-                "default",
-                "",
-                "default",
+                &w_name,
+                &w_path,
+                &w_hotkey,
                 &host,
                 port,
                 handler_timeout,
