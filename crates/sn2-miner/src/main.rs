@@ -190,6 +190,13 @@ async fn run_loopback(cli: Cli) -> Result<()> {
         "starting miner in loopback mode (no chain interaction)"
     );
 
+    let wallet = sn2_chain::Wallet::from_paths(
+        &cli.wallet_name,
+        &cli.wallet_hotkey,
+        cli.wallet_path.as_deref(),
+    )
+    .context("loading wallet")?;
+
     let dsperse = dsperse::DSperseClient::new();
 
     let circuit_store = init_circuit_store(true, &cli.additional_circuits).await;
@@ -202,9 +209,9 @@ async fn run_loopback(cli: Cli) -> Result<()> {
         let handlers = handlers.clone();
         let host = cli.axon_host.clone();
         let port = cli.axon_port;
-        let w_name = cli.wallet_name.clone();
-        let w_path = cli.wallet_path.clone().unwrap_or_default();
-        let w_hotkey = cli.wallet_hotkey.clone();
+        let w_name = wallet.name.clone();
+        let w_path = wallet.wallet_path.clone();
+        let w_hotkey = wallet.hotkey_name.clone();
         tokio::spawn(async move {
             lightning_server::run_lightning_server(
                 "loopback",
