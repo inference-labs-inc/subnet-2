@@ -17,6 +17,76 @@ const CIRCUIT_METADATA_FILENAME: &str = "circuit_metadata.json";
 const DSLICE_READY_MARKER: &str = ".dslice_ready";
 const REFRESH_INTERVAL_SECS: u64 = 600;
 
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn resolve_files(data: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    let file_map = data.get("file_map").and_then(|v| v.as_object());
+
+    if let Some(files_obj) = data.get("files").and_then(|v| v.as_object()) {
+        if let Some(fmap) = file_map {
+            let mut resolved = serde_json::Map::new();
+            for (filename, hash_val) in fmap {
+                if let Some(hash) = hash_val.as_str() {
+                    if let Some(url) = files_obj.get(hash) {
+                        resolved.insert(filename.clone(), url.clone());
+                    } else {
+                        warn!(filename, hash, "file_map entry has no matching download URL in files");
+                    }
+                }
+            }
+            return resolved;
+        }
+
+        let all_hash_keys =
+            !files_obj.is_empty() && files_obj.keys().all(|k| is_sha256_hex(k));
+        if all_hash_keys {
+            warn!("API returned content-addressed files without file_map, cannot resolve filenames");
+            return serde_json::Map::new();
+        }
+
+        return files_obj.clone();
+    }
+
+    if let Some(arr) = data.get("files").and_then(|v| v.as_array()) {
+        warn!(count = arr.len(), "API returned files as array without file_map, skipping downloads");
+    }
+
+    serde_json::Map::new()
+}
+
+fn derive_checksums(
+    file_map: Option<&serde_json::Map<String, serde_json::Value>>,
+    explicit: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    if !explicit.is_empty() {
+        return explicit.clone();
+    }
+    let Some(fmap) = file_map else {
+        return serde_json::Map::new();
+    };
+    let mut checksums = serde_json::Map::new();
+    for (filename, hash_val) in fmap {
+        if let Some(hash) = hash_val.as_str() {
+            if is_sha256_hex(hash) {
+                checksums.insert(filename.clone(), serde_json::Value::String(hash.to_string()));
+            }
+        }
+    }
+    checksums
+}
+
+fn extract_content_hash_from_url(url: &str) -> Option<String> {
+    let segment = url.rsplit('/').next()?;
+    let clean = segment.split('?').next()?;
+    if is_sha256_hex(clean) {
+        Some(clean.to_lowercase())
+    } else {
+        None
+    }
+}
+
 pub struct CircuitStore {
     circuits: HashMap<String, Circuit>,
     api_url: String,
@@ -312,21 +382,24 @@ impl CircuitStore {
         let metadata_json = serde_json::to_string_pretty(metadata_value)?;
         let is_dsperse = metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION;
 
-        if let Some(files) = data.get("files").and_then(|v| v.as_object()) {
+        let files = resolve_files(data);
+        if !files.is_empty() {
             if is_dsperse {
                 let slices_dir = cache_path.join("slices");
                 std::fs::create_dir_all(&slices_dir)
                     .with_context(|| format!("creating slices dir {}", slices_dir.display()))?;
             }
 
-            let checksums = data
+            let file_map = data.get("file_map").and_then(|v| v.as_object());
+            let explicit_checksums = data
                 .get("checksums")
                 .and_then(|v| v.as_object())
                 .cloned()
                 .unwrap_or_default();
+            let checksums = derive_checksums(file_map, &explicit_checksums);
 
             let deferred_downloads = match self
-                .download_circuit_files(files, &cache_path, is_dsperse, &checksums)
+                .download_circuit_files(&files, &cache_path, is_dsperse, &checksums)
                 .await
             {
                 Ok(d) => d,
@@ -580,7 +653,8 @@ async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) ->
         .headers()
         .get("x-checksum-sha256")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().to_lowercase());
+        .map(|s| s.trim().to_lowercase())
+        .or_else(|| extract_content_hash_from_url(url));
 
     let partial = dest.with_extension("partial");
 
