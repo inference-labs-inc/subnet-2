@@ -153,28 +153,6 @@ impl ValidatorLoop {
                 }
             };
 
-            {
-                let dir = slices_dir.clone();
-                let sid = slice_info.slice_id.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    sn2_circuit_store::ensure_slice_extracted(&dir, &sid)
-                })
-                .await;
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "failed to extract dslice");
-                        self.teardown_run(run_uid).await;
-                        return;
-                    }
-                    Err(e) => {
-                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "dslice extraction task panicked");
-                        self.teardown_run(run_uid).await;
-                        return;
-                    }
-                }
-            }
-
             if !slice_info.use_circuit {
                 let onnx_path = match slice_info.onnx_path {
                     Some(ref p) => p.clone(),
