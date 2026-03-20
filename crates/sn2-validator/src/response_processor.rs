@@ -5,20 +5,20 @@ use sn2_types::{Circuit, MinerResponse, ProofSystem};
 use tracing::warn;
 
 fn resolve_circuit_path(response: &MinerResponse, circuit: &Circuit) -> String {
-    if let Some(ref p) = response.dsperse_circuit_path {
-        return p.clone();
-    }
-
     if response.is_incremental {
         let slice_num = response.dsperse_slice_num.unwrap_or(0);
-        let slice_model = circuit
-            .paths
-            .base_path
-            .join("slices")
+        let slices_dir = circuit.paths.base_path.join("slices");
+        let bundle = slices_dir
+            .join(format!("slice_{slice_num}"))
+            .join("jstprove/circuit.bundle");
+        if bundle.is_dir() {
+            return bundle.to_string_lossy().to_string();
+        }
+        let compiled = slices_dir
             .join(format!("slice_{slice_num}"))
             .join("model.compiled");
-        if slice_model.exists() {
-            return slice_model.to_string_lossy().to_string();
+        if compiled.exists() {
+            return compiled.to_string_lossy().to_string();
         }
     }
 
