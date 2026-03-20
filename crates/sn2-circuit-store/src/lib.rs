@@ -29,20 +29,25 @@ fn resolve_files(data: &serde_json::Value) -> serde_json::Map<String, serde_json
             let mut resolved = serde_json::Map::new();
             for (filename, hash_val) in fmap {
                 if let Some(hash) = hash_val.as_str() {
-                    if let Some(url) = files_obj.get(hash) {
+                    let hash_lower = hash.to_lowercase();
+                    if let Some(url) = files_obj.get(hash).or_else(|| files_obj.get(&hash_lower)) {
                         resolved.insert(filename.clone(), url.clone());
                     } else {
-                        warn!(filename, hash, "file_map entry has no matching download URL in files");
+                        warn!(
+                            filename,
+                            hash, "file_map entry has no matching download URL in files"
+                        );
                     }
                 }
             }
             return resolved;
         }
 
-        let all_hash_keys =
-            !files_obj.is_empty() && files_obj.keys().all(|k| is_sha256_hex(k));
+        let all_hash_keys = !files_obj.is_empty() && files_obj.keys().all(|k| is_sha256_hex(k));
         if all_hash_keys {
-            warn!("API returned content-addressed files without file_map, cannot resolve filenames");
+            warn!(
+                "API returned content-addressed files without file_map, cannot resolve filenames"
+            );
             return serde_json::Map::new();
         }
 
@@ -50,7 +55,10 @@ fn resolve_files(data: &serde_json::Value) -> serde_json::Map<String, serde_json
     }
 
     if let Some(arr) = data.get("files").and_then(|v| v.as_array()) {
-        warn!(count = arr.len(), "API returned files as array without file_map, skipping downloads");
+        warn!(
+            count = arr.len(),
+            "API returned files as array without file_map, skipping downloads"
+        );
     }
 
     serde_json::Map::new()
@@ -70,7 +78,10 @@ fn derive_checksums(
     for (filename, hash_val) in fmap {
         if let Some(hash) = hash_val.as_str() {
             if is_sha256_hex(hash) {
-                checksums.insert(filename.clone(), serde_json::Value::String(hash.to_string()));
+                checksums.insert(
+                    filename.clone(),
+                    serde_json::Value::String(hash.to_lowercase()),
+                );
             }
         }
     }
