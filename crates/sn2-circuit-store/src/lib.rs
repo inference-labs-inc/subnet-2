@@ -26,11 +26,15 @@ fn resolve_files(data: &serde_json::Value) -> serde_json::Map<String, serde_json
 
     if let Some(files_obj) = data.get("files").and_then(|v| v.as_object()) {
         if let Some(fmap) = file_map {
+            let files_lower: HashMap<String, serde_json::Value> = files_obj
+                .iter()
+                .map(|(k, v)| (k.to_lowercase(), v.clone()))
+                .collect();
             let mut resolved = serde_json::Map::new();
             for (filename, hash_val) in fmap {
                 if let Some(hash) = hash_val.as_str() {
                     let hash_lower = hash.to_lowercase();
-                    if let Some(url) = files_obj.get(hash).or_else(|| files_obj.get(&hash_lower)) {
+                    if let Some(url) = files_lower.get(&hash_lower) {
                         resolved.insert(filename.clone(), url.clone());
                     } else {
                         warn!(
