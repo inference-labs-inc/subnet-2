@@ -398,6 +398,12 @@ impl CircuitStore {
         let is_dsperse = metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION;
 
         let files = resolve_files(data);
+        if files.is_empty() && data.get("files").is_some() {
+            warn!(
+                circuit_id,
+                "API provided files but none could be resolved, circuit may be unusable"
+            );
+        }
         if !files.is_empty() {
             if is_dsperse {
                 let slices_dir = cache_path.join("slices");
