@@ -9,9 +9,9 @@ use tracing::{info, warn};
 const LOG_INTERVAL_SECS: u64 = 60;
 const HEALTH_FLUSH_INTERVAL_SECS: u64 = 60;
 const REQUEST_TIMEOUT_SECS: u64 = 5;
-const MAX_RETRIES: u32 = 3;
-const BACKOFF_BASE_MS: u64 = 500;
-const BACKOFF_MAX_MS: u64 = 8_000;
+pub(crate) const MAX_RETRIES: u32 = 3;
+pub(crate) const BACKOFF_BASE_MS: u64 = 500;
+pub(crate) const BACKOFF_MAX_MS: u64 = 8_000;
 
 pub struct StatsReporter {
     http: reqwest::Client,
@@ -265,44 +265,51 @@ impl StatsReporter {
                     return;
                 }
             };
-            for attempt in 0..=MAX_RETRIES {
-                if attempt > 0 {
-                    let delay_ms = (BACKOFF_BASE_MS * 2u64.pow(attempt - 1)).min(BACKOFF_MAX_MS);
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                }
-                match http
-                    .post(&url)
-                    .header("Content-Type", "application/json")
-                    .header("X-Request-Signature", &sig)
-                    .body(body_bytes.clone())
-                    .send()
-                    .await
-                {
-                    Ok(resp) if resp.status().is_success() => {
-                        on_done(true);
-                        return;
-                    }
-                    Ok(resp) => {
-                        let status = resp.status();
-                        let text = resp.text().await.unwrap_or_default();
-                        if attempt == MAX_RETRIES {
-                            warn!(path = %path_owned, %status, "stats POST rejected after {} attempts: {text}", MAX_RETRIES + 1);
-                        } else {
-                            warn!(path = %path_owned, %status, attempt = attempt + 1, "stats POST rejected, retrying: {text}");
-                        }
-                    }
-                    Err(e) => {
-                        if attempt == MAX_RETRIES {
-                            warn!(error = %e, path = %path_owned, "stats POST failed after {} attempts", MAX_RETRIES + 1);
-                        } else {
-                            warn!(error = %e, path = %path_owned, attempt = attempt + 1, "stats POST failed, retrying");
-                        }
-                    }
-                }
-            }
-            on_done(false);
+            on_done(post_with_backoff(&http, &url, &body_bytes, &sig, &path_owned).await);
         });
     }
+}
+
+pub(crate) async fn post_with_backoff(
+    http: &reqwest::Client,
+    url: &str,
+    body_bytes: &[u8],
+    signature: &str,
+    label: &str,
+) -> bool {
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            let delay_ms = (BACKOFF_BASE_MS * 2u64.pow(attempt - 1)).min(BACKOFF_MAX_MS);
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
+        match http
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("X-Request-Signature", signature)
+            .body(body_bytes.to_vec())
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => return true,
+            Ok(resp) => {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                if attempt == MAX_RETRIES {
+                    warn!(%status, path = label, "POST rejected after {} attempts: {text}", MAX_RETRIES + 1);
+                } else {
+                    warn!(%status, path = label, attempt = attempt + 1, "POST rejected, retrying: {text}");
+                }
+            }
+            Err(e) => {
+                if attempt == MAX_RETRIES {
+                    warn!(error = %e, path = label, "POST failed after {} attempts", MAX_RETRIES + 1);
+                } else {
+                    warn!(error = %e, path = label, attempt = attempt + 1, "POST failed, retrying");
+                }
+            }
+        }
+    }
+    false
 }
 
 pub fn collect_environment() -> serde_json::Value {

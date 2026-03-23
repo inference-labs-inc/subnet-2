@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::stats_reporter::collect_environment;
+use crate::stats_reporter::{collect_environment, post_with_backoff};
 use base64::Engine;
 use sn2_chain::Wallet;
 use sn2_types::DEFAULT_API_URL;
@@ -10,9 +10,6 @@ const BATCH_SIZE: usize = 20;
 const MAX_BUFFERED_EVENTS: usize = 10_000;
 const FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const MAX_RETRIES: u32 = 3;
-const BACKOFF_BASE_MS: u64 = 500;
-const BACKOFF_MAX_MS: u64 = 8_000;
 
 pub struct DsperseEventClient {
     http: reqwest::Client,
@@ -110,42 +107,11 @@ impl DsperseEventClient {
         let url = format!("{}/statistics/dsperse/events/", self.api_url);
         let count = events.len();
 
-        for attempt in 0..=MAX_RETRIES {
-            if attempt > 0 {
-                let delay_ms = (BACKOFF_BASE_MS * 2u64.pow(attempt - 1)).min(BACKOFF_MAX_MS);
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            }
-            match self
-                .http
-                .post(&url)
-                .header("Content-Type", "application/json")
-                .header("X-Request-Signature", &sig)
-                .body(body_bytes.clone())
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    debug!(count, "flushed dsperse events");
-                    return;
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    if attempt == MAX_RETRIES {
-                        warn!(%status, count, "dsperse events POST rejected after {} attempts", MAX_RETRIES + 1);
-                    } else {
-                        warn!(%status, count, attempt = attempt + 1, "dsperse events POST rejected, retrying");
-                    }
-                }
-                Err(e) => {
-                    if attempt == MAX_RETRIES {
-                        warn!(error = %e, count, "dsperse events POST failed after {} attempts", MAX_RETRIES + 1);
-                    } else {
-                        warn!(error = %e, count, attempt = attempt + 1, "dsperse events POST failed, retrying");
-                    }
-                }
-            }
+        if post_with_backoff(&self.http, &url, &body_bytes, &sig, "dsperse/events").await {
+            debug!(count, "flushed dsperse events");
+        } else {
+            self.restore_buffer(events).await;
         }
-        self.restore_buffer(events).await;
     }
 
     pub fn spawn_flush_loop(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
