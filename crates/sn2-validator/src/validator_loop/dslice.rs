@@ -153,17 +153,24 @@ impl ValidatorLoop {
                 }
             };
 
-            if let Some(circuit_bytes) = self.run_manager.current_circuit_bytes(run_uid) {
-                let bundle_dir = slices_dir
-                    .join(&slice_info.slice_id)
-                    .join("jstprove/circuit.bundle");
-                if !bundle_dir.join("circuit.bin").exists() {
-                    if let Err(e) = std::fs::create_dir_all(&bundle_dir) {
-                        warn!(run_uid = %run_uid, error = %e, "failed to create circuit bundle dir");
-                    } else if let Err(e) =
-                        std::fs::write(bundle_dir.join("circuit.bin"), circuit_bytes)
-                    {
-                        warn!(run_uid = %run_uid, error = %e, "failed to write circuit.bin from memory");
+            {
+                let dir = slices_dir.clone();
+                let sid = slice_info.slice_id.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    sn2_circuit_store::ensure_slice_extracted(&dir, &sid)
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "failed to extract dslice");
+                        self.teardown_run(run_uid).await;
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(run_uid = %run_uid, slice = %slice_info.slice_id, error = %e, "dslice extraction task panicked");
+                        self.teardown_run(run_uid).await;
+                        return;
                     }
                 }
             }

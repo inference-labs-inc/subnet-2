@@ -149,12 +149,12 @@ impl IncrementalRunManager {
         self.runs.get(run_uid).map(|r| r.run_source)
     }
 
-    pub fn next_slice(&mut self, run_uid: &str) -> anyhow::Result<Option<NextSliceInfo>> {
-        let run = match self.runs.get_mut(run_uid) {
+    pub fn next_slice(&self, run_uid: &str) -> anyhow::Result<Option<NextSliceInfo>> {
+        let run = match self.runs.get(run_uid) {
             Some(r) => r,
             None => return Ok(None),
         };
-        let inc = match run.incremental.as_mut() {
+        let inc = match run.incremental.as_ref() {
             Some(i) => i,
             None => return Ok(None),
         };
@@ -175,27 +175,6 @@ impl IncrementalRunManager {
             named_inputs: work.named_inputs,
             tiling: work.tiling,
         }))
-    }
-
-    pub fn current_circuit_bytes(&self, run_uid: &str) -> Option<&[u8]> {
-        self.runs
-            .get(run_uid)?
-            .incremental
-            .as_ref()?
-            .current_assets()?
-            .circuit_bytes
-            .as_deref()
-    }
-
-    #[allow(dead_code)]
-    pub fn current_onnx_bytes(&self, run_uid: &str) -> Option<&[u8]> {
-        self.runs
-            .get(run_uid)?
-            .incremental
-            .as_ref()?
-            .current_assets()?
-            .onnx_bytes
-            .as_deref()
     }
 
     pub fn init_tile_buffer(

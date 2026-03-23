@@ -9,7 +9,6 @@ use jstprove_circuits::onnx::{
     deserialize_circuit_bn254, flatten_circuit_bn254, verify_and_extract_bn254_with_flat_ref,
     FlatCircuitBN254,
 };
-use jstprove_circuits::runner::main_runner::read_circuit_msgpack;
 
 static CIRCUIT_CACHE: LazyLock<RwLock<HashMap<String, Arc<FlatCircuitBN254>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
@@ -66,12 +65,14 @@ fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
 
     let gen_before = EVICTION_GEN.load(Ordering::SeqCst);
 
-    let circuit_bytes = if std::path::Path::new(circuit_path).is_dir() {
-        let bundle = read_circuit_msgpack(circuit_path)
-            .with_context(|| format!("reading bundle {circuit_path}"))?;
-        bundle.circuit
-    } else {
-        std::fs::read(circuit_path).with_context(|| format!("reading {circuit_path}"))?
+    let circuit_bytes = {
+        let p = std::path::Path::new(circuit_path);
+        if p.is_dir() {
+            jstprove_io::bundle::read_circuit_blob(p)
+                .with_context(|| format!("reading circuit from bundle {circuit_path}"))?
+        } else {
+            std::fs::read(circuit_path).with_context(|| format!("reading {circuit_path}"))?
+        }
     };
 
     let layered = deserialize_circuit_bn254(&circuit_bytes)
