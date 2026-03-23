@@ -104,7 +104,14 @@ jobs:
 
       - name: Resolve tag SHA
         run: |
-          TAG_SHA=$(gh api "repos/${{ github.repository }}/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+          REF_DATA=$(gh api "repos/${{ github.repository }}/git/ref/tags/$RELEASE_TAG")
+          OBJ_TYPE=$(echo "$REF_DATA" | jq -r '.object.type')
+          OBJ_SHA=$(echo "$REF_DATA" | jq -r '.object.sha')
+          if [ "$OBJ_TYPE" = "tag" ]; then
+            TAG_SHA=$(gh api "repos/${{ github.repository }}/git/tags/$OBJ_SHA" --jq '.object.sha')
+          else
+            TAG_SHA="$OBJ_SHA"
+          fi
           RUN_SHA="${{ github.event.workflow_run.head_sha }}"
           if [ "$TAG_SHA" != "$RUN_SHA" ]; then
             echo "::error::Tag $RELEASE_TAG points to $TAG_SHA but workflow_run reported $RUN_SHA"
