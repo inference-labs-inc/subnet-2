@@ -223,6 +223,19 @@ impl ValidatorLoop {
                     "sn2-api reporting disabled for non-release build"
                 );
             }
+            let is_mainnet_validator = config.netuid == DEFAULT_NETUID
+                && config
+                    .metagraph
+                    .get_neuron(config.user_uid)
+                    .is_some_and(|n| n.validator_permit);
+            let stats_enabled =
+                api_reporting_enabled && !config.disable_metric_logging && is_mainnet_validator;
+            if api_reporting_enabled && !is_mainnet_validator {
+                info!(
+                    netuid = config.netuid,
+                    "stats reporting disabled for non-mainnet validator"
+                );
+            }
             let uploader = if api_reporting_enabled {
                 Some(Arc::new(ProofUploader::new(
                     wallet.clone(),
@@ -231,7 +244,7 @@ impl ValidatorLoop {
             } else {
                 None
             };
-            let reporter = if api_reporting_enabled && !config.disable_metric_logging {
+            let reporter = if stats_enabled {
                 Some(StatsReporter::new(
                     wallet.clone(),
                     config.proof_api_url.clone(),
@@ -240,7 +253,7 @@ impl ValidatorLoop {
             } else {
                 None
             };
-            let (events, flush_task) = if api_reporting_enabled && !config.disable_metric_logging {
+            let (events, flush_task) = if stats_enabled {
                 let ec = Arc::new(DsperseEventClient::new(
                     wallet,
                     config.proof_api_url.clone(),
