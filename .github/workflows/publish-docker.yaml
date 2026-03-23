@@ -119,6 +119,8 @@ jobs:
             exit 1
           fi
           echo "tag_sha=$TAG_SHA" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
