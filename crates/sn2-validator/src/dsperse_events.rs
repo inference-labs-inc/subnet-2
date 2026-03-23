@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
-use crate::stats_reporter::{collect_environment, post_with_backoff};
-use base64::Engine;
+use crate::stats_reporter::{
+    collect_environment, sign_and_post, FlushOffset, STATS_FLUSH_INTERVAL_SECS,
+};
 use sn2_chain::Wallet;
 use sn2_types::DEFAULT_API_URL;
 use tracing::{debug, warn};
 
-const BATCH_SIZE: usize = 20;
 const MAX_BUFFERED_EVENTS: usize = 10_000;
-const FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub struct DsperseEventClient {
@@ -53,23 +52,16 @@ impl DsperseEventClient {
         }
         event["validator_key"] = serde_json::Value::String(self.wallet.hotkey_ss58().to_string());
 
-        let should_flush = {
-            let mut buf = self.buffer.lock().await;
-            if buf.len() >= MAX_BUFFERED_EVENTS {
-                let drop_n = (buf.len() + 1).saturating_sub(MAX_BUFFERED_EVENTS);
-                buf.drain(0..drop_n);
-                warn!(
-                    dropped = drop_n,
-                    "dsperse event buffer full, dropping oldest events"
-                );
-            }
-            buf.push(event);
-            buf.len() >= BATCH_SIZE
-        };
-
-        if should_flush {
-            self.flush().await;
+        let mut buf = self.buffer.lock().await;
+        if buf.len() >= MAX_BUFFERED_EVENTS {
+            let drop_n = (buf.len() + 1).saturating_sub(MAX_BUFFERED_EVENTS);
+            buf.drain(0..drop_n);
+            warn!(
+                dropped = drop_n,
+                "dsperse event buffer full, dropping oldest events"
+            );
         }
+        buf.push(event);
     }
 
     pub async fn flush(&self) {
@@ -86,28 +78,10 @@ impl DsperseEventClient {
             "events": events,
         });
 
-        let body_bytes = match serde_json::to_vec(&batch) {
-            Ok(b) => b,
-            Err(e) => {
-                warn!(error = %e, "dsperse event serialization failed");
-                self.restore_buffer(events).await;
-                return;
-            }
-        };
-
-        let sig = match self.wallet.sign_hotkey(&body_bytes) {
-            Ok(s) => base64::engine::general_purpose::STANDARD.encode(&s),
-            Err(e) => {
-                warn!(error = %e, "dsperse event signing failed");
-                self.restore_buffer(events).await;
-                return;
-            }
-        };
-
         let url = format!("{}/statistics/dsperse/events/", self.api_url);
         let count = events.len();
 
-        if post_with_backoff(&self.http, &url, &body_bytes, &sig, "dsperse/events").await {
+        if sign_and_post(&self.http, &self.wallet, &url, &batch, "dsperse/events").await {
             debug!(count, "flushed dsperse events");
         } else {
             self.restore_buffer(events).await;
@@ -117,7 +91,12 @@ impl DsperseEventClient {
     pub fn spawn_flush_loop(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let client = Arc::clone(self);
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(FLUSH_INTERVAL);
+            tokio::time::sleep(std::time::Duration::from_secs(
+                FlushOffset::DsperseEvents as u64,
+            ))
+            .await;
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(STATS_FLUSH_INTERVAL_SECS));
             loop {
                 interval.tick().await;
                 client.flush().await;

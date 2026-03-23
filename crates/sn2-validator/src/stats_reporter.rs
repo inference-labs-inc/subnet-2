@@ -1,17 +1,22 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use sn2_chain::Wallet;
 use sn2_types::{MinerResponse, DEFAULT_API_URL, SOFTWARE_VERSION};
 use tracing::{info, warn};
-const LOG_INTERVAL_SECS: u64 = 60;
-const HEALTH_FLUSH_INTERVAL_SECS: u64 = 60;
+pub(crate) const STATS_FLUSH_INTERVAL_SECS: u64 = 60;
 const REQUEST_TIMEOUT_SECS: u64 = 5;
-pub(crate) const MAX_RETRIES: u32 = 3;
-pub(crate) const BACKOFF_BASE_MS: u64 = 500;
-pub(crate) const BACKOFF_MAX_MS: u64 = 8_000;
+
+pub(crate) enum FlushOffset {
+    ResponseLog = 0,
+    Health = 20,
+    DsperseEvents = 40,
+}
+const MAX_RETRIES: u32 = 3;
+const BACKOFF_BASE_MS: u64 = 500;
+const BACKOFF_MAX_MS: u64 = 8_000;
 
 pub struct StatsReporter {
     http: reqwest::Client,
@@ -54,17 +59,21 @@ pub struct DsperseSliceReport {
 impl StatsReporter {
     pub fn new(wallet: Arc<Wallet>, api_base_url: Option<String>, validator_uid: u16) -> Self {
         let now = Instant::now();
+        let response_offset =
+            Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::ResponseLog as u64);
+        let health_offset =
+            Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::Health as u64);
         Self {
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
                 .build()
                 .unwrap_or_default(),
             wallet,
             api_base_url: api_base_url.unwrap_or_else(|| DEFAULT_API_URL.to_string()),
             recent_responses: Vec::new(),
-            last_response_log: now,
+            last_response_log: now - response_offset,
             health_samples: Vec::new(),
-            last_health_flush: now,
+            last_health_flush: now - health_offset,
             validator_uid,
         }
     }
@@ -117,7 +126,7 @@ impl StatsReporter {
 
     fn flush_response_logs(&mut self, now: Instant, block: u64, scores: &HashMap<u16, f64>) {
         if now.duration_since(self.last_response_log)
-            < std::time::Duration::from_secs(LOG_INTERVAL_SECS)
+            < Duration::from_secs(STATS_FLUSH_INTERVAL_SECS)
             || self.recent_responses.is_empty()
         {
             return;
@@ -126,7 +135,7 @@ impl StatsReporter {
         let response_logs = std::mem::take(&mut self.recent_responses);
         self.last_response_log = now;
 
-        let overhead_duration = LOG_INTERVAL_SECS as f64;
+        let overhead_duration = STATS_FLUSH_INTERVAL_SECS as f64;
 
         let scores_map: serde_json::Map<String, serde_json::Value> = scores
             .iter()
@@ -154,7 +163,7 @@ impl StatsReporter {
 
     fn flush_health_samples(&mut self, now: Instant) {
         if now.duration_since(self.last_health_flush)
-            < std::time::Duration::from_secs(HEALTH_FLUSH_INTERVAL_SECS)
+            < Duration::from_secs(STATS_FLUSH_INTERVAL_SECS)
             || self.health_samples.is_empty()
         {
             return;
@@ -249,28 +258,36 @@ impl StatsReporter {
         let path_owned = path.to_string();
 
         tokio::spawn(async move {
-            let body_bytes = match serde_json::to_vec(&body) {
-                Ok(b) => b,
-                Err(e) => {
-                    warn!(error = %e, path = %path_owned, "stats serialization failed");
-                    on_done(false);
-                    return;
-                }
-            };
-            let sig = match wallet.sign_hotkey(&body_bytes) {
-                Ok(s) => base64::engine::general_purpose::STANDARD.encode(&s),
-                Err(e) => {
-                    warn!(error = %e, path = %path_owned, "stats signing failed");
-                    on_done(false);
-                    return;
-                }
-            };
-            on_done(post_with_backoff(&http, &url, &body_bytes, &sig, &path_owned).await);
+            on_done(sign_and_post(&http, &wallet, &url, &body, &path_owned).await);
         });
     }
 }
 
-pub(crate) async fn post_with_backoff(
+pub(crate) async fn sign_and_post(
+    http: &reqwest::Client,
+    wallet: &Wallet,
+    url: &str,
+    body: &serde_json::Value,
+    label: &str,
+) -> bool {
+    let body_bytes = match serde_json::to_vec(body) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(error = %e, path = label, "serialization failed");
+            return false;
+        }
+    };
+    let sig = match wallet.sign_hotkey(&body_bytes) {
+        Ok(s) => base64::engine::general_purpose::STANDARD.encode(&s),
+        Err(e) => {
+            warn!(error = %e, path = label, "signing failed");
+            return false;
+        }
+    };
+    post_with_backoff(http, url, &body_bytes, &sig, label).await
+}
+
+async fn post_with_backoff(
     http: &reqwest::Client,
     url: &str,
     body_bytes: &[u8],
