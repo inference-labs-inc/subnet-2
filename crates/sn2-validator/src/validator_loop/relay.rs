@@ -146,19 +146,6 @@ impl ValidatorLoop {
         .await;
     }
 
-    pub(super) fn evict_slice_cache(&self, run_uid: &str, slice_num: &str) {
-        let slices_dir = self
-            .run_manager
-            .get_circuit_id(run_uid)
-            .and_then(|cid| self.circuit_store.get_circuit(cid))
-            .map(|c| c.paths.base_path.join("slices"));
-        if let Some(ref sd) = slices_dir {
-            let slice_path = sd.join(slice_num);
-            sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
-            sn2_circuit_store::cleanup_extracted_slice(sd, slice_num);
-        }
-    }
-
     pub(super) fn report_dsperse_completion(&self, run: &crate::incremental_runner::ActiveRun) {
         let reporter = match &self.stats_reporter {
             Some(r) => r,

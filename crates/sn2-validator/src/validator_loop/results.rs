@@ -98,7 +98,7 @@ impl ValidatorLoop {
         self.dslice_input_scales
             .retain(|(uid, _), _| uid != run_uid);
 
-        self.evict_slice_cache(run_uid, slice_num);
+        self.cleanup_previous_slice(run_uid);
 
         info!(
             run_uid = %run_uid,

@@ -155,6 +155,7 @@ impl ValidatorLoop {
             if !evicted.is_empty() {
                 info!(circuit = %circuit_id, runs = ?evicted, "evicted in-flight runs for deactivated circuit");
                 for run_id in &evicted {
+                    self.cleanup_previous_slice(run_id);
                     self.dslice_input_scales.retain(|(uid, _), _| uid != run_id);
                     self.relay_remove_pending(run_id).await;
                 }
