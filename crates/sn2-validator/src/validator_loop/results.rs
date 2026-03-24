@@ -352,14 +352,13 @@ impl ValidatorLoop {
         slice_num: &str,
         output: ndarray::ArrayD<f64>,
     ) {
-        self.evict_slice_cache(run_uid, slice_num);
-
         match self
             .run_manager
             .apply_result_tensor(run_uid, slice_num, output)
         {
             Ok(is_complete) => {
                 if is_complete {
+                    self.cleanup_previous_slice(run_uid);
                     info!(run_uid = %run_uid, "incremental run complete");
 
                     let final_output = self.run_manager.final_output_json(run_uid);

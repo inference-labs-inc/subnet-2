@@ -174,6 +174,7 @@ impl ValidatorLoop {
     async fn gc_stale_runs(&mut self) {
         let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
         for uid in &evicted {
+            self.cleanup_previous_slice(uid);
             self.dslice_input_scales
                 .retain(|(run_uid, _), _| run_uid != uid);
             self.relay_remove_pending(uid).await;

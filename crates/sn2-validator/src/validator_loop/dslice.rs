@@ -138,9 +138,19 @@ impl ValidatorLoop {
         self.enqueue_next_dslice(&run_uid, &circuit).await;
     }
 
+    pub(super) fn cleanup_previous_slice(&mut self, run_uid: &str) {
+        if let Some((prev_dir, prev_id)) = self.active_extracted_slices.remove(run_uid) {
+            let slice_path = prev_dir.join(&prev_id);
+            sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
+            sn2_circuit_store::cleanup_extracted_slice(&prev_dir, &prev_id);
+        }
+    }
+
     pub(super) async fn enqueue_next_dslice(&mut self, run_uid: &str, circuit: &Circuit) {
         let slices_dir = circuit.paths.base_path.join("slices");
         loop {
+            self.cleanup_previous_slice(run_uid);
+
             let mut slice_info = match self.run_manager.next_slice(run_uid) {
                 Ok(Some(info)) => info,
                 Ok(None) => {
@@ -276,6 +286,11 @@ impl ValidatorLoop {
                 }
             }
 
+            self.active_extracted_slices.insert(
+                run_uid.to_string(),
+                (slices_dir.clone(), slice_info.slice_id.clone()),
+            );
+
             let run_source = self
                 .run_manager
                 .get_run_source(run_uid)
@@ -349,7 +364,6 @@ impl ValidatorLoop {
                     &slice_info.slice_id,
                     slice_info.circuit_path.as_deref(),
                     tiling,
-                    &slices_dir,
                     tiles,
                     run_source,
                 )
@@ -467,16 +481,12 @@ impl ValidatorLoop {
         slice_id: &str,
         circuit_path: Option<&str>,
         tiling: &dsperse::schema::tiling::TilingInfo,
-        slices_dir: &std::path::Path,
         tiles: Vec<ndarray::Array4<f64>>,
         run_source: RunSource,
     ) {
         let num_tiles = tiles.len();
 
         if num_tiles == 0 {
-            let slice_path = slices_dir.join(slice_id);
-            sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
-            sn2_circuit_store::cleanup_extracted_slice(slices_dir, slice_id);
             warn!(
                 run_uid = %run_uid,
                 slice = %slice_id,

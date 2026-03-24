@@ -159,6 +159,7 @@ pub struct ValidatorLoop {
     pub(super) pending_verifications: VecDeque<TaskResult>,
     pub(super) verification_concurrency: usize,
     pub(super) dslice_input_scales: HashMap<(String, String), f64>,
+    pub(super) active_extracted_slices: HashMap<String, (std::path::PathBuf, String)>,
 }
 
 impl ValidatorLoop {
@@ -332,6 +333,7 @@ impl ValidatorLoop {
             pending_verifications: VecDeque::new(),
             verification_concurrency,
             dslice_input_scales: HashMap::new(),
+            active_extracted_slices: HashMap::new(),
         })
     }
 
