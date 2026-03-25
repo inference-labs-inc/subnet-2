@@ -175,7 +175,7 @@ jobs:
 
       - name: Build and push Docker image
         id: push-release
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: .
           file: ./Dockerfile
@@ -202,7 +202,7 @@ jobs:
 
       - name: Upload SARIF to GitHub Security tab
         if: steps.trivy-release.conclusion == 'success'
-        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
+        uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4.34.1
         with:
           sarif_file: trivy-results.sarif
           category: trivy-image-release

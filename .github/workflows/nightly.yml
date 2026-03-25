@@ -42,7 +42,7 @@ jobs:
 
       - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
-      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Build release binaries
         run: cargo build --workspace --release --locked
@@ -228,7 +228,7 @@ jobs:
         run: echo "timestamp=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
 
       - name: Create Nightly Release
-        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
           tag_name: testnet-nightly
           name: Testnet Nightly

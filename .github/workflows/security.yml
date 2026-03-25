@@ -81,7 +81,7 @@ jobs:
 
       - name: Upload SARIF results to GitHub
         if: always() && hashFiles('semgrep-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
+        uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4.34.1
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
@@ -138,7 +138,7 @@ jobs:
 
       - name: TruffleHog OSS (Pull Request)
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@4860052fc923ce00536db0f7b257092794dbb750
+        uses: trufflesecurity/trufflehog@586f66d7886cd0b037c7c245d4a6e34ef357ab10
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -147,7 +147,7 @@ jobs:
 
       - name: TruffleHog OSS (Push)
         if: github.event_name == 'push'
-        uses: trufflesecurity/trufflehog@4860052fc923ce00536db0f7b257092794dbb750
+        uses: trufflesecurity/trufflehog@586f66d7886cd0b037c7c245d4a6e34ef357ab10
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -156,7 +156,7 @@ jobs:
 
       - name: TruffleHog OSS (Schedule)
         if: github.event_name == 'schedule'
-        uses: trufflesecurity/trufflehog@4860052fc923ce00536db0f7b257092794dbb750
+        uses: trufflesecurity/trufflehog@586f66d7886cd0b037c7c245d4a6e34ef357ab10
         with:
           path: ./
           extra_args: --debug --only-verified
