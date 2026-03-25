@@ -349,7 +349,9 @@ impl ValidatorLoop {
                         public_json: None,
                         inputs: task_inputs,
                         request_type: Some(request_type),
-                        dsperse_slice_num: slice_num.as_deref().and_then(|s| s.parse().ok()),
+                        dsperse_slice_num: slice_num
+                            .as_deref()
+                            .and_then(|s| s.strip_prefix("slice_").unwrap_or(s).parse().ok()),
                         dsperse_run_uid: run_uid.clone(),
                         raw: Some(resp_body),
                         error: None,
