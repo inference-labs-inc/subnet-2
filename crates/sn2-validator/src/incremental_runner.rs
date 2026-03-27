@@ -40,7 +40,7 @@ pub struct ActiveRun {
 
 struct TileCounter {
     total: usize,
-    received: usize,
+    received: HashSet<u32>,
 }
 
 const EVICTED_CAP: usize = 256;
@@ -162,7 +162,7 @@ impl IncrementalRunManager {
             Entry::Vacant(e) => {
                 e.insert(TileCounter {
                     total: tiling.num_tiles,
-                    received: 0,
+                    received: HashSet::with_capacity(tiling.num_tiles),
                 });
             }
             Entry::Occupied(_) => {
@@ -193,17 +193,25 @@ impl IncrementalRunManager {
             }
         };
 
-        counter.received += 1;
+        if !counter.received.insert(tile_idx) {
+            debug!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                tile_idx = tile_idx,
+                "duplicate tile proof, ignoring"
+            );
+            return TileBufferOutcome::Waiting;
+        }
         debug!(
             run_uid = %run_uid,
             slice = %slice_id,
             tile_idx = tile_idx,
-            received = counter.received,
+            received = counter.received.len(),
             total = counter.total,
             "recorded tile proof"
         );
 
-        if counter.received < counter.total {
+        if counter.received.len() < counter.total {
             return TileBufferOutcome::Waiting;
         }
 
@@ -216,13 +224,22 @@ impl IncrementalRunManager {
         TileBufferOutcome::AllReceived
     }
 
-    pub fn mark_slice_done(&mut self, run_uid: &str, slice_id: &str) {
+    pub fn mark_slice_done(&mut self, run_uid: &str, slice_id: &str) -> bool {
         if let Some(run) = self.runs.get_mut(run_uid) {
             run.last_activity = Instant::now();
             if let Some(ref mut combined) = run.combined {
-                combined.mark_slice_done(slice_id);
+                if !combined.mark_slice_done(slice_id) {
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %slice_id,
+                        "mark_slice_done called for unknown or already-completed slice"
+                    );
+                    return false;
+                }
+                return true;
             }
         }
+        false
     }
 
     pub fn is_run_complete(&self, run_uid: &str) -> bool {

@@ -124,17 +124,18 @@ impl ValidatorLoop {
         &mut self,
         run_uid: &str,
         active_run: &Option<crate::incremental_runner::ActiveRun>,
+        final_output: Option<serde_json::Value>,
     ) {
         let notify_circuit_id = active_run
             .as_ref()
             .map(|r| r.circuit_id.as_str())
             .unwrap_or_default()
             .to_string();
-        self.relay_set_request_result(
-            run_uid,
-            serde_json::json!({"run_uid": run_uid, "status": "complete"}),
-        )
-        .await;
+        let mut result = serde_json::json!({"run_uid": run_uid, "status": "complete"});
+        if let Some(output) = final_output {
+            result["output"] = output;
+        }
+        self.relay_set_request_result(run_uid, result).await;
         self.relay_send_notification(
             "subnet-2.batch_completed",
             serde_json::json!({

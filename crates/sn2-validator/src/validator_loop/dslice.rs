@@ -376,8 +376,10 @@ impl ValidatorLoop {
             self.spawn_emit_run_complete(run, true);
         }
 
+        let relay_output = final_output.clone();
         self.spawn_artifact_upload(run_uid, &mut active_run, final_output);
-        self.notify_run_completed(run_uid, &active_run).await;
+        self.notify_run_completed(run_uid, &active_run, relay_output)
+            .await;
     }
 
     pub(super) async fn replenish_dslice_queues(&mut self) {
