@@ -193,6 +193,13 @@ impl IncrementalRunManager {
             }
         };
 
+        if (tile_idx as usize) >= counter.total {
+            return TileBufferOutcome::Failed(format!(
+                "tile_idx {tile_idx} out of range (expected < {}) for run={run_uid} slice={slice_id}",
+                counter.total
+            ));
+        }
+
         if !counter.received.insert(tile_idx) {
             debug!(
                 run_uid = %run_uid,
