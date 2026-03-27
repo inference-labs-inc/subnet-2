@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -6,6 +8,30 @@ use tracing::{info, warn};
 
 use super::ValidatorLoop;
 use crate::relay::DsperseSubmission;
+
+struct StagedWork {
+    requests: VecDeque<DSliceRequest>,
+    extracted: Vec<(PathBuf, String)>,
+    events: Vec<(String, String, usize)>,
+}
+
+impl StagedWork {
+    fn new() -> Self {
+        Self {
+            requests: VecDeque::new(),
+            extracted: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    fn stage_request(&mut self, request: DSliceRequest) {
+        self.requests.push_back(request);
+    }
+
+    fn total_queued(&self) -> usize {
+        self.requests.len()
+    }
+}
 
 impl ValidatorLoop {
     pub(super) fn decode_submission_tensor(
@@ -149,18 +175,15 @@ impl ValidatorLoop {
 
     pub(super) fn cleanup_extracted_slices(&mut self, run_uid: &str) {
         if let Some(slices) = self.active_extracted_slices.remove(run_uid) {
-            for (dir, sid) in slices {
-                let slice_path = dir.join(&sid);
-                sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
-                sn2_circuit_store::cleanup_extracted_slice(&dir, &sid);
-            }
-        }
-    }
-
-    fn enqueue_request(&mut self, request: DSliceRequest) {
-        match request.run_source {
-            RunSource::Api => self.api_dslice_queue.push_back(request),
-            RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
+            let run_uid = run_uid.to_string();
+            tokio::task::spawn_blocking(move || {
+                for (dir, sid) in slices {
+                    let slice_path = dir.join(&sid);
+                    sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
+                    sn2_circuit_store::cleanup_extracted_slice(&dir, &sid);
+                }
+                tracing::debug!(run_uid = %run_uid, "extracted slices cleaned up");
+            });
         }
     }
 
@@ -208,6 +231,26 @@ impl ValidatorLoop {
         }
     }
 
+    fn flush_staged(&mut self, run_uid: &str, staged: StagedWork) {
+        self.active_extracted_slices
+            .insert(run_uid.to_string(), staged.extracted);
+
+        for request in staged.requests {
+            match request.run_source {
+                RunSource::Api => self.api_dslice_queue.push_back(request),
+                RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
+            }
+        }
+
+        for (uid, snum, count) in staged.events {
+            self.emit_event(move |ev| async move {
+                ev.emit_work_items_created(&uid, &snum, count).await;
+            });
+        }
+
+        self.dispatch_notify.notify_one();
+    }
+
     pub(super) async fn enqueue_all_dslices(
         &mut self,
         run_uid: &str,
@@ -231,9 +274,7 @@ impl ValidatorLoop {
             return;
         }
 
-        self.active_extracted_slices
-            .insert(run_uid.to_string(), Vec::new());
-        let mut total_queued = 0usize;
+        let mut staged = StagedWork::new();
 
         for work in work_items {
             if Self::extract_slice(run_uid, &slices_dir, &work.slice_id)
@@ -243,9 +284,9 @@ impl ValidatorLoop {
                 self.teardown_run(run_uid).await;
                 return;
             }
-            if let Some(slices) = self.active_extracted_slices.get_mut(run_uid) {
-                slices.push((slices_dir.clone(), work.slice_id.clone()));
-            }
+            staged
+                .extracted
+                .push((slices_dir.clone(), work.slice_id.clone()));
 
             let mut input_tensor = work.input;
 
@@ -262,26 +303,28 @@ impl ValidatorLoop {
             self.normalize_tensor(run_uid, &work.slice_id, &mut input_tensor);
 
             let queued = if let Some(ref tiling) = work.tiling {
-                match self
-                    .enqueue_tiled_work(
-                        run_uid,
-                        circuit,
-                        &work.slice_id,
-                        work.circuit_path.as_deref(),
-                        tiling,
-                        input_tensor,
-                        run_source,
-                    )
-                    .await
-                {
+                match Self::stage_tiled_work(
+                    &mut staged,
+                    &mut self.run_manager,
+                    run_uid,
+                    circuit,
+                    &work.slice_id,
+                    work.circuit_path.as_deref(),
+                    tiling,
+                    input_tensor,
+                    run_source,
+                ) {
                     Some(n) => n,
-                    None => return,
+                    None => {
+                        self.teardown_run(run_uid).await;
+                        return;
+                    }
                 }
             } else {
                 let inputs_json = serde_json::json!({
                     "input_data": crate::tensor::arrayd_to_json(&input_tensor)
                 });
-                self.enqueue_request(DSliceRequest {
+                staged.stage_request(DSliceRequest {
                     circuit: circuit.clone(),
                     inputs: inputs_json,
                     request_type: RequestType::DSlice,
@@ -299,28 +342,24 @@ impl ValidatorLoop {
                 1
             };
 
-            {
-                let uid = run_uid.to_string();
-                let snum = work.slice_id.clone();
-                self.emit_event(move |ev| async move {
-                    ev.emit_work_items_created(&uid, &snum, queued).await;
-                });
-            }
-
-            total_queued += queued;
+            staged
+                .events
+                .push((run_uid.to_string(), work.slice_id.clone(), queued));
         }
+
+        let total_queued = staged.total_queued();
+        self.flush_staged(run_uid, staged);
 
         info!(
             run_uid = %run_uid,
             total_queued,
             "queued all circuit work items for combined run"
         );
-
-        self.dispatch_notify.notify_one();
     }
 
-    async fn enqueue_tiled_work(
-        &mut self,
+    fn stage_tiled_work(
+        staged: &mut StagedWork,
+        run_manager: &mut crate::incremental_runner::IncrementalRunManager,
         run_uid: &str,
         circuit: &Circuit,
         slice_id: &str,
@@ -333,7 +372,6 @@ impl ValidatorLoop {
             Ok(arr) => arr,
             Err(e) => {
                 warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "tiled slice requires 4D input");
-                self.teardown_run(run_uid).await;
                 return None;
             }
         };
@@ -341,7 +379,6 @@ impl ValidatorLoop {
             Ok(t) => t,
             Err(e) => {
                 warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "split_into_tiles failed");
-                self.teardown_run(run_uid).await;
                 return None;
             }
         };
@@ -355,16 +392,11 @@ impl ValidatorLoop {
                 expected = tiling.num_tiles,
                 "tile count mismatch or zero"
             );
-            self.teardown_run(run_uid).await;
             return None;
         }
 
-        if let Err(e) = self
-            .run_manager
-            .init_tile_counter(run_uid, slice_id, tiling)
-        {
+        if let Err(e) = run_manager.init_tile_counter(run_uid, slice_id, tiling) {
             warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "init_tile_counter failed");
-            self.teardown_run(run_uid).await;
             return None;
         }
 
@@ -372,7 +404,7 @@ impl ValidatorLoop {
             let tile_json = serde_json::json!({
                 "input_data": crate::tensor::arrayd_to_json(&tile.into_dyn())
             });
-            self.enqueue_request(DSliceRequest {
+            staged.stage_request(DSliceRequest {
                 circuit: circuit.clone(),
                 inputs: tile_json,
                 request_type: RequestType::DSlice,
