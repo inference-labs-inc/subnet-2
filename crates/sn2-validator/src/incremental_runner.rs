@@ -2,15 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::tensor::arrayd_to_json;
-use dsperse::pipeline::{IncrementalRun, SliceExecutionResult, SliceWork};
-use dsperse::schema::execution::{ExecutionInfo, ExecutionMethod};
+use dsperse::pipeline::{CombinedRun, SliceWork};
 use dsperse::schema::tiling::TilingInfo;
 use sn2_types::{BoundedFifoSet, ProofSystem, RunSource};
 use tracing::{debug, info, warn};
 
 pub enum TileBufferOutcome {
     Waiting,
-    Ready(ndarray::ArrayD<f64>),
+    AllReceived,
     Failed(String),
 }
 
@@ -36,23 +35,12 @@ pub struct ActiveRun {
     pub last_activity: Instant,
     pub artifacts: Vec<SliceArtifact>,
     pub relay_request_id: Option<u32>,
-    pub incremental: Option<IncrementalRun>,
+    pub combined: Option<CombinedRun>,
 }
 
-pub struct NextSliceInfo {
-    pub slice_id: String,
-    pub inputs_json: serde_json::Value,
-    pub use_circuit: bool,
-    pub onnx_path: Option<String>,
-    pub circuit_path: Option<String>,
-    pub input_tensor: ndarray::ArrayD<f64>,
-    pub named_inputs: Vec<(String, ndarray::ArrayD<f64>)>,
-    pub tiling: Option<TilingInfo>,
-}
-
-struct TileBuffer {
-    tiling: TilingInfo,
-    tiles: Vec<Option<ndarray::ArrayD<f64>>>,
+struct TileCounter {
+    total: usize,
+    received: usize,
 }
 
 const EVICTED_CAP: usize = 256;
@@ -60,7 +48,7 @@ const EVICTED_CAP: usize = 256;
 pub struct IncrementalRunManager {
     runs: HashMap<String, ActiveRun>,
     evicted: BoundedFifoSet<String>,
-    tile_buffers: HashMap<(String, String), TileBuffer>,
+    tile_counters: HashMap<(String, String), TileCounter>,
 }
 
 impl Default for IncrementalRunManager {
@@ -68,7 +56,7 @@ impl Default for IncrementalRunManager {
         Self {
             runs: HashMap::new(),
             evicted: BoundedFifoSet::new(EVICTED_CAP),
-            tile_buffers: HashMap::new(),
+            tile_counters: HashMap::new(),
         }
     }
 }
@@ -85,7 +73,7 @@ impl IncrementalRunManager {
         circuit_name: String,
         run_source: RunSource,
         relay_request_id: Option<u32>,
-        incremental: Option<IncrementalRun>,
+        combined: Option<CombinedRun>,
     ) {
         if self.runs.contains_key(&run_uid) {
             warn!(
@@ -107,7 +95,7 @@ impl IncrementalRunManager {
                 last_activity: now,
                 artifacts: Vec::new(),
                 relay_request_id,
-                incremental,
+                combined,
             },
         );
     }
@@ -121,67 +109,39 @@ impl IncrementalRunManager {
             Some(r) => r,
             None => return (0, 0, HashMap::new()),
         };
-        let inc = match run.incremental.as_ref() {
-            Some(i) => i,
-            None => return (0, 0, HashMap::new()),
-        };
-        let meta = inc.model_meta();
-        let total_slices = meta.slices.len();
-        let mut map = HashMap::with_capacity(total_slices);
-        let mut total_tiles = 0usize;
-        for s in &meta.slices {
-            let tiles = s.tiling.as_ref().map(|t| t.num_tiles).unwrap_or(1);
-            map.insert(format!("slice_{}", s.index), tiles);
-            total_tiles += tiles;
+        match run.combined.as_ref() {
+            Some(c) => c.slice_tile_counts(),
+            None => (0, 0, HashMap::new()),
         }
-        (total_slices, total_tiles, map)
     }
 
     pub fn is_evicted(&self, run_uid: &str) -> bool {
         self.evicted.contains(run_uid)
     }
 
-    pub fn get_circuit_id(&self, run_uid: &str) -> Option<&str> {
-        self.runs.get(run_uid).map(|r| r.circuit_id.as_str())
-    }
-
     pub fn get_run_source(&self, run_uid: &str) -> Option<RunSource> {
         self.runs.get(run_uid).map(|r| r.run_source)
     }
 
-    pub fn next_slice(&self, run_uid: &str) -> anyhow::Result<Option<NextSliceInfo>> {
-        let run = match self.runs.get(run_uid) {
-            Some(r) => r,
-            None => return Ok(None),
-        };
-        let inc = match run.incremental.as_ref() {
-            Some(i) => i,
-            None => return Ok(None),
-        };
-        let work: SliceWork = match inc.next_slice()? {
-            Some(w) => w,
-            None => return Ok(None),
-        };
-        let inputs_json = serde_json::json!({
-            "input_data": arrayd_to_json(&work.input)
-        });
-        Ok(Some(NextSliceInfo {
-            slice_id: work.slice_id,
-            inputs_json,
-            use_circuit: work.use_circuit,
-            onnx_path: work.onnx_path,
-            circuit_path: work.circuit_path,
-            input_tensor: work.input,
-            named_inputs: work.named_inputs,
-            tiling: work.tiling,
-        }))
+    pub fn all_circuit_work(&self, run_uid: &str) -> anyhow::Result<Vec<SliceWork>> {
+        let run = self
+            .runs
+            .get(run_uid)
+            .ok_or_else(|| anyhow::anyhow!("unknown run {run_uid}"))?;
+        let combined = run
+            .combined
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("run {run_uid} has no CombinedRun"))?;
+        combined
+            .all_circuit_work()
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub fn init_tile_buffer(
+    pub fn init_tile_counter(
         &mut self,
         run_uid: &str,
         slice_id: &str,
-        tiling: TilingInfo,
+        tiling: &TilingInfo,
     ) -> anyhow::Result<()> {
         let expected = tiling.tiles_y * tiling.tiles_x;
         if tiling.num_tiles != expected {
@@ -194,129 +154,88 @@ impl IncrementalRunManager {
             run_uid = %run_uid,
             slice = %slice_id,
             num_tiles = tiling.num_tiles,
-            tiles_y = tiling.tiles_y,
-            tiles_x = tiling.tiles_x,
-            "initialized tile buffer"
+            "initialized tile counter"
         );
-        let num_tiles = tiling.num_tiles;
         let key = (run_uid.to_string(), slice_id.to_string());
         use std::collections::hash_map::Entry;
-        match self.tile_buffers.entry(key) {
+        match self.tile_counters.entry(key) {
             Entry::Vacant(e) => {
-                e.insert(TileBuffer {
-                    tiling,
-                    tiles: vec![None; num_tiles],
+                e.insert(TileCounter {
+                    total: tiling.num_tiles,
+                    received: 0,
                 });
             }
             Entry::Occupied(_) => {
                 return Err(anyhow::anyhow!(
-                    "tile buffer already exists for run {run_uid}, slice {slice_id}"
+                    "tile counter already exists for run {run_uid}, slice {slice_id}"
                 ));
             }
         }
         Ok(())
     }
 
-    pub fn buffer_tile_result(
+    pub fn record_tile(
         &mut self,
         run_uid: &str,
         slice_id: &str,
         tile_idx: u32,
-        output: ndarray::ArrayD<f64>,
     ) -> TileBufferOutcome {
         if let Some(run) = self.runs.get_mut(run_uid) {
             run.last_activity = Instant::now();
         }
         let key = (run_uid.to_string(), slice_id.to_string());
-        let buf = match self.tile_buffers.get_mut(&key) {
-            Some(b) => b,
+        let counter = match self.tile_counters.get_mut(&key) {
+            Some(c) => c,
             None => {
                 return TileBufferOutcome::Failed(format!(
-                    "no tile buffer for run={run_uid} slice={slice_id}"
+                    "no tile counter for run={run_uid} slice={slice_id}"
                 ));
             }
         };
-        let idx = tile_idx as usize;
-        if idx >= buf.tiles.len() {
-            return TileBufferOutcome::Failed(format!(
-                "tile_idx {tile_idx} out of range (expected < {})",
-                buf.tiles.len()
-            ));
-        }
-        buf.tiles[idx] = Some(output);
 
-        let received = buf.tiles.iter().filter(|t| t.is_some()).count();
-        let total = buf.tiles.len();
+        counter.received += 1;
         debug!(
             run_uid = %run_uid,
             slice = %slice_id,
             tile_idx = tile_idx,
-            received = received,
-            total = total,
-            "buffered tile result"
+            received = counter.received,
+            total = counter.total,
+            "recorded tile proof"
         );
 
-        if received < total {
+        if counter.received < counter.total {
             return TileBufferOutcome::Waiting;
         }
 
-        let buf = self.tile_buffers.get(&key).unwrap();
-        let tile_outputs: Vec<ndarray::ArrayD<f64>> =
-            buf.tiles.iter().map(|t| t.clone().unwrap()).collect();
+        self.tile_counters.remove(&key);
+        info!(
+            run_uid = %run_uid,
+            slice = %slice_id,
+            "all tile proofs received"
+        );
+        TileBufferOutcome::AllReceived
+    }
 
-        match dsperse::pipeline::reconstruct_from_tiles(&tile_outputs, &buf.tiling) {
-            Ok(full) => {
-                self.tile_buffers.remove(&key);
-                info!(
-                    run_uid = %run_uid,
-                    slice = %slice_id,
-                    output_shape = ?full.shape(),
-                    "reconstructed full output from tiles"
-                );
-                TileBufferOutcome::Ready(full)
+    pub fn mark_slice_done(&mut self, run_uid: &str, slice_id: &str) {
+        if let Some(run) = self.runs.get_mut(run_uid) {
+            run.last_activity = Instant::now();
+            if let Some(ref mut combined) = run.combined {
+                combined.mark_slice_done(slice_id);
             }
-            Err(e) => TileBufferOutcome::Failed(format!(
-                "tile reconstruction failed for run={run_uid} slice={slice_id}: {e}"
-            )),
         }
     }
 
-    pub fn apply_result_tensor(
-        &mut self,
-        run_uid: &str,
-        slice_id: &str,
-        output_tensor: ndarray::ArrayD<f64>,
-    ) -> anyhow::Result<bool> {
-        let run = self
-            .runs
-            .get_mut(run_uid)
-            .ok_or_else(|| anyhow::anyhow!("unknown run {run_uid}"))?;
-        run.last_activity = Instant::now();
-        let inc = run
-            .incremental
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("run {run_uid} has no IncrementalRun"))?;
-
-        inc.apply_result(SliceExecutionResult {
-            slice_id: slice_id.to_string(),
-            output: output_tensor,
-            execution_info: ExecutionInfo {
-                method: ExecutionMethod::OnnxOnly,
-                success: true,
-                error: None,
-                witness_file: None,
-                tile_exec_infos: Vec::new(),
-            },
-        })
-        .map_err(|e| anyhow::anyhow!("apply_result: {e}"))?;
-
-        Ok(inc.is_complete())
+    pub fn is_run_complete(&self, run_uid: &str) -> bool {
+        self.runs
+            .get(run_uid)
+            .and_then(|r| r.combined.as_ref())
+            .is_some_and(|c| c.is_complete())
     }
 
     pub fn final_output_json(&self, run_uid: &str) -> Option<serde_json::Value> {
         let run = self.runs.get(run_uid)?;
-        let inc = run.incremental.as_ref()?;
-        let output = inc.final_output()?;
+        let combined = run.combined.as_ref()?;
+        let output = combined.final_output()?;
         Some(arrayd_to_json(output))
     }
 
@@ -327,7 +246,7 @@ impl IncrementalRunManager {
     }
 
     pub fn remove_run(&mut self, run_uid: &str) -> Option<ActiveRun> {
-        self.tile_buffers.retain(|(uid, _), _| uid != run_uid);
+        self.tile_counters.retain(|(uid, _), _| uid != run_uid);
         self.runs.remove(run_uid)
     }
 
@@ -357,7 +276,7 @@ impl IncrementalRunManager {
             .map(|(uid, _)| uid.clone())
             .collect();
         let evict_set: HashSet<&str> = to_remove.iter().map(|s| s.as_str()).collect();
-        self.tile_buffers
+        self.tile_counters
             .retain(|(run_uid, _), _| !evict_set.contains(run_uid.as_str()));
         for uid in to_remove.iter() {
             self.runs.remove(uid);
@@ -378,7 +297,7 @@ impl IncrementalRunManager {
             info!(count = stale.len(), run_uids = ?stale, "evicting idle runs");
         }
         let stale_set: HashSet<&str> = stale.iter().map(|s| s.as_str()).collect();
-        self.tile_buffers
+        self.tile_counters
             .retain(|(run_uid, _), _| !stale_set.contains(run_uid.as_str()));
         for uid in stale.iter() {
             self.runs.remove(uid);

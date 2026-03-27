@@ -92,79 +92,6 @@ impl ValidatorLoop {
         }
     }
 
-    pub(super) async fn finalize_api_run(&mut self, run_uid: &str, slice_num: &str) {
-        let scale_key = (run_uid.to_string(), slice_num.to_string());
-        let scale = self.dslice_input_scales.remove(&scale_key);
-        self.dslice_input_scales
-            .retain(|(uid, _), _| uid != run_uid);
-
-        self.cleanup_previous_slice(run_uid);
-
-        info!(
-            run_uid = %run_uid,
-            slice = %slice_num,
-            "API request: single proven tile complete, finalizing run"
-        );
-        let mut active_run = self.run_manager.remove_run(run_uid);
-
-        if let Some(input_scale) = scale {
-            if let Some(ref mut run) = active_run {
-                for artifact in &mut run.artifacts {
-                    if let Some(ref mut outputs) = artifact.computed_outputs {
-                        if let Ok(mut tensor) = crate::tensor::json_to_arrayd(outputs) {
-                            tensor.mapv_inplace(|v| v * input_scale);
-                            *outputs = crate::tensor::arrayd_to_json(&tensor);
-                        }
-                    }
-                }
-                info!(
-                    run_uid = %run_uid,
-                    scale = input_scale,
-                    "denormalized API run artifact outputs"
-                );
-            }
-        }
-
-        if let Some(ref run) = active_run {
-            self.report_dsperse_completion(run);
-            self.spawn_emit_run_complete(run, true);
-        }
-        self.spawn_artifact_upload(run_uid, &mut active_run, None);
-        self.notify_run_completed(run_uid, &active_run).await;
-    }
-
-    pub(super) async fn denormalize_and_apply_output(
-        &mut self,
-        run_uid: &str,
-        slice_num: &str,
-        computed: &serde_json::Value,
-    ) {
-        let scale_key = (run_uid.to_string(), slice_num.to_string());
-        let scale = self.dslice_input_scales.remove(&scale_key);
-
-        let mut tensor = match crate::tensor::json_to_arrayd(computed) {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(run_uid = %run_uid, slice = %slice_num, error = %e, "output tensor conversion failed, removing run");
-                self.teardown_run(run_uid).await;
-                return;
-            }
-        };
-
-        if let Some(scale) = scale {
-            tensor.mapv_inplace(|v| v * scale);
-            info!(
-                run_uid = %run_uid,
-                slice = %slice_num,
-                scale,
-                "denormalized circuit output"
-            );
-        }
-
-        self.apply_dslice_result_tensor(run_uid, slice_num, tensor)
-            .await;
-    }
-
     pub(super) fn attempt_retry(&mut self, retry_payload: RetryPayload, next_retry: u32) -> bool {
         match retry_payload {
             RetryPayload::Rwr(mut rwr) => {
@@ -267,11 +194,6 @@ impl ValidatorLoop {
             },
         );
 
-        if self.run_manager.get_run_source(&run_uid) == Some(RunSource::Api) {
-            self.finalize_api_run(&run_uid, &slice_num).await;
-            return;
-        }
-
         if is_tile {
             let tile_idx = match tile_idx {
                 Some(idx) => idx,
@@ -282,118 +204,29 @@ impl ValidatorLoop {
                 }
             };
 
-            let computed = response
-                .computed_outputs
-                .as_ref()
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-
-            let tile_output = match crate::tensor::json_to_arrayd(&computed) {
-                Ok(t) => t,
-                Err(e) => {
-                    warn!(
-                        run_uid = %run_uid,
-                        slice = %slice_num,
-                        tile_idx = tile_idx,
-                        error = %e,
-                        "tile output tensor conversion failed, removing run"
-                    );
-                    self.teardown_run(&run_uid).await;
-                    return;
-                }
-            };
-
             use crate::incremental_runner::TileBufferOutcome;
-            match self
-                .run_manager
-                .buffer_tile_result(&run_uid, &slice_num, tile_idx, tile_output)
-            {
+            match self.run_manager.record_tile(&run_uid, &slice_num, tile_idx) {
                 TileBufferOutcome::Waiting => return,
-                TileBufferOutcome::Ready(mut full_output) => {
-                    let scale_key = (run_uid.clone(), slice_num.clone());
-                    if let Some(scale) = self.dslice_input_scales.remove(&scale_key) {
-                        full_output.mapv_inplace(|v| v * scale);
-                        info!(
-                            run_uid = %run_uid,
-                            slice = %slice_num,
-                            scale,
-                            "denormalized tiled circuit output"
-                        );
-                    }
-                    self.apply_dslice_result_tensor(&run_uid, &slice_num, full_output)
-                        .await;
+                TileBufferOutcome::AllReceived => {
+                    self.run_manager.mark_slice_done(&run_uid, &slice_num);
                 }
                 TileBufferOutcome::Failed(reason) => {
                     warn!(
                         run_uid = %run_uid,
                         slice = %slice_num,
                         error = %reason,
-                        "tile buffering failed, removing run"
+                        "tile tracking failed, removing run"
                     );
                     self.teardown_run(&run_uid).await;
+                    return;
                 }
             }
-            return;
+        } else {
+            self.run_manager.mark_slice_done(&run_uid, &slice_num);
         }
 
-        let computed = response
-            .computed_outputs
-            .as_ref()
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-
-        self.denormalize_and_apply_output(&run_uid, &slice_num, &computed)
-            .await;
-    }
-
-    pub(super) async fn apply_dslice_result_tensor(
-        &mut self,
-        run_uid: &str,
-        slice_num: &str,
-        output: ndarray::ArrayD<f64>,
-    ) {
-        match self
-            .run_manager
-            .apply_result_tensor(run_uid, slice_num, output)
-        {
-            Ok(is_complete) => {
-                if is_complete {
-                    self.cleanup_previous_slice(run_uid);
-                    info!(run_uid = %run_uid, "incremental run complete");
-
-                    let final_output = self.run_manager.final_output_json(run_uid);
-                    let mut active_run = self.run_manager.remove_run(run_uid);
-
-                    if let Some(ref run) = active_run {
-                        self.report_dsperse_completion(run);
-                        self.spawn_emit_run_complete(run, true);
-                    }
-
-                    self.spawn_artifact_upload(run_uid, &mut active_run, final_output);
-                    self.notify_run_completed(run_uid, &active_run).await;
-                } else {
-                    self.enqueue_next_dslice_from_run(run_uid).await;
-                }
-            }
-            Err(e) => {
-                warn!(run_uid = %run_uid, error = %e, "failed to apply slice result, removing run");
-                self.teardown_run(run_uid).await;
-            }
-        }
-    }
-
-    pub(super) async fn enqueue_next_dslice_from_run(&mut self, run_uid: &str) {
-        if !self.run_manager.has_run(run_uid) {
-            return;
-        }
-        let circuit_id = self
-            .run_manager
-            .get_circuit_id(run_uid)
-            .map(|s| s.to_string());
-        if let Some(cid) = circuit_id {
-            if let Some(circuit) = self.circuit_store.get_circuit(&cid).cloned() {
-                self.enqueue_next_dslice(run_uid, &circuit).await;
-            }
+        if self.run_manager.is_run_complete(&run_uid) {
+            self.finalize_combined_run(&run_uid).await;
         }
     }
 

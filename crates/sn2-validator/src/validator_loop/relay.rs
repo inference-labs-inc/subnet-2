@@ -154,10 +154,7 @@ impl ValidatorLoop {
 
         let total_run_time_sec = run.started_at.elapsed().as_secs_f64();
         let mut failed_count = 0usize;
-        let model_slices = run
-            .incremental
-            .as_ref()
-            .map(|i| i.model_meta().slices.clone());
+        let model_slices = run.combined.as_ref().map(|c| c.model_meta().slices.clone());
         let slice_reports: Vec<DsperseSliceReport> = run
             .artifacts
             .iter()
@@ -194,9 +191,9 @@ impl ValidatorLoop {
         let all_successful = failed_count == 0 && !slice_reports.is_empty();
 
         let total_slices = run
-            .incremental
+            .combined
             .as_ref()
-            .map(|i| i.model_meta().slices.len())
+            .map(|c| c.model_meta().slices.len())
             .unwrap_or(slice_reports.len());
 
         reporter.report_dsperse_run(DsperseRunReport {
@@ -227,7 +224,7 @@ impl ValidatorLoop {
     }
 
     pub(super) async fn teardown_run(&mut self, run_uid: &str) {
-        self.cleanup_previous_slice(run_uid);
+        self.cleanup_extracted_slices(run_uid);
         let removed = self.run_manager.remove_run(run_uid);
         if let Some(ref run) = removed {
             self.spawn_emit_run_complete(run, false);
