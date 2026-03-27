@@ -173,17 +173,18 @@ impl ValidatorLoop {
             .await;
     }
 
-    pub(super) fn cleanup_extracted_slices(&mut self, run_uid: &str) {
+    pub(super) async fn cleanup_extracted_slices(&mut self, run_uid: &str) {
         if let Some(slices) = self.active_extracted_slices.remove(run_uid) {
             let run_uid = run_uid.to_string();
-            tokio::task::spawn_blocking(move || {
+            let _ = tokio::task::spawn_blocking(move || {
                 for (dir, sid) in slices {
                     let slice_path = dir.join(&sid);
                     sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
                     sn2_circuit_store::cleanup_extracted_slice(&dir, &sid);
                 }
                 tracing::debug!(run_uid = %run_uid, "extracted slices cleaned up");
-            });
+            })
+            .await;
         }
     }
 
@@ -425,7 +426,7 @@ impl ValidatorLoop {
     }
 
     pub(super) async fn finalize_combined_run(&mut self, run_uid: &str) {
-        self.cleanup_extracted_slices(run_uid);
+        self.cleanup_extracted_slices(run_uid).await;
         self.dslice_input_scales
             .retain(|(uid, _), _| uid != run_uid);
 

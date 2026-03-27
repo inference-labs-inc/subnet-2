@@ -155,7 +155,7 @@ impl ValidatorLoop {
             if !evicted.is_empty() {
                 info!(circuit = %circuit_id, runs = ?evicted, "evicted in-flight runs for deactivated circuit");
                 for run_id in &evicted {
-                    self.cleanup_extracted_slices(run_id);
+                    self.cleanup_extracted_slices(run_id).await;
                     self.dslice_input_scales.retain(|(uid, _), _| uid != run_id);
                     self.relay_remove_pending(run_id).await;
                 }
@@ -175,7 +175,7 @@ impl ValidatorLoop {
     async fn gc_stale_runs(&mut self) {
         let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
         for uid in &evicted {
-            self.cleanup_extracted_slices(uid);
+            self.cleanup_extracted_slices(uid).await;
             self.dslice_input_scales
                 .retain(|(run_uid, _), _| run_uid != uid);
             self.relay_remove_pending(uid).await;
