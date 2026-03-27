@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -11,7 +10,6 @@ use crate::relay::DsperseSubmission;
 
 struct StagedWork {
     requests: VecDeque<DSliceRequest>,
-    extracted: Vec<(PathBuf, String)>,
     events: Vec<(String, String, usize)>,
 }
 
@@ -19,7 +17,6 @@ impl StagedWork {
     fn new() -> Self {
         Self {
             requests: VecDeque::new(),
-            extracted: Vec::new(),
             events: Vec::new(),
         }
     }
@@ -175,16 +172,19 @@ impl ValidatorLoop {
 
     pub(super) async fn cleanup_extracted_slices(&mut self, run_uid: &str) {
         if let Some(slices) = self.active_extracted_slices.remove(run_uid) {
-            let run_uid = run_uid.to_string();
-            let _ = tokio::task::spawn_blocking(move || {
+            let uid = run_uid.to_string();
+            if let Err(e) = tokio::task::spawn_blocking(move || {
                 for (dir, sid) in slices {
                     let slice_path = dir.join(&sid);
                     sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
                     sn2_circuit_store::cleanup_extracted_slice(&dir, &sid);
                 }
-                tracing::debug!(run_uid = %run_uid, "extracted slices cleaned up");
+                tracing::debug!(run_uid = %uid, "extracted slices cleaned up");
             })
-            .await;
+            .await
+            {
+                warn!(run_uid = %run_uid, error = %e, "slice cleanup task failed");
+            }
         }
     }
 
@@ -232,10 +232,7 @@ impl ValidatorLoop {
         }
     }
 
-    fn flush_staged(&mut self, run_uid: &str, staged: StagedWork) {
-        self.active_extracted_slices
-            .insert(run_uid.to_string(), staged.extracted);
-
+    fn flush_staged(&mut self, staged: StagedWork) {
         for request in staged.requests {
             match request.run_source {
                 RunSource::Api => self.api_dslice_queue.push_back(request),
@@ -275,6 +272,8 @@ impl ValidatorLoop {
             return;
         }
 
+        self.active_extracted_slices
+            .insert(run_uid.to_string(), Vec::new());
         let mut staged = StagedWork::new();
 
         for work in work_items {
@@ -285,9 +284,9 @@ impl ValidatorLoop {
                 self.teardown_run(run_uid).await;
                 return;
             }
-            staged
-                .extracted
-                .push((slices_dir.clone(), work.slice_id.clone()));
+            if let Some(slices) = self.active_extracted_slices.get_mut(run_uid) {
+                slices.push((slices_dir.clone(), work.slice_id.clone()));
+            }
 
             let mut input_tensor = work.input;
 
@@ -349,7 +348,7 @@ impl ValidatorLoop {
         }
 
         let total_queued = staged.total_queued();
-        self.flush_staged(run_uid, staged);
+        self.flush_staged(staged);
 
         info!(
             run_uid = %run_uid,
