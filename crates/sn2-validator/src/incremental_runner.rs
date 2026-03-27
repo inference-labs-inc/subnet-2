@@ -187,9 +187,13 @@ impl IncrementalRunManager {
         let counter = match self.tile_counters.get_mut(&key) {
             Some(c) => c,
             None => {
-                return TileBufferOutcome::Failed(format!(
-                    "no tile counter for run={run_uid} slice={slice_id}"
-                ));
+                debug!(
+                    run_uid = %run_uid,
+                    slice = %slice_id,
+                    tile_idx,
+                    "tile counter absent, late/duplicate tile after slice completion"
+                );
+                return TileBufferOutcome::Waiting;
             }
         };
 

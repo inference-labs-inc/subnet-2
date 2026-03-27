@@ -164,12 +164,12 @@ impl ValidatorLoop {
         }
     }
 
-    fn normalize_input(
+    fn normalize_tensor(
         &mut self,
         run_uid: &str,
         slice_id: &str,
         input_tensor: &mut ndarray::ArrayD<f64>,
-    ) -> serde_json::Value {
+    ) {
         let input_max_abs = input_tensor.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
         if input_max_abs > 1.0 {
             input_tensor.mapv_inplace(|v| v / input_max_abs);
@@ -182,9 +182,6 @@ impl ValidatorLoop {
                 "normalized circuit slice inputs to [-1, 1]"
             );
         }
-        serde_json::json!({
-            "input_data": crate::tensor::arrayd_to_json(input_tensor)
-        })
     }
 
     async fn extract_slice(
@@ -262,7 +259,7 @@ impl ValidatorLoop {
                 return;
             }
 
-            let inputs_json = self.normalize_input(run_uid, &work.slice_id, &mut input_tensor);
+            self.normalize_tensor(run_uid, &work.slice_id, &mut input_tensor);
 
             let queued = if let Some(ref tiling) = work.tiling {
                 match self
@@ -281,6 +278,9 @@ impl ValidatorLoop {
                     None => return,
                 }
             } else {
+                let inputs_json = serde_json::json!({
+                    "input_data": crate::tensor::arrayd_to_json(&input_tensor)
+                });
                 self.enqueue_request(DSliceRequest {
                     circuit: circuit.clone(),
                     inputs: inputs_json,
