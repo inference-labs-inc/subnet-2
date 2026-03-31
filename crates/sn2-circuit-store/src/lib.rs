@@ -868,7 +868,7 @@ impl CircuitStore {
         if !self
             .inflight_downloads
             .lock()
-            .unwrap()
+            .unwrap_or_else(|p| p.into_inner())
             .insert(circuit_id.to_string())
         {
             return;
