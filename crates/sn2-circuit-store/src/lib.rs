@@ -213,19 +213,7 @@ impl CircuitStore {
         }
 
         info!(id = circuit_id, "circuit not loaded, fetching from API");
-        let url = format!("{}/circuits/{}", self.api_url, circuit_id);
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .context("fetching circuit from API")?;
-
-        if !resp.status().is_success() {
-            anyhow::bail!("API returned {} for circuit {}", resp.status(), circuit_id);
-        }
-
-        let data: serde_json::Value = resp.json().await.context("parsing circuit response")?;
+        let data = self.fetch_circuit_or_model(circuit_id).await?;
         let circuit = self.cache_and_load_circuit(circuit_id, &data).await?;
         self.circuits
             .insert(circuit_id.to_string(), circuit.clone());
@@ -321,27 +309,110 @@ impl CircuitStore {
 
     pub const REFRESH_INTERVAL: u64 = REFRESH_INTERVAL_SECS;
 
-    async fn fetch_circuits_from_api(&self) -> Result<Vec<serde_json::Value>> {
-        let url = format!("{}/circuits", self.api_url);
+    async fn fetch_circuit_or_model(&self, id: &str) -> Result<serde_json::Value> {
+        let circuit_url = format!("{}/circuits/{}", self.api_url, id);
         let resp = self
             .http
-            .get(&url)
+            .get(&circuit_url)
             .send()
             .await
-            .context("fetching circuits list")?;
+            .context("fetching circuit from API")?;
 
-        if !resp.status().is_success() {
-            anyhow::bail!("API returned {}", resp.status());
+        if resp.status().is_success() {
+            return resp.json().await.context("parsing circuit response");
         }
 
-        let data: serde_json::Value = resp.json().await.context("parsing circuits response")?;
-        let circuits = data
-            .get("circuits")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
+        info!(id, "circuit not found, trying models endpoint");
+        let model_url = format!("{}/models/{}", self.api_url, id);
+        let model_resp = self
+            .http
+            .get(&model_url)
+            .send()
+            .await
+            .context("fetching model from API")?;
 
-        Ok(circuits)
+        if !model_resp.status().is_success() {
+            anyhow::bail!(
+                "API returned {} for circuit/model {}",
+                model_resp.status(),
+                id
+            );
+        }
+
+        let model: serde_json::Value =
+            model_resp.json().await.context("parsing model response")?;
+        Ok(self.normalize_model_to_circuit(&model))
+    }
+
+    fn normalize_model_to_circuit(&self, model: &serde_json::Value) -> serde_json::Value {
+        let metadata = model.get("metadata").cloned().unwrap_or_default();
+        let composition = model.get("composition").cloned().unwrap_or_default();
+        let proof_system = composition
+            .get("components")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("proof_system"))
+            .cloned()
+            .unwrap_or(serde_json::json!("JSTPROVE"));
+
+        serde_json::json!({
+            "id": model.get("id").cloned().unwrap_or_default(),
+            "metadata": {
+                "name": metadata.get("name").cloned().unwrap_or_default(),
+                "description": metadata.get("description").cloned().unwrap_or_default(),
+                "author": metadata.get("author").cloned().unwrap_or_default(),
+                "version": metadata.get("version").cloned().unwrap_or_default(),
+                "type": "DSPERSE_PROOF_GENERATION",
+                "proof_system": proof_system,
+                "netuid": metadata.get("netuid").cloned().unwrap_or(serde_json::Value::Null),
+                "weights_version": metadata.get("weights_version").cloned().unwrap_or(serde_json::Value::Null),
+                "timeout": metadata.get("timeout").cloned().unwrap_or(serde_json::json!(3600)),
+                "input_schema": metadata.get("input_schema").cloned().unwrap_or_default(),
+                "image_url": metadata.get("image_url").cloned().unwrap_or(serde_json::Value::Null),
+            },
+            "composition": composition,
+            "files": {},
+            "is_active": model.get("is_active").cloned().unwrap_or(serde_json::json!(1)),
+            "created_at": model.get("created_at").cloned().unwrap_or_default(),
+            "updated_at": model.get("updated_at").cloned().unwrap_or_default(),
+        })
+    }
+
+    async fn fetch_circuits_from_api(&self) -> Result<Vec<serde_json::Value>> {
+        let mut all = Vec::new();
+
+        let circuits_url = format!("{}/circuits", self.api_url);
+        if let Ok(resp) = self.http.get(&circuits_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(data) = resp.json::<serde_json::Value>().await {
+                    if let Some(circuits) = data.get("circuits").and_then(|v| v.as_array()) {
+                        all.extend(circuits.iter().cloned());
+                    }
+                }
+            }
+        }
+
+        let models_url = format!("{}/models", self.api_url);
+        if let Ok(resp) = self.http.get(&models_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(data) = resp.json::<serde_json::Value>().await {
+                    if let Some(models) = data.get("models").and_then(|v| v.as_array()) {
+                        let existing_ids: std::collections::HashSet<String> = all
+                            .iter()
+                            .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
+                            .collect();
+                        for model in models {
+                            let id = model.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+                            if !existing_ids.contains(id) {
+                                all.push(self.normalize_model_to_circuit(model));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(all)
     }
 
     async fn fetch_pinned_circuits(
