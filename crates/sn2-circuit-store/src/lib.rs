@@ -625,16 +625,17 @@ impl CircuitStore {
         let total = components.len();
         info!(model_id, total, "downloading composable model components");
 
-        self.inflight_downloads
-            .lock()
-            .unwrap()
-            .insert(model_id.to_string());
+        if let Ok(mut set) = self.inflight_downloads.lock() {
+            set.insert(model_id.to_string());
+        }
 
         let result = self
             .download_composable_components(&slices_dir, components, model_id, data)
             .await;
 
-        self.inflight_downloads.lock().unwrap().remove(model_id);
+        if let Ok(mut set) = self.inflight_downloads.lock() {
+            set.remove(model_id);
+        }
 
         match result {
             Ok(()) => {
@@ -728,7 +729,8 @@ impl CircuitStore {
                 let wb_sha = wb
                     .get("sha256")
                     .and_then(|v| v.as_str())
-                    .unwrap_or_default();
+                    .filter(|s| !s.is_empty())
+                    .with_context(|| format!("{comp_name}: weight blob missing sha256"))?;
                 let default_wb = format!("{comp_name}.onnx");
                 let raw_wb = wb
                     .get("filename")
