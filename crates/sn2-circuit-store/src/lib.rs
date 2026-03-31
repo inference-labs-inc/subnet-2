@@ -468,45 +468,66 @@ impl CircuitStore {
         let metadata_json = serde_json::to_string_pretty(metadata_value)?;
         let is_dsperse = metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION;
 
-        let files = resolve_files(data);
-        if files.is_empty() && data.get("files").is_some() {
-            warn!(
-                circuit_id,
-                "API provided files but none could be resolved, circuit may be unusable"
-            );
-        }
-        if !files.is_empty() {
-            if is_dsperse {
-                let slices_dir = cache_path.join("slices");
-                std::fs::create_dir_all(&slices_dir)
-                    .with_context(|| format!("creating slices dir {}", slices_dir.display()))?;
-            }
+        let has_composition = data.get("composition").is_some_and(|c| {
+            c.get("components")
+                .and_then(|a| a.as_array())
+                .is_some_and(|a| !a.is_empty())
+        });
 
-            let file_map = data.get("file_map").and_then(|v| v.as_object());
-            let explicit_checksums = data
-                .get("checksums")
-                .and_then(|v| v.as_object())
-                .cloned()
-                .unwrap_or_default();
-            let checksums = derive_checksums(file_map, &explicit_checksums);
-
-            let deferred_downloads = match self
-                .download_circuit_files(&files, &cache_path, is_dsperse, &checksums)
+        if has_composition && is_dsperse {
+            match self
+                .download_composable_model(circuit_id, data, &cache_path)
                 .await
             {
-                Ok(d) => d,
+                Ok(()) => {}
                 Err(e) => {
                     if is_fresh {
                         let _ = std::fs::remove_dir_all(&cache_path);
                     }
-                    return Err(e);
+                    return Err(e.context("downloading composable model"));
                 }
-            };
+            }
+        } else {
+            let files = resolve_files(data);
+            if files.is_empty() && data.get("files").is_some() {
+                warn!(
+                    circuit_id,
+                    "API provided files but none could be resolved, circuit may be unusable"
+                );
+            }
+            if !files.is_empty() {
+                if is_dsperse {
+                    let slices_dir = cache_path.join("slices");
+                    std::fs::create_dir_all(&slices_dir)
+                        .with_context(|| format!("creating slices dir {}", slices_dir.display()))?;
+                }
 
-            if !deferred_downloads.is_empty() {
-                self.spawn_deferred_downloads(circuit_id, &cache_path, deferred_downloads);
-            } else if is_dsperse {
-                let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
+                let file_map = data.get("file_map").and_then(|v| v.as_object());
+                let explicit_checksums = data
+                    .get("checksums")
+                    .and_then(|v| v.as_object())
+                    .cloned()
+                    .unwrap_or_default();
+                let checksums = derive_checksums(file_map, &explicit_checksums);
+
+                let deferred_downloads = match self
+                    .download_circuit_files(&files, &cache_path, is_dsperse, &checksums)
+                    .await
+                {
+                    Ok(d) => d,
+                    Err(e) => {
+                        if is_fresh {
+                            let _ = std::fs::remove_dir_all(&cache_path);
+                        }
+                        return Err(e);
+                    }
+                };
+
+                if !deferred_downloads.is_empty() {
+                    self.spawn_deferred_downloads(circuit_id, &cache_path, deferred_downloads);
+                } else if is_dsperse {
+                    let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
+                }
             }
         }
 
@@ -533,6 +554,116 @@ impl CircuitStore {
             settings,
             timeout: CIRCUIT_TIMEOUT_SECONDS as f64,
         })
+    }
+
+    async fn download_composable_model(
+        &self,
+        model_id: &str,
+        data: &serde_json::Value,
+        cache_path: &Path,
+    ) -> Result<()> {
+        let composition = data.get("composition").context("missing composition")?;
+        let components = composition
+            .get("components")
+            .and_then(|v| v.as_array())
+            .context("missing composition.components")?;
+
+        let slices_dir = cache_path.join("slices");
+        std::fs::create_dir_all(&slices_dir)?;
+
+        let total = components.len();
+        info!(model_id, total, "downloading composable model components");
+
+        let inflight = self.inflight_downloads.clone();
+        inflight.lock().unwrap().insert(model_id.to_string());
+
+        for (idx, comp) in components.iter().enumerate() {
+            let default_name = format!("slice_{idx}");
+            let comp_name = comp
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&default_name);
+            let comp_sha = comp
+                .get("sha256")
+                .and_then(|v| v.as_str())
+                .context("component missing sha256")?;
+            let comp_files = comp
+                .get("files")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let weights = comp
+                .get("weights")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            let has_circuit = comp_files.iter().any(|f| f.as_str() == Some("circuit.bin"));
+
+            if has_circuit {
+                let bundle_dir = slices_dir
+                    .join(comp_name)
+                    .join("jstprove")
+                    .join("circuit.bundle");
+                std::fs::create_dir_all(&bundle_dir)?;
+
+                for file_val in &comp_files {
+                    let filename = file_val.as_str().unwrap_or_default();
+                    if filename.is_empty() {
+                        continue;
+                    }
+                    let dest = bundle_dir.join(filename);
+                    if dest.exists() {
+                        continue;
+                    }
+                    let url = format!(
+                        "{}/components/{}/files/{}",
+                        self.api_url, comp_sha, filename
+                    );
+                    self.download_file(&url, &dest).await.with_context(|| {
+                        format!("downloading component file {comp_name}/{filename}")
+                    })?;
+                }
+            }
+
+            let payload_dir = slices_dir.join(comp_name).join("payload");
+            std::fs::create_dir_all(&payload_dir)?;
+
+            for wb in &weights {
+                let wb_sha = wb
+                    .get("sha256")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let default_wb = format!("{comp_name}.onnx");
+                let wb_filename = wb
+                    .get("filename")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&default_wb);
+                let dest = payload_dir.join(wb_filename);
+                if dest.exists() {
+                    continue;
+                }
+                let url = format!("{}/models/wb/{}", self.api_url, wb_sha);
+                self.download_file(&url, &dest)
+                    .await
+                    .with_context(|| format!("downloading weight blob for {comp_name}"))?;
+            }
+
+            if (idx + 1) % 50 == 0 || idx + 1 == total {
+                info!(
+                    model_id,
+                    progress = idx + 1,
+                    total,
+                    "composable model download progress"
+                );
+            }
+        }
+
+        let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
+        inflight.lock().unwrap().remove(model_id);
+
+        info!(model_id, total, "composable model download complete");
+        Ok(())
     }
 
     async fn download_circuit_files(
