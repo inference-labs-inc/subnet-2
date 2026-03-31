@@ -303,7 +303,10 @@ impl CircuitStore {
     }
 
     pub fn is_downloading(&self, circuit_id: &str) -> bool {
-        self.inflight_downloads.lock().unwrap().contains(circuit_id)
+        match self.inflight_downloads.lock() {
+            Ok(set) => set.contains(circuit_id),
+            Err(poisoned) => poisoned.into_inner().contains(circuit_id),
+        }
     }
 
     pub fn is_dsperse_ready(&self, circuit_id: &str) -> bool {
@@ -625,17 +628,19 @@ impl CircuitStore {
         let total = components.len();
         info!(model_id, total, "downloading composable model components");
 
-        if let Ok(mut set) = self.inflight_downloads.lock() {
-            set.insert(model_id.to_string());
-        }
+        self.inflight_downloads
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(model_id.to_string());
 
         let result = self
             .download_composable_components(&slices_dir, components, model_id, data)
             .await;
 
-        if let Ok(mut set) = self.inflight_downloads.lock() {
-            set.remove(model_id);
-        }
+        self.inflight_downloads
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(model_id);
 
         match result {
             Ok(()) => {
@@ -766,7 +771,8 @@ impl CircuitStore {
                 let sha = artifact
                     .get("sha256")
                     .and_then(|v| v.as_str())
-                    .unwrap_or_default();
+                    .filter(|s| !s.is_empty())
+                    .context("model artifact missing sha256")?;
                 let raw_filename = artifact
                     .get("filename")
                     .and_then(|v| v.as_str())
