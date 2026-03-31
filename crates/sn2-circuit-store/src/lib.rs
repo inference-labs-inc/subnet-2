@@ -149,11 +149,14 @@ impl CircuitStore {
             return Ok(());
         }
 
-        let (mut api_circuits, _complete) =
+        let (mut api_circuits, complete) =
             self.fetch_circuits_from_api().await.unwrap_or_else(|e| {
                 warn!(error = %e, "failed to fetch circuits from API, loading from cache only");
                 (Vec::new(), false)
             });
+        if !complete && !api_circuits.is_empty() {
+            warn!("partial API response during startup, proceeding with available circuits");
+        }
 
         let mut active_ids: HashSet<String> = api_circuits
             .iter()
@@ -407,8 +410,10 @@ impl CircuitStore {
                     Ok(data) => {
                         if let Some(circuits) = data.get("circuits").and_then(|v| v.as_array()) {
                             all.extend(circuits.iter().cloned());
+                            circuits_ok = true;
+                        } else {
+                            warn!("circuits response missing 'circuits' array");
                         }
-                        circuits_ok = true;
                     }
                     Err(e) => warn!(error = %e, "failed to parse circuits response"),
                 }
@@ -441,8 +446,10 @@ impl CircuitStore {
                                     all.push(self.normalize_model_to_circuit(model));
                                 }
                             }
+                            models_ok = true;
+                        } else {
+                            warn!("models response missing 'models' array");
                         }
-                        models_ok = true;
                     }
                     Err(e) => warn!(error = %e, "failed to parse models response"),
                 }
@@ -642,12 +649,16 @@ impl CircuitStore {
         }
     }
 
-    fn sanitize_name(raw: &str) -> Option<&str> {
-        let name = Path::new(raw).file_name()?.to_str()?;
-        if name.is_empty() || name == ".." || name.contains('/') || name.contains('\\') {
-            return None;
-        }
-        Some(name)
+    fn sanitize_name<'a>(raw: &'a str, context: &str) -> Result<&'a str> {
+        anyhow::ensure!(
+            !raw.is_empty()
+                && raw != ".."
+                && !raw.contains('/')
+                && !raw.contains('\\')
+                && !raw.contains('\0'),
+            "{context}: invalid name {raw:?}"
+        );
+        Ok(raw)
     }
 
     async fn download_composable_components(
@@ -665,7 +676,7 @@ impl CircuitStore {
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or(&default_name);
-            let comp_name = Self::sanitize_name(raw_name).context("invalid component name")?;
+            let comp_name = Self::sanitize_name(raw_name, "component name")?;
             let comp_sha = comp
                 .get("sha256")
                 .and_then(|v| v.as_str())
@@ -692,9 +703,10 @@ impl CircuitStore {
 
                 for file_val in &comp_files {
                     let raw_filename = file_val.as_str().unwrap_or_default();
-                    let Some(filename) = Self::sanitize_name(raw_filename) else {
+                    if raw_filename.is_empty() {
                         continue;
-                    };
+                    }
+                    let filename = Self::sanitize_name(raw_filename, "component file")?;
                     let dest = bundle_dir.join(filename);
                     if dest.exists() {
                         continue;
@@ -722,7 +734,7 @@ impl CircuitStore {
                     .get("filename")
                     .and_then(|v| v.as_str())
                     .unwrap_or(&default_wb);
-                let wb_filename = Self::sanitize_name(raw_wb).unwrap_or(&default_wb);
+                let wb_filename = Self::sanitize_name(raw_wb, "weight blob file")?;
                 let dest = payload_dir.join(wb_filename);
                 if dest.exists() {
                     continue;
@@ -757,9 +769,7 @@ impl CircuitStore {
                     .get("filename")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
-                let Some(filename) = Self::sanitize_name(raw_filename) else {
-                    continue;
-                };
+                let filename = Self::sanitize_name(raw_filename, "model artifact")?;
                 let dest = slices_dir.join(filename);
                 if dest.exists() {
                     continue;
