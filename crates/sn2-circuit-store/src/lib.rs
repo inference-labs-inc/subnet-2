@@ -189,7 +189,7 @@ impl CircuitStore {
                         self.circuits.insert(id.to_string(), circuit);
                     }
                     Err(e) => {
-                        warn!(id = id, error = %e, "failed to cache circuit");
+                        warn!(id = id, error = ?e, "failed to cache circuit");
                     }
                 }
             }
@@ -322,7 +322,15 @@ impl CircuitStore {
             return resp.json().await.context("parsing circuit response");
         }
 
-        info!(id, "circuit not found, trying models endpoint");
+        if resp.status().as_u16() != 404 {
+            anyhow::bail!(
+                "API returned {} for circuit {}",
+                resp.status(),
+                id
+            );
+        }
+
+        info!(id, "circuit not found (404), trying models endpoint");
         let model_url = format!("{}/models/{}", self.api_url, id);
         let model_resp = self
             .http
@@ -380,36 +388,56 @@ impl CircuitStore {
 
     async fn fetch_circuits_from_api(&self) -> Result<Vec<serde_json::Value>> {
         let mut all = Vec::new();
+        let mut circuits_ok = false;
+        let mut models_ok = false;
 
         let circuits_url = format!("{}/circuits", self.api_url);
-        if let Ok(resp) = self.http.get(&circuits_url).send().await {
-            if resp.status().is_success() {
-                if let Ok(data) = resp.json::<serde_json::Value>().await {
-                    if let Some(circuits) = data.get("circuits").and_then(|v| v.as_array()) {
-                        all.extend(circuits.iter().cloned());
+        match self.http.get(&circuits_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(data) => {
+                        if let Some(circuits) = data.get("circuits").and_then(|v| v.as_array()) {
+                            all.extend(circuits.iter().cloned());
+                        }
+                        circuits_ok = true;
                     }
+                    Err(e) => warn!(error = %e, "failed to parse circuits response"),
                 }
             }
+            Ok(resp) => warn!(status = %resp.status(), "circuits endpoint returned error"),
+            Err(e) => warn!(error = %e, "failed to reach circuits endpoint"),
         }
 
         let models_url = format!("{}/models", self.api_url);
-        if let Ok(resp) = self.http.get(&models_url).send().await {
-            if resp.status().is_success() {
-                if let Ok(data) = resp.json::<serde_json::Value>().await {
-                    if let Some(models) = data.get("models").and_then(|v| v.as_array()) {
-                        let existing_ids: std::collections::HashSet<String> = all
-                            .iter()
-                            .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
-                            .collect();
-                        for model in models {
-                            let id = model.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-                            if !existing_ids.contains(id) {
-                                all.push(self.normalize_model_to_circuit(model));
+        match self.http.get(&models_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(data) => {
+                        if let Some(models) = data.get("models").and_then(|v| v.as_array()) {
+                            let existing_ids: std::collections::HashSet<String> = all
+                                .iter()
+                                .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(String::from))
+                                .collect();
+                            for model in models {
+                                let Some(id) = model.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else {
+                                    continue;
+                                };
+                                if !existing_ids.contains(id) {
+                                    all.push(self.normalize_model_to_circuit(model));
+                                }
                             }
                         }
+                        models_ok = true;
                     }
+                    Err(e) => warn!(error = %e, "failed to parse models response"),
                 }
             }
+            Ok(resp) => warn!(status = %resp.status(), "models endpoint returned error"),
+            Err(e) => warn!(error = %e, "failed to reach models endpoint"),
+        }
+
+        if !circuits_ok && !models_ok {
+            anyhow::bail!("both circuits and models endpoints failed");
         }
 
         Ok(all)
