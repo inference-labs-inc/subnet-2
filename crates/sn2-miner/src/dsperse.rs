@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use sn2_types::json_tensor::flatten_json_to_f64;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct DSperseClient {
     cache_dir: PathBuf,
@@ -86,6 +86,51 @@ impl DSperseClient {
         Self { cache_dir }
     }
 
+    pub fn has_component(&self, component_sha: &str, slice_id: &str) -> bool {
+        self.resolve_component(component_sha, slice_id).is_some()
+    }
+
+    fn resolve_component(&self, component_sha: &str, slice_id: &str) -> Option<PathBuf> {
+        let entries = std::fs::read_dir(&self.cache_dir).ok()?;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !name_str.starts_with("model_") {
+                continue;
+            }
+            let stamp_path = entry
+                .path()
+                .join("slices")
+                .join(slice_id)
+                .join("component.sha");
+            if let Ok(stamp) = std::fs::read_to_string(&stamp_path) {
+                if stamp.trim() == component_sha {
+                    let slice_dir = entry.path().join("slices").join(slice_id);
+                    if slice_dir.join("jstprove").join("circuit.bundle").is_dir() {
+                        return Some(slice_dir);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    async fn resolve_model_slice(&self, circuit_id: &str, slice_id: &str) -> Result<PathBuf> {
+        let slices_dir = self
+            .cache_dir
+            .join(format!("model_{circuit_id}"))
+            .join("slices");
+        tokio::task::spawn_blocking({
+            let slices_dir = slices_dir.clone();
+            let slice_id = slice_id.to_string();
+            move || sn2_circuit_store::ensure_slice_extracted(&slices_dir, &slice_id)
+        })
+        .await
+        .context("slice extraction task panicked")?
+        .with_context(|| format!("extracting dslice archive for {slice_id}"))?;
+        Ok(slices_dir.join(slice_id))
+    }
+
     pub async fn prove_slice(
         &self,
         circuit_id: &str,
@@ -94,34 +139,37 @@ impl DSperseClient {
         component_sha: Option<&str>,
     ) -> Result<serde_json::Value> {
         validate_circuit_id(circuit_id)?;
-        let slices_dir = self
-            .cache_dir
-            .join(format!("model_{circuit_id}"))
-            .join("slices");
         let slice_idx: usize = slice_num
             .strip_prefix("slice_")
             .unwrap_or(slice_num)
             .parse()
             .context("parsing slice_num")?;
-
         let slice_id = format!("slice_{slice_idx}");
-        tokio::task::spawn_blocking({
-            let slices_dir = slices_dir.clone();
-            let slice_id = slice_id.clone();
-            move || sn2_circuit_store::ensure_slice_extracted(&slices_dir, &slice_id)
-        })
-        .await
-        .context("slice extraction task panicked")?
-        .with_context(|| format!("extracting dslice archive for {slice_id}"))?;
 
-        let slice_dir = slices_dir.join(&slice_id);
-        if let Some(sha) = component_sha {
-            info!(
-                component_sha = sha,
-                slice = slice_num,
-                "proving component-addressed slice"
-            );
-        }
+        let slice_dir = if let Some(sha) = component_sha {
+            match self.resolve_component(sha, &slice_id) {
+                Some(dir) => {
+                    info!(
+                        component_sha = sha,
+                        slice = slice_num,
+                        "resolved component-addressed slice"
+                    );
+                    dir
+                }
+                None => {
+                    warn!(
+                        component_sha = sha,
+                        circuit_id,
+                        slice = slice_num,
+                        "component SHA not found in cache, falling back to model path"
+                    );
+                    self.resolve_model_slice(circuit_id, &slice_id).await?
+                }
+            }
+        } else {
+            self.resolve_model_slice(circuit_id, &slice_id).await?
+        };
+
         let circuit_path = slice_dir.join("jstprove").join("circuit.bundle");
         let onnx_path = find_slice_onnx(&slice_dir)?;
 

@@ -94,7 +94,22 @@ impl MinerHandlers {
             "handling DSlice"
         );
 
-        if !circuit_id.is_empty() {
+        let needs_model_download = match component_sha {
+            Some(sha) => {
+                let slice_id = format!(
+                    "slice_{}",
+                    slice_num
+                        .strip_prefix("slice_")
+                        .unwrap_or(slice_num)
+                        .parse::<usize>()
+                        .unwrap_or(0)
+                );
+                !self.dsperse.has_component(sha, &slice_id)
+            }
+            None => true,
+        };
+
+        if needs_model_download && !circuit_id.is_empty() {
             self.ensure_circuit_cached(circuit_id).await?;
         }
 
