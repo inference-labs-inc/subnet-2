@@ -6,7 +6,7 @@ use tracing::info;
 
 use sn2_types::*;
 
-use crate::dsperse::DSperseClient;
+use crate::dsperse::{normalize_slice_id, DSperseClient};
 
 pub struct MinerHandlers {
     dsperse: DSperseClient,
@@ -96,15 +96,8 @@ impl MinerHandlers {
 
         let needs_model_download = match component_sha {
             Some(sha) => {
-                let slice_id = format!(
-                    "slice_{}",
-                    slice_num
-                        .strip_prefix("slice_")
-                        .unwrap_or(slice_num)
-                        .parse::<usize>()
-                        .unwrap_or(0)
-                );
-                !self.dsperse.has_component(sha, &slice_id)
+                let slice_id = normalize_slice_id(slice_num)?;
+                !self.dsperse.has_component(sha, &slice_id).await
             }
             None => true,
         };

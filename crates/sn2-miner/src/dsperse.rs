@@ -16,6 +16,15 @@ fn validate_circuit_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn normalize_slice_id(slice_num: &str) -> Result<String> {
+    let idx: usize = slice_num
+        .strip_prefix("slice_")
+        .unwrap_or(slice_num)
+        .parse()
+        .context("parsing slice_num")?;
+    Ok(format!("slice_{idx}"))
+}
+
 fn find_slice_onnx(slice_dir: &Path) -> Result<PathBuf> {
     let payload_dir = slice_dir.join("payload");
     if payload_dir.is_dir() {
@@ -86,33 +95,43 @@ impl DSperseClient {
         Self { cache_dir }
     }
 
-    pub fn has_component(&self, component_sha: &str, slice_id: &str) -> bool {
-        self.resolve_component(component_sha, slice_id).is_some()
+    pub async fn has_component(&self, component_sha: &str, slice_id: &str) -> bool {
+        self.resolve_component(component_sha, slice_id)
+            .await
+            .is_some()
     }
 
-    fn resolve_component(&self, component_sha: &str, slice_id: &str) -> Option<PathBuf> {
-        let entries = std::fs::read_dir(&self.cache_dir).ok()?;
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if !name_str.starts_with("model_") {
-                continue;
-            }
-            let stamp_path = entry
-                .path()
-                .join("slices")
-                .join(slice_id)
-                .join("component.sha");
-            if let Ok(stamp) = std::fs::read_to_string(&stamp_path) {
-                if stamp.trim() == component_sha {
-                    let slice_dir = entry.path().join("slices").join(slice_id);
-                    if slice_dir.join("jstprove").join("circuit.bundle").is_dir() {
-                        return Some(slice_dir);
+    async fn resolve_component(&self, component_sha: &str, slice_id: &str) -> Option<PathBuf> {
+        let cache_dir = self.cache_dir.clone();
+        let component_sha = component_sha.to_string();
+        let slice_id = slice_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let entries = std::fs::read_dir(&cache_dir).ok()?;
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if !name_str.starts_with("model_") {
+                    continue;
+                }
+                let stamp_path = entry
+                    .path()
+                    .join("slices")
+                    .join(&slice_id)
+                    .join("component.sha");
+                if let Ok(stamp) = std::fs::read_to_string(&stamp_path) {
+                    if stamp.trim() == component_sha {
+                        let slice_dir = entry.path().join("slices").join(&slice_id);
+                        if slice_dir.join("jstprove").join("circuit.bundle").is_dir() {
+                            return Some(slice_dir);
+                        }
                     }
                 }
             }
-        }
-        None
+            None
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     async fn resolve_model_slice(&self, circuit_id: &str, slice_id: &str) -> Result<PathBuf> {
@@ -139,15 +158,10 @@ impl DSperseClient {
         component_sha: Option<&str>,
     ) -> Result<serde_json::Value> {
         validate_circuit_id(circuit_id)?;
-        let slice_idx: usize = slice_num
-            .strip_prefix("slice_")
-            .unwrap_or(slice_num)
-            .parse()
-            .context("parsing slice_num")?;
-        let slice_id = format!("slice_{slice_idx}");
+        let slice_id = normalize_slice_id(slice_num)?;
 
         let slice_dir = if let Some(sha) = component_sha {
-            match self.resolve_component(sha, &slice_id) {
+            match self.resolve_component(sha, &slice_id).await {
                 Some(dir) => {
                     info!(
                         component_sha = sha,
