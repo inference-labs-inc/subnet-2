@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use sn2_types::json_tensor::flatten_json_to_f64;
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct DSperseClient {
     cache_dir: PathBuf,
@@ -95,18 +95,19 @@ impl DSperseClient {
         Self { cache_dir }
     }
 
-    pub async fn has_component(&self, component_sha: &str, slice_id: &str) -> bool {
-        self.resolve_component(component_sha, slice_id)
-            .await
-            .is_some()
-    }
-
-    async fn resolve_component(&self, component_sha: &str, slice_id: &str) -> Option<PathBuf> {
+    pub async fn resolve_component(
+        &self,
+        component_sha: &str,
+        slice_id: &str,
+    ) -> Result<Option<PathBuf>> {
         let cache_dir = self.cache_dir.clone();
         let component_sha = component_sha.to_string();
         let slice_id = slice_id.to_string();
         tokio::task::spawn_blocking(move || {
-            let entries = std::fs::read_dir(&cache_dir).ok()?;
+            let entries = match std::fs::read_dir(&cache_dir) {
+                Ok(e) => e,
+                Err(_) => return None,
+            };
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name_str = name.to_string_lossy();
@@ -130,8 +131,7 @@ impl DSperseClient {
             None
         })
         .await
-        .ok()
-        .flatten()
+        .context("component resolution task panicked")
     }
 
     async fn resolve_model_slice(&self, circuit_id: &str, slice_id: &str) -> Result<PathBuf> {
@@ -155,33 +155,14 @@ impl DSperseClient {
         circuit_id: &str,
         slice_num: &str,
         inputs: &serde_json::Value,
-        component_sha: Option<&str>,
+        resolved_component_dir: Option<PathBuf>,
     ) -> Result<serde_json::Value> {
         validate_circuit_id(circuit_id)?;
         let slice_id = normalize_slice_id(slice_num)?;
 
-        let slice_dir = if let Some(sha) = component_sha {
-            match self.resolve_component(sha, &slice_id).await {
-                Some(dir) => {
-                    info!(
-                        component_sha = sha,
-                        slice = slice_num,
-                        "resolved component-addressed slice"
-                    );
-                    dir
-                }
-                None => {
-                    warn!(
-                        component_sha = sha,
-                        circuit_id,
-                        slice = slice_num,
-                        "component SHA not found in cache, falling back to model path"
-                    );
-                    self.resolve_model_slice(circuit_id, &slice_id).await?
-                }
-            }
-        } else {
-            self.resolve_model_slice(circuit_id, &slice_id).await?
+        let slice_dir = match resolved_component_dir {
+            Some(dir) => dir,
+            None => self.resolve_model_slice(circuit_id, &slice_id).await?,
         };
 
         let circuit_path = slice_dir.join("jstprove").join("circuit.bundle");

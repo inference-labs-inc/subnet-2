@@ -94,15 +94,15 @@ impl MinerHandlers {
             "handling DSlice"
         );
 
-        let needs_model_download = match component_sha {
+        let resolved_dir = match component_sha {
             Some(sha) => {
                 let slice_id = normalize_slice_id(slice_num)?;
-                !self.dsperse.has_component(sha, &slice_id).await
+                self.dsperse.resolve_component(sha, &slice_id).await?
             }
-            None => true,
+            None => None,
         };
 
-        if needs_model_download && !circuit_id.is_empty() {
+        if resolved_dir.is_none() && !circuit_id.is_empty() {
             self.ensure_circuit_cached(circuit_id).await?;
         }
 
@@ -112,7 +112,7 @@ impl MinerHandlers {
                 circuit_id,
                 slice_num,
                 &data.inputs.unwrap_or(json!({})),
-                component_sha,
+                resolved_dir,
             )
             .await?;
 
