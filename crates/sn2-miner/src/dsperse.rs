@@ -103,10 +103,16 @@ impl DSperseClient {
         let cache_dir = self.cache_dir.clone();
         let component_sha = component_sha.to_string();
         let slice_id = slice_id.to_string();
-        tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || -> Result<Option<PathBuf>> {
             let entries = match std::fs::read_dir(&cache_dir) {
                 Ok(e) => e,
-                Err(_) => return None,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "reading cache directory {}: {e}",
+                        cache_dir.display()
+                    ))
+                }
             };
             for entry in entries.flatten() {
                 let name = entry.file_name();
@@ -123,15 +129,15 @@ impl DSperseClient {
                     if stamp.trim() == component_sha {
                         let slice_dir = entry.path().join("slices").join(&slice_id);
                         if slice_dir.join("jstprove").join("circuit.bundle").is_dir() {
-                            return Some(slice_dir);
+                            return Ok(Some(slice_dir));
                         }
                     }
                 }
             }
-            None
+            Ok(None)
         })
         .await
-        .context("component resolution task panicked")
+        .context("component resolution task panicked")?
     }
 
     async fn resolve_model_slice(&self, circuit_id: &str, slice_id: &str) -> Result<PathBuf> {
