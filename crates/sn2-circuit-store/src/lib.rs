@@ -670,10 +670,18 @@ impl CircuitStore {
 
         match result {
             Ok(sha_mappings) => {
-                let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
-                if let Ok(json) = serde_json::to_string(&sha_mappings) {
-                    let _ = std::fs::write(cache_path.join("component_shas.json"), json);
+                match serde_json::to_string(&sha_mappings) {
+                    Ok(json) => {
+                        if let Err(e) = std::fs::write(cache_path.join("component_shas.json"), json)
+                        {
+                            warn!(model_id, error = %e, "failed to persist component SHA mappings");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(model_id, error = %e, "failed to serialize component SHA mappings");
+                    }
                 }
+                let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
                 info!(model_id, total, "composable model download complete");
                 Ok(sha_mappings)
             }
@@ -718,6 +726,22 @@ impl CircuitStore {
                 .and_then(|v| v.as_str())
                 .context("component missing sha256")?;
             sha_mappings.push((comp_name.to_string(), comp_sha.to_string()));
+
+            let comp_dir = slices_dir.join(comp_name);
+            let stamp_path = comp_dir.join("component.sha");
+            let sha_matches = stamp_path
+                .exists()
+                .then(|| std::fs::read_to_string(&stamp_path).ok())
+                .flatten()
+                .is_some_and(|s| s.trim() == comp_sha);
+            if comp_dir.exists() && !sha_matches {
+                info!(
+                    comp_name,
+                    comp_sha, "component SHA changed, clearing stale cache"
+                );
+                let _ = std::fs::remove_dir_all(&comp_dir);
+            }
+
             let comp_files = comp
                 .get("files")
                 .and_then(|v| v.as_array())
@@ -782,6 +806,8 @@ impl CircuitStore {
                     .await
                     .with_context(|| format!("downloading weight blob for {comp_name}"))?;
             }
+
+            let _ = std::fs::write(&stamp_path, comp_sha);
 
             if (idx + 1) % 50 == 0 || idx + 1 == total {
                 info!(

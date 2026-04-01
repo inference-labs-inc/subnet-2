@@ -343,10 +343,7 @@ impl ValidatorLoop {
                     run_source,
                     retry_count: 0,
                     circuit_path: work.circuit_path.clone(),
-                    component_sha: self
-                        .circuit_store
-                        .component_sha(&circuit.id, &work.slice_id)
-                        .map(String::from),
+                    component_sha: comp_sha.map(String::from),
                 });
                 1
             };
