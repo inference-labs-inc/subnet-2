@@ -739,7 +739,8 @@ impl CircuitStore {
                     comp_name,
                     comp_sha, "component SHA changed, clearing stale cache"
                 );
-                let _ = std::fs::remove_dir_all(&comp_dir);
+                std::fs::remove_dir_all(&comp_dir)
+                    .with_context(|| format!("removing stale component cache for {comp_name}"))?;
             }
 
             let comp_files = comp
@@ -807,7 +808,9 @@ impl CircuitStore {
                     .with_context(|| format!("downloading weight blob for {comp_name}"))?;
             }
 
-            let _ = std::fs::write(&stamp_path, comp_sha);
+            if let Err(e) = std::fs::write(&stamp_path, comp_sha) {
+                warn!(comp_name, error = %e, "failed to write component SHA stamp");
+            }
 
             if (idx + 1) % 50 == 0 || idx + 1 == total {
                 info!(
