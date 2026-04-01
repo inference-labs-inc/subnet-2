@@ -41,4 +41,6 @@ pub struct MinerResponse {
     pub witness: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dsperse_circuit_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component_sha: Option<String>,
 }

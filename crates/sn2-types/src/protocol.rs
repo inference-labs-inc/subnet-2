@@ -68,6 +68,8 @@ pub struct DSliceProofGenerationDataModel {
     pub slice_num: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_uid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component_sha: Option<String>,
 }
 
 impl DSliceProofGenerationDataModel {

@@ -121,6 +121,7 @@ pub(super) struct DispatchedRequest {
     pub(super) task_proof_system: Option<ProofSystem>,
     pub(super) retry_payload: RetryPayload,
     pub(super) dsperse_circuit_path: Option<String>,
+    pub(super) component_sha: Option<String>,
 }
 
 pub struct ValidatorLoop {

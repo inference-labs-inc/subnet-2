@@ -302,6 +302,10 @@ impl ValidatorLoop {
 
             self.normalize_tensor(run_uid, &work.slice_id, &mut input_tensor);
 
+            let comp_sha = self
+                .circuit_store
+                .component_sha(&circuit.id, &work.slice_id);
+
             let queued = if let Some(ref tiling) = work.tiling {
                 match Self::stage_tiled_work(
                     &mut staged,
@@ -310,6 +314,7 @@ impl ValidatorLoop {
                     circuit,
                     &work.slice_id,
                     work.circuit_path.as_deref(),
+                    comp_sha,
                     tiling,
                     input_tensor,
                     run_source,
@@ -338,6 +343,10 @@ impl ValidatorLoop {
                     run_source,
                     retry_count: 0,
                     circuit_path: work.circuit_path.clone(),
+                    component_sha: self
+                        .circuit_store
+                        .component_sha(&circuit.id, &work.slice_id)
+                        .map(String::from),
                 });
                 1
             };
@@ -364,6 +373,7 @@ impl ValidatorLoop {
         circuit: &Circuit,
         slice_id: &str,
         circuit_path: Option<&str>,
+        component_sha: Option<&str>,
         tiling: &dsperse::schema::tiling::TilingInfo,
         input_tensor: ndarray::ArrayD<f64>,
         run_source: RunSource,
@@ -418,6 +428,7 @@ impl ValidatorLoop {
                 run_source,
                 retry_count: 0,
                 circuit_path: circuit_path.map(String::from),
+                component_sha: component_sha.map(String::from),
             });
         }
 

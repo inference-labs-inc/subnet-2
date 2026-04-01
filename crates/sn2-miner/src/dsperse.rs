@@ -91,6 +91,7 @@ impl DSperseClient {
         circuit_id: &str,
         slice_num: &str,
         inputs: &serde_json::Value,
+        component_sha: Option<&str>,
     ) -> Result<serde_json::Value> {
         validate_circuit_id(circuit_id)?;
         let slices_dir = self
@@ -114,6 +115,13 @@ impl DSperseClient {
         .with_context(|| format!("extracting dslice archive for {slice_id}"))?;
 
         let slice_dir = slices_dir.join(&slice_id);
+        if let Some(sha) = component_sha {
+            info!(
+                component_sha = sha,
+                slice = slice_num,
+                "proving component-addressed slice"
+            );
+        }
         let circuit_path = slice_dir.join("jstprove").join("circuit.bundle");
         let onnx_path = find_slice_onnx(&slice_dir)?;
 

@@ -106,6 +106,7 @@ impl RequestPipeline {
         slice_num: &str,
         run_uid: &str,
         proof_system: ProofSystem,
+        component_sha: Option<String>,
     ) -> DSliceProofGenerationDataModel {
         DSliceProofGenerationDataModel {
             circuit: Some(circuit.id.clone()),
@@ -114,6 +115,7 @@ impl RequestPipeline {
             outputs,
             slice_num: Some(slice_num.to_string()),
             run_uid: Some(run_uid.to_string()),
+            component_sha,
         }
     }
 

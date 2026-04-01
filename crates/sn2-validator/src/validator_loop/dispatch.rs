@@ -122,6 +122,7 @@ impl ValidatorLoop {
                 task_proof_system: Some(pow_circ.proof_system),
                 retry_payload: RetryPayload::None,
                 dsperse_circuit_path: None,
+                component_sha: None,
             });
         }
 
@@ -178,6 +179,7 @@ impl ValidatorLoop {
                 task_proof_system: Some(circuit.proof_system),
                 retry_payload: RetryPayload::Rwr(rwr),
                 dsperse_circuit_path: None,
+                component_sha: None,
             });
         }
 
@@ -199,6 +201,7 @@ impl ValidatorLoop {
                 &dslice.slice_num,
                 &dslice.run_uid,
                 dslice.proof_system,
+                dslice.component_sha.clone(),
             );
             let body = serde_json::to_value(&dslice_model).unwrap_or_default();
             let guard_hash = self.pipeline.check_dslice_hash(
@@ -215,6 +218,7 @@ impl ValidatorLoop {
                 return None;
             }
             let circuit_path = dslice.circuit_path.clone();
+            let component_sha = dslice.component_sha.clone();
             return Some(DispatchedRequest {
                 request_type: RequestType::DSlice,
                 guard_hash,
@@ -232,6 +236,7 @@ impl ValidatorLoop {
                 task_proof_system: Some(dslice.proof_system),
                 retry_payload: RetryPayload::DSlice(Box::new(dslice)),
                 dsperse_circuit_path: circuit_path,
+                component_sha,
             });
         }
 
@@ -280,6 +285,7 @@ impl ValidatorLoop {
                         task_proof_system: Some(circuit.proof_system),
                         retry_payload: RetryPayload::None,
                         dsperse_circuit_path: None,
+                        component_sha: None,
                     });
                 }
                 None => return None,
@@ -318,6 +324,7 @@ impl ValidatorLoop {
         let task_proof_system = d.task_proof_system;
         let retry_payload = d.retry_payload;
         let dsperse_circuit_path = d.dsperse_circuit_path;
+        let dsperse_component_sha = d.component_sha;
         let task_guard_hash = guard_hash.clone();
 
         let abort_handle = self.tasks.spawn(async move {
@@ -360,6 +367,7 @@ impl ValidatorLoop {
                         is_incremental: request_type == RequestType::DSlice,
                         witness: None,
                         dsperse_circuit_path,
+                        component_sha: dsperse_component_sha,
                     };
                     response.proof_size = response
                         .proof_content

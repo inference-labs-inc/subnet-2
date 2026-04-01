@@ -85,8 +85,14 @@ impl MinerHandlers {
     ) -> Result<serde_json::Value> {
         let circuit_id = data.circuit.as_deref().unwrap_or("");
         let slice_num = data.slice_num.as_deref().unwrap_or("");
+        let component_sha = data.component_sha.as_deref();
 
-        info!(circuit = circuit_id, slice = slice_num, "handling DSlice");
+        info!(
+            circuit = circuit_id,
+            slice = slice_num,
+            component_sha = component_sha.unwrap_or("none"),
+            "handling DSlice"
+        );
 
         if !circuit_id.is_empty() {
             self.ensure_circuit_cached(circuit_id).await?;
@@ -94,7 +100,12 @@ impl MinerHandlers {
 
         let result = self
             .dsperse
-            .prove_slice(circuit_id, slice_num, &data.inputs.unwrap_or(json!({})))
+            .prove_slice(
+                circuit_id,
+                slice_num,
+                &data.inputs.unwrap_or(json!({})),
+                component_sha,
+            )
             .await?;
 
         Ok(result)

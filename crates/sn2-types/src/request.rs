@@ -25,4 +25,5 @@ pub struct DSliceRequest {
     pub run_source: RunSource,
     pub retry_count: u32,
     pub circuit_path: Option<String>,
+    pub component_sha: Option<String>,
 }
