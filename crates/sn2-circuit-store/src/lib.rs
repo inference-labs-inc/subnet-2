@@ -192,6 +192,7 @@ impl CircuitStore {
                         if !is_loaded {
                             info!(id = id, name = %circuit.metadata.name, "loaded circuit from API");
                         }
+                        self.component_sha_map.retain(|(mid, _), _| mid != id);
                         for (slice_name, comp_sha) in sha_mappings {
                             self.component_sha_map
                                 .insert((id.to_string(), slice_name), comp_sha);
@@ -225,6 +226,8 @@ impl CircuitStore {
         info!(id = circuit_id, "circuit not loaded, fetching from API");
         let data = self.fetch_circuit_or_model(circuit_id).await?;
         let (circuit, sha_mappings) = self.cache_and_load_circuit(circuit_id, &data).await?;
+        self.component_sha_map
+            .retain(|(mid, _), _| mid != circuit_id);
         for (slice_name, comp_sha) in sha_mappings {
             self.component_sha_map
                 .insert((circuit_id.to_string(), slice_name), comp_sha);
@@ -253,6 +256,7 @@ impl CircuitStore {
                 match self.cache_and_load_circuit(id, circuit_data).await {
                     Ok((circuit, sha_mappings)) => {
                         info!(id = id, name = %circuit.metadata.name, "loaded new circuit");
+                        self.component_sha_map.retain(|(mid, _), _| mid != id);
                         for (slice_name, comp_sha) in sha_mappings {
                             self.component_sha_map
                                 .insert((id.to_string(), slice_name), comp_sha);
@@ -670,18 +674,19 @@ impl CircuitStore {
 
         match result {
             Ok(sha_mappings) => {
-                match serde_json::to_string(&sha_mappings) {
-                    Ok(json) => {
-                        if let Err(e) = std::fs::write(cache_path.join("component_shas.json"), json)
-                        {
-                            warn!(model_id, error = %e, "failed to persist component SHA mappings");
-                        }
-                    }
-                    Err(e) => {
+                let shas_persisted = serde_json::to_string(&sha_mappings)
+                    .map_err(|e| {
                         warn!(model_id, error = %e, "failed to serialize component SHA mappings");
-                    }
+                    })
+                    .and_then(|json| {
+                        std::fs::write(cache_path.join("component_shas.json"), json).map_err(|e| {
+                            warn!(model_id, error = %e, "failed to persist component SHA mappings");
+                        })
+                    })
+                    .is_ok();
+                if shas_persisted {
+                    let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
                 }
-                let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
                 info!(model_id, total, "composable model download complete");
                 Ok(sha_mappings)
             }
@@ -993,13 +998,22 @@ impl CircuitStore {
                 self.try_load_cache_entry(&entry, active_ids, cache_dir)
             {
                 let shas_path = entry.path().join("component_shas.json");
-                if let Ok(data) = std::fs::read_to_string(&shas_path) {
-                    if let Ok(mappings) = serde_json::from_str::<Vec<(String, String)>>(&data) {
-                        for (slice_name, comp_sha) in mappings {
-                            self.component_sha_map
-                                .insert((circuit_id.clone(), slice_name), comp_sha);
+                match std::fs::read_to_string(&shas_path) {
+                    Ok(data) => match serde_json::from_str::<Vec<(String, String)>>(&data) {
+                        Ok(mappings) => {
+                            for (slice_name, comp_sha) in mappings {
+                                self.component_sha_map
+                                    .insert((circuit_id.clone(), slice_name), comp_sha);
+                            }
                         }
+                        Err(e) => {
+                            warn!(id = %circuit_id, path = %shas_path.display(), error = %e, "corrupt component_shas.json");
+                        }
+                    },
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        warn!(id = %circuit_id, path = %shas_path.display(), error = %e, "failed to read component_shas.json");
                     }
+                    _ => {}
                 }
                 self.circuits.insert(circuit_id, circuit);
             }
