@@ -786,12 +786,14 @@ impl CircuitStore {
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|w| {
+                            .enumerate()
+                            .filter_map(|(i, w)| {
                                 let wb_sha = w.get("sha256")?.as_str()?.to_string();
+                                let fallback = format!("{name}_weight_{i}.onnx");
                                 let filename = w
                                     .get("filename")
                                     .and_then(|v| v.as_str())
-                                    .unwrap_or(&default_name)
+                                    .unwrap_or(&fallback)
                                     .to_string();
                                 Some(WeightRef {
                                     sha: wb_sha,
@@ -825,7 +827,14 @@ impl CircuitStore {
                         old_sha = stamp.trim(),
                         "component SHA changed, clearing stale cache"
                     );
-                    let _ = std::fs::remove_dir_all(&comp_dir);
+                    if let Err(e) = std::fs::remove_dir_all(&comp_dir) {
+                        warn!(
+                            name = comp.name,
+                            dir = %comp_dir.display(),
+                            error = %e,
+                            "failed to remove stale component directory"
+                        );
+                    }
                 }
                 _ => {}
             }
