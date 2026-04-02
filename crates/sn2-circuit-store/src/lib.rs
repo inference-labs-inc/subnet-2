@@ -102,6 +102,19 @@ fn extract_content_hash_from_url(url: &str) -> Option<String> {
     }
 }
 
+struct WeightRef {
+    sha: String,
+    filename: String,
+}
+
+struct ParsedComponent {
+    name: String,
+    sha: String,
+    files: Vec<String>,
+    weights: Vec<WeightRef>,
+    has_circuit: bool,
+}
+
 pub struct CircuitStore {
     circuits: HashMap<String, Circuit>,
     api_url: String,
@@ -717,111 +730,14 @@ impl CircuitStore {
         data: &serde_json::Value,
     ) -> Result<Vec<(String, String)>> {
         let total = components.len();
-        let mut sha_mappings: Vec<(String, String)> = Vec::with_capacity(total);
+        let parsed = Self::parse_components(components)?;
 
-        for (idx, comp) in components.iter().enumerate() {
-            let default_name = format!("slice_{idx}");
-            let raw_name = comp
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&default_name);
-            let comp_name = Self::sanitize_name(raw_name, "component name")?;
-            let comp_sha = comp
-                .get("sha256")
-                .and_then(|v| v.as_str())
-                .context("component missing sha256")?;
-            sha_mappings.push((comp_name.to_string(), comp_sha.to_string()));
+        Self::invalidate_stale_components(slices_dir, &parsed);
+        Self::ensure_component_dirs(slices_dir, &parsed)?;
 
-            let comp_dir = slices_dir.join(comp_name);
-            let stamp_path = comp_dir.join("component.sha");
-            match std::fs::read_to_string(&stamp_path) {
-                Ok(stamp) if stamp.trim() != comp_sha => {
-                    info!(
-                        comp_name,
-                        comp_sha,
-                        old_sha = stamp.trim(),
-                        "component SHA changed, clearing stale cache"
-                    );
-                    std::fs::remove_dir_all(&comp_dir).with_context(|| {
-                        format!("removing stale component cache for {comp_name}")
-                    })?;
-                }
-                Err(_) if comp_dir.exists() => {
-                    info!(comp_name, comp_sha, "writing stamp for existing component");
-                    let _ = std::fs::write(&stamp_path, comp_sha);
-                }
-                _ => {}
-            }
-
-            let comp_files = comp
-                .get("files")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let weights = comp
-                .get("weights")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-
-            let has_circuit = comp_files.iter().any(|f| f.as_str() == Some("circuit.bin"));
-
-            if has_circuit {
-                let bundle_dir = slices_dir
-                    .join(comp_name)
-                    .join("jstprove")
-                    .join("circuit.bundle");
-                std::fs::create_dir_all(&bundle_dir)?;
-
-                for file_val in &comp_files {
-                    let raw_filename = file_val.as_str().unwrap_or_default();
-                    if raw_filename.is_empty() {
-                        continue;
-                    }
-                    let filename = Self::sanitize_name(raw_filename, "component file")?;
-                    let dest = bundle_dir.join(filename);
-                    if dest.exists() {
-                        continue;
-                    }
-                    let url = format!(
-                        "{}/components/{}/files/{}",
-                        self.api_url, comp_sha, filename
-                    );
-                    self.download_file(&url, &dest).await.with_context(|| {
-                        format!("downloading component file {comp_name}/{filename}")
-                    })?;
-                }
-            }
-
-            let payload_dir = slices_dir.join(comp_name).join("payload");
-            std::fs::create_dir_all(&payload_dir)?;
-
-            for wb in &weights {
-                let wb_sha = wb
-                    .get("sha256")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .with_context(|| format!("{comp_name}: weight blob missing sha256"))?;
-                let default_wb = format!("{comp_name}.onnx");
-                let raw_wb = wb
-                    .get("filename")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&default_wb);
-                let wb_filename = Self::sanitize_name(raw_wb, "weight blob file")?;
-                let dest = payload_dir.join(wb_filename);
-                if dest.exists() {
-                    continue;
-                }
-                let url = format!("{}/models/wb/{}", self.api_url, wb_sha);
-                self.download_file(&url, &dest)
-                    .await
-                    .with_context(|| format!("downloading weight blob for {comp_name}"))?;
-            }
-
-            if let Err(e) = std::fs::write(&stamp_path, comp_sha) {
-                warn!(comp_name, error = %e, "failed to write component SHA stamp");
-            }
-
+        for (idx, comp) in parsed.iter().enumerate() {
+            self.download_component_files(slices_dir, comp).await?;
+            Self::write_component_stamp(slices_dir, comp);
             if (idx + 1) % 50 == 0 || idx + 1 == total {
                 info!(
                     model_id,
@@ -832,35 +748,187 @@ impl CircuitStore {
             }
         }
 
-        if let Some(artifacts) = data
+        self.download_model_artifacts(slices_dir, data).await?;
+
+        Ok(parsed
+            .iter()
+            .map(|c| (c.name.clone(), c.sha.clone()))
+            .collect())
+    }
+
+    fn parse_components(components: &[serde_json::Value]) -> Result<Vec<ParsedComponent>> {
+        components
+            .iter()
+            .enumerate()
+            .map(|(idx, comp)| {
+                let default_name = format!("slice_{idx}");
+                let raw_name = comp
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&default_name);
+                let name = Self::sanitize_name(raw_name, "component name")?.to_string();
+                let sha = comp
+                    .get("sha256")
+                    .and_then(|v| v.as_str())
+                    .context("component missing sha256")?
+                    .to_string();
+                let files: Vec<String> = comp
+                    .get("files")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let weights: Vec<WeightRef> = comp
+                    .get("weights")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|w| {
+                                let wb_sha = w.get("sha256")?.as_str()?.to_string();
+                                let filename = w
+                                    .get("filename")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or(&default_name)
+                                    .to_string();
+                                Some(WeightRef {
+                                    sha: wb_sha,
+                                    filename,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let has_circuit = files.iter().any(|f| f == "circuit.bin");
+                Ok(ParsedComponent {
+                    name,
+                    sha,
+                    files,
+                    weights,
+                    has_circuit,
+                })
+            })
+            .collect()
+    }
+
+    fn invalidate_stale_components(slices_dir: &Path, components: &[ParsedComponent]) {
+        for comp in components {
+            let comp_dir = slices_dir.join(&comp.name);
+            let stamp_path = comp_dir.join("component.sha");
+            match std::fs::read_to_string(&stamp_path) {
+                Ok(stamp) if stamp.trim() != comp.sha => {
+                    info!(
+                        name = comp.name,
+                        sha = comp.sha,
+                        old_sha = stamp.trim(),
+                        "component SHA changed, clearing stale cache"
+                    );
+                    let _ = std::fs::remove_dir_all(&comp_dir);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn ensure_component_dirs(slices_dir: &Path, components: &[ParsedComponent]) -> Result<()> {
+        for comp in components {
+            let comp_dir = slices_dir.join(&comp.name);
+            if comp.has_circuit {
+                std::fs::create_dir_all(comp_dir.join("jstprove").join("circuit.bundle"))?;
+            }
+            std::fs::create_dir_all(comp_dir.join("payload"))?;
+        }
+        Ok(())
+    }
+
+    async fn download_component_files(
+        &self,
+        slices_dir: &Path,
+        comp: &ParsedComponent,
+    ) -> Result<()> {
+        if comp.has_circuit {
+            let bundle_dir = slices_dir
+                .join(&comp.name)
+                .join("jstprove")
+                .join("circuit.bundle");
+            for raw_filename in &comp.files {
+                if raw_filename.is_empty() {
+                    continue;
+                }
+                let filename = Self::sanitize_name(raw_filename, "component file")?;
+                let dest = bundle_dir.join(filename);
+                if dest.exists() {
+                    continue;
+                }
+                let url = format!(
+                    "{}/components/{}/files/{}",
+                    self.api_url, comp.sha, filename
+                );
+                self.download_file(&url, &dest)
+                    .await
+                    .with_context(|| format!("downloading {}/{}", comp.name, filename))?;
+            }
+        }
+
+        let payload_dir = slices_dir.join(&comp.name).join("payload");
+        for wb in &comp.weights {
+            let filename = Self::sanitize_name(&wb.filename, "weight blob file")?;
+            let dest = payload_dir.join(filename);
+            if dest.exists() {
+                continue;
+            }
+            let url = format!("{}/models/wb/{}", self.api_url, wb.sha);
+            self.download_file(&url, &dest)
+                .await
+                .with_context(|| format!("downloading weight blob for {}", comp.name))?;
+        }
+        Ok(())
+    }
+
+    fn write_component_stamp(slices_dir: &Path, comp: &ParsedComponent) {
+        let stamp_path = slices_dir.join(&comp.name).join("component.sha");
+        if let Err(e) = std::fs::write(&stamp_path, &comp.sha) {
+            warn!(name = comp.name, error = %e, "failed to write component SHA stamp");
+        }
+    }
+
+    async fn download_model_artifacts(
+        &self,
+        slices_dir: &Path,
+        data: &serde_json::Value,
+    ) -> Result<()> {
+        let artifacts = match data
             .get("composition")
             .and_then(|c| c.get("artifacts"))
             .and_then(|a| a.as_array())
         {
-            for artifact in artifacts {
-                let sha = artifact
-                    .get("sha256")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .context("model artifact missing sha256")?;
-                let raw_filename = artifact
-                    .get("filename")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let filename = Self::sanitize_name(raw_filename, "model artifact")?;
-                let dest = slices_dir.join(filename);
-                if dest.exists() {
-                    continue;
-                }
-                let url = format!("{}/models/wb/{}", self.api_url, sha);
-                self.download_file(&url, &dest)
-                    .await
-                    .with_context(|| format!("downloading model artifact {filename}"))?;
-                info!(filename, "downloaded model artifact");
+            Some(a) => a,
+            None => return Ok(()),
+        };
+        for artifact in artifacts {
+            let sha = artifact
+                .get("sha256")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .context("model artifact missing sha256")?;
+            let raw_filename = artifact
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let filename = Self::sanitize_name(raw_filename, "model artifact")?;
+            let dest = slices_dir.join(filename);
+            if dest.exists() {
+                continue;
             }
+            let url = format!("{}/models/wb/{}", self.api_url, sha);
+            self.download_file(&url, &dest)
+                .await
+                .with_context(|| format!("downloading model artifact {filename}"))?;
+            info!(filename, "downloaded model artifact");
         }
-
-        Ok(sha_mappings)
+        Ok(())
     }
 
     async fn download_circuit_files(
