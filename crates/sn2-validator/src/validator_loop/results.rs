@@ -194,6 +194,49 @@ impl ValidatorLoop {
             },
         );
 
+        if let Some(outputs_json) = &response.computed_outputs {
+            let miner_outputs: Vec<f64> =
+                serde_json::from_value(outputs_json.clone()).unwrap_or_default();
+            if !miner_outputs.is_empty() {
+                use crate::incremental_runner::OutputConsistency;
+                match self.run_manager.verify_output_consistency(
+                    &run_uid,
+                    &slice_num,
+                    &miner_outputs,
+                ) {
+                    OutputConsistency::Consistent { max_rel_err } => {
+                        tracing::debug!(
+                            uid = response.uid,
+                            run_uid = %run_uid,
+                            slice = %slice_num,
+                            max_rel_err,
+                            "output consistency verified"
+                        );
+                    }
+                    OutputConsistency::Diverged { max_rel_err } => {
+                        warn!(
+                            uid = response.uid,
+                            run_uid = %run_uid,
+                            slice = %slice_num,
+                            max_rel_err,
+                            "output consistency check failed: miner outputs diverge from expected"
+                        );
+                    }
+                    OutputConsistency::LengthMismatch { expected, actual } => {
+                        warn!(
+                            uid = response.uid,
+                            run_uid = %run_uid,
+                            slice = %slice_num,
+                            expected,
+                            actual,
+                            "output consistency check failed: length mismatch"
+                        );
+                    }
+                    OutputConsistency::NoExpected | OutputConsistency::NoRun => {}
+                }
+            }
+        }
+
         if is_tile {
             let tile_idx = match tile_idx {
                 Some(idx) => idx,
