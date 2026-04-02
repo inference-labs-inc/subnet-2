@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use tracing::{info, warn};
 
-use sn2_types::{PERFORMANCE_CURVE_POWER, PERFORMANCE_MIN_SAMPLES};
+use sn2_types::{IP_REGION_CAP_FRACTION, PERFORMANCE_CURVE_POWER, PERFORMANCE_MIN_SAMPLES};
 
 const RATE_OF_DECAY: f64 = 0.4;
 const RATE_OF_RECOVERY: f64 = 0.1;
@@ -127,6 +127,7 @@ impl ScoreManager {
         uids: &[u16],
         snap: &HashMap<u16, (f64, usize, usize)>,
         owner_uid: Option<u16>,
+        ip_regions: &HashMap<u16, String>,
     ) -> (Vec<u16>, Vec<u16>) {
         let mut raw_weights: Vec<f64> = uids
             .iter()
@@ -148,6 +149,8 @@ impl ScoreManager {
             }
         }
 
+        apply_ip_region_cap(uids, &mut raw_weights, ip_regions);
+
         if let Some(owner) = owner_uid {
             if let Some(idx) = uids.iter().position(|&u| u == owner) {
                 for w in &mut raw_weights {
@@ -163,6 +166,65 @@ impl ScoreManager {
             .collect();
 
         (uids.to_vec(), weights)
+    }
+}
+
+pub fn ip_region(ip: &str) -> String {
+    match ip.splitn(3, '.').collect::<Vec<_>>().as_slice() {
+        [a, b, ..] if !ip.is_empty() => format!("{a}.{b}"),
+        _ => String::new(),
+    }
+}
+
+fn apply_ip_region_cap(uids: &[u16], weights: &mut [f64], ip_regions: &HashMap<u16, String>) {
+    let total_miners = uids.len();
+    if total_miners == 0 {
+        return;
+    }
+    let max_per_region = ((total_miners as f64) * IP_REGION_CAP_FRACTION).floor() as usize;
+    if max_per_region == 0 {
+        return;
+    }
+
+    let mut region_indices: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, &uid) in uids.iter().enumerate() {
+        let region = ip_regions.get(&uid).map(|s| s.as_str()).unwrap_or("");
+        if !region.is_empty() {
+            region_indices.entry(region).or_default().push(i);
+        }
+    }
+
+    let mut zeroed_count = 0usize;
+    for (region, indices) in &region_indices {
+        if indices.len() <= max_per_region {
+            continue;
+        }
+        let mut by_weight: Vec<usize> = indices.clone();
+        by_weight.sort_by(|&a, &b| {
+            weights[b]
+                .partial_cmp(&weights[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for &idx in &by_weight[max_per_region..] {
+            weights[idx] = 0.0;
+            zeroed_count += 1;
+        }
+        info!(
+            region = %region,
+            miners_in_region = indices.len(),
+            max_allowed = max_per_region,
+            zeroed = by_weight.len() - max_per_region,
+            "ip region cap applied"
+        );
+    }
+
+    if zeroed_count > 0 {
+        let new_total: f64 = weights.iter().sum();
+        if new_total > 0.0 {
+            for w in weights.iter_mut() {
+                *w /= new_total;
+            }
+        }
     }
 }
 
@@ -237,13 +299,22 @@ mod tests {
         assert!(!mgr.scores.contains_key(&42));
     }
 
+    fn empty_regions() -> HashMap<u16, String> {
+        HashMap::new()
+    }
+
+    fn regions_from(pairs: &[(u16, &str)]) -> HashMap<u16, String> {
+        pairs.iter().map(|&(uid, r)| (uid, r.to_string())).collect()
+    }
+
     #[test]
     fn compute_throughput_weights_normalizes_without_owner() {
         let mgr = test_manager();
         let mut snap = HashMap::new();
         snap.insert(1u16, (10.0, 2, PERFORMANCE_MIN_SAMPLES));
         snap.insert(2u16, (5.0, 2, PERFORMANCE_MIN_SAMPLES));
-        let (uids, weights) = mgr.compute_throughput_weights(&[1, 2], &snap, None);
+        let (uids, weights) =
+            mgr.compute_throughput_weights(&[1, 2], &snap, None, &empty_regions());
         assert_eq!(uids, vec![1, 2]);
         let total: u32 = weights.iter().map(|&w| w as u32).sum();
         assert!(total > 0);
@@ -257,8 +328,10 @@ mod tests {
         snap.insert(1u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
         snap.insert(2u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
         snap.insert(3u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
-        let (_, weights_no_owner) = mgr.compute_throughput_weights(&[1, 2, 3], &snap, None);
-        let (_, weights_with_owner) = mgr.compute_throughput_weights(&[1, 2, 3], &snap, Some(1));
+        let (_, weights_no_owner) =
+            mgr.compute_throughput_weights(&[1, 2, 3], &snap, None, &empty_regions());
+        let (_, weights_with_owner) =
+            mgr.compute_throughput_weights(&[1, 2, 3], &snap, Some(1), &empty_regions());
         assert!(weights_with_owner[0] > weights_no_owner[0]);
         let owner_ratio = weights_with_owner[0] as f64 / u16::MAX as f64;
         assert!((owner_ratio - 0.8).abs() < 0.01);
@@ -270,9 +343,94 @@ mod tests {
         let mut snap = HashMap::new();
         snap.insert(1u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES - 1));
         snap.insert(2u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
-        let (_, weights) = mgr.compute_throughput_weights(&[1, 2], &snap, None);
+        let (_, weights) = mgr.compute_throughput_weights(&[1, 2], &snap, None, &empty_regions());
         assert_eq!(weights[0], 0);
         assert!(weights[1] > 0);
+    }
+
+    #[test]
+    fn ip_region_cap_zeroes_excess_miners_in_saturated_region() {
+        let mgr = test_manager();
+        let uids: Vec<u16> = (0..8).collect();
+        let mut snap = HashMap::new();
+        for &uid in &uids {
+            snap.insert(uid, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        }
+        let regions = regions_from(&[
+            (0, "10.0"),
+            (1, "10.0"),
+            (2, "10.0"),
+            (3, "20.0"),
+            (4, "30.0"),
+            (5, "40.0"),
+            (6, "50.0"),
+            (7, "60.0"),
+        ]);
+        let (_, weights) = mgr.compute_throughput_weights(&uids, &snap, None, &regions);
+        let region_10_weights: Vec<u16> = vec![weights[0], weights[1], weights[2]];
+        let nonzero = region_10_weights.iter().filter(|&&w| w > 0).count();
+        assert_eq!(nonzero, 2);
+    }
+
+    #[test]
+    fn ip_region_cap_keeps_top_performers() {
+        let mgr = test_manager();
+        let uids: Vec<u16> = (0..8).collect();
+        let mut snap = HashMap::new();
+        snap.insert(0u16, (20.0, 1, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(1u16, (5.0, 1, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(2u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(3u16, (1.0, 1, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(4u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(5u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(6u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        snap.insert(7u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        let regions = regions_from(&[
+            (0, "10.0"),
+            (1, "10.0"),
+            (2, "10.0"),
+            (3, "10.0"),
+            (4, "20.0"),
+            (5, "30.0"),
+            (6, "40.0"),
+            (7, "50.0"),
+        ]);
+        let (_, weights) = mgr.compute_throughput_weights(&uids, &snap, None, &regions);
+        assert!(weights[0] > 0, "top performer in region should keep weight");
+        assert!(
+            weights[2] > 0,
+            "second performer in region should keep weight"
+        );
+        assert_eq!(
+            weights[1], 0,
+            "low performer in oversaturated region should be zeroed"
+        );
+        assert_eq!(
+            weights[3], 0,
+            "lowest performer in oversaturated region should be zeroed"
+        );
+    }
+
+    #[test]
+    fn ip_region_cap_no_effect_when_distributed() {
+        let mgr = test_manager();
+        let uids: Vec<u16> = (0..4).collect();
+        let mut snap = HashMap::new();
+        for &uid in &uids {
+            snap.insert(uid, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
+        }
+        let regions = regions_from(&[(0, "10.0"), (1, "20.0"), (2, "30.0"), (3, "40.0")]);
+        let (_, weights_capped) = mgr.compute_throughput_weights(&uids, &snap, None, &regions);
+        let (_, weights_uncapped) =
+            mgr.compute_throughput_weights(&uids, &snap, None, &empty_regions());
+        assert_eq!(weights_capped, weights_uncapped);
+    }
+
+    #[test]
+    fn ip_region_extraction() {
+        assert_eq!(ip_region("192.168.1.100"), "192.168");
+        assert_eq!(ip_region("10.0.0.1"), "10.0");
+        assert_eq!(ip_region(""), "");
     }
 
     #[test]

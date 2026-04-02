@@ -24,6 +24,7 @@ pub const CAPACITY_WINDOW_SIZE: usize = 50;
 pub const CAPACITY_RAMP_THRESHOLD: f64 = 0.97;
 pub const CAPACITY_BACKOFF_THRESHOLD: f64 = 0.80;
 pub const CAPACITY_MIN_AT_CAP: usize = 8;
+pub const IP_REGION_CAP_FRACTION: f64 = 0.25;
 
 pub const MAX_POW_QUEUE_SIZE: usize = 1024;
 pub const POW_OUTPUT_STRIDE: usize = MAX_POW_QUEUE_SIZE;

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -380,9 +380,17 @@ impl ValidatorLoop {
                 None
             }
         };
-        let (weight_uids, weights) = self
-            .score_manager
-            .compute_throughput_weights(&uids, &snap, owner_uid);
+        let ip_regions: HashMap<u16, String> = self
+            .config
+            .metagraph
+            .neurons
+            .iter()
+            .map(|n| (n.uid, crate::scoring::ip_region(&n.axon_ip)))
+            .collect();
+
+        let (weight_uids, weights) =
+            self.score_manager
+                .compute_throughput_weights(&uids, &snap, owner_uid, &ip_regions);
 
         if weights.iter().all(|&w| w == 0) {
             info!("no weights to set, skipping");
