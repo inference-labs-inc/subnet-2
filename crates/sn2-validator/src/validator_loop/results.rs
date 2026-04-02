@@ -195,8 +195,19 @@ impl ValidatorLoop {
         );
 
         if let Some(outputs_json) = &response.computed_outputs {
-            let miner_outputs: Vec<f64> =
-                serde_json::from_value(outputs_json.clone()).unwrap_or_default();
+            let miner_outputs: Vec<f64> = match serde_json::from_value(outputs_json.clone()) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        uid = response.uid,
+                        run_uid = %run_uid,
+                        slice = %slice_num,
+                        error = %e,
+                        "malformed computed_outputs in miner response"
+                    );
+                    Vec::new()
+                }
+            };
             if !miner_outputs.is_empty() {
                 use crate::incremental_runner::OutputConsistency;
                 match self.run_manager.verify_output_consistency(

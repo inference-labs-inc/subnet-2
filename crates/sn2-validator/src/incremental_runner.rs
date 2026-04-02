@@ -24,6 +24,33 @@ pub enum OutputConsistency {
 
 const OUTPUT_CONSISTENCY_THRESHOLD: f64 = 0.05;
 
+pub fn classify_output_consistency(expected: &[f64], actual: &[f64]) -> OutputConsistency {
+    if expected.len() != actual.len() {
+        return OutputConsistency::LengthMismatch {
+            expected: expected.len(),
+            actual: actual.len(),
+        };
+    }
+    let mut max_rel_err: f64 = 0.0;
+    for (e, m) in expected.iter().zip(actual.iter()) {
+        if !e.is_finite() || !m.is_finite() {
+            return OutputConsistency::Diverged {
+                max_rel_err: f64::INFINITY,
+            };
+        }
+        let denom = e.abs().max(1e-12);
+        let rel = (e - m).abs() / denom;
+        if rel > max_rel_err {
+            max_rel_err = rel;
+        }
+    }
+    if max_rel_err > OUTPUT_CONSISTENCY_THRESHOLD {
+        OutputConsistency::Diverged { max_rel_err }
+    } else {
+        OutputConsistency::Consistent { max_rel_err }
+    }
+}
+
 #[allow(dead_code)]
 pub struct SliceArtifact {
     pub slice_num: String,
@@ -144,25 +171,7 @@ impl IncrementalRunManager {
             Some(e) => e,
             None => return OutputConsistency::NoExpected,
         };
-        if expected.len() != miner_outputs.len() {
-            return OutputConsistency::LengthMismatch {
-                expected: expected.len(),
-                actual: miner_outputs.len(),
-            };
-        }
-        let mut max_rel_err: f64 = 0.0;
-        for (e, m) in expected.iter().zip(miner_outputs.iter()) {
-            let denom = e.abs().max(1e-12);
-            let rel = (e - m).abs() / denom;
-            if rel > max_rel_err {
-                max_rel_err = rel;
-            }
-        }
-        if max_rel_err > OUTPUT_CONSISTENCY_THRESHOLD {
-            OutputConsistency::Diverged { max_rel_err }
-        } else {
-            OutputConsistency::Consistent { max_rel_err }
-        }
+        classify_output_consistency(&expected, miner_outputs)
     }
 
     pub fn is_evicted(&self, run_uid: &str) -> bool {
@@ -418,81 +427,76 @@ mod tests {
 
     #[test]
     fn output_consistency_length_mismatch_detected() {
-        let expected = vec![1.0, 2.0, 3.0];
-        let actual = vec![1.0, 2.0];
-        assert_ne!(expected.len(), actual.len());
-        if let OutputConsistency::LengthMismatch {
-            expected: e,
-            actual: a,
-        } = (OutputConsistency::LengthMismatch {
-            expected: expected.len(),
-            actual: actual.len(),
-        }) {
-            assert_eq!(e, 3);
-            assert_eq!(a, 2);
-        } else {
-            panic!("expected LengthMismatch");
-        }
-    }
-
-    fn compute_max_rel_err(expected: &[f64], actual: &[f64]) -> f64 {
-        expected
-            .iter()
-            .zip(actual.iter())
-            .map(|(e, m)| {
-                let denom = e.abs().max(1e-12);
-                (e - m).abs() / denom
-            })
-            .fold(0.0_f64, f64::max)
+        let result = classify_output_consistency(&[1.0, 2.0, 3.0], &[1.0, 2.0]);
+        assert!(matches!(
+            result,
+            OutputConsistency::LengthMismatch {
+                expected: 3,
+                actual: 2
+            }
+        ));
     }
 
     #[test]
     fn output_consistency_exact_match() {
         let vals = [1.0, 2.0, 3.0];
-        assert_eq!(compute_max_rel_err(&vals, &vals), 0.0);
+        let result = classify_output_consistency(&vals, &vals);
+        assert!(
+            matches!(result, OutputConsistency::Consistent { max_rel_err } if max_rel_err == 0.0)
+        );
     }
 
     #[test]
     fn output_consistency_within_threshold() {
         let expected = [1.0, 2.0, 3.0];
         let perturbed: Vec<f64> = expected.iter().map(|v| v * 1.01).collect();
-        let err = compute_max_rel_err(&expected, &perturbed);
+        let result = classify_output_consistency(&expected, &perturbed);
         assert!(
-            err <= OUTPUT_CONSISTENCY_THRESHOLD,
-            "1% perturbation should be within threshold, got {err}"
+            matches!(result, OutputConsistency::Consistent { .. }),
+            "1% perturbation should be within threshold, got {result:?}"
         );
     }
 
     #[test]
     fn output_consistency_forgery_detected() {
-        let expected = [1.0, 2.0, 3.0];
-        let forged = [5.0, 10.0, 15.0];
-        let err = compute_max_rel_err(&expected, &forged);
+        let result = classify_output_consistency(&[1.0, 2.0, 3.0], &[5.0, 10.0, 15.0]);
         assert!(
-            err > OUTPUT_CONSISTENCY_THRESHOLD,
-            "completely different outputs should exceed threshold, got {err}"
+            matches!(result, OutputConsistency::Diverged { .. }),
+            "completely different outputs should be detected, got {result:?}"
         );
     }
 
     #[test]
     fn output_consistency_wrong_weights_detected() {
-        let base = [0.95, 0.03, 0.02];
-        let wrong = [0.40, 0.35, 0.25];
-        let err = compute_max_rel_err(&base, &wrong);
+        let result = classify_output_consistency(&[0.95, 0.03, 0.02], &[0.40, 0.35, 0.25]);
         assert!(
-            err > OUTPUT_CONSISTENCY_THRESHOLD,
-            "outputs from wrong weights should be detected, got {err}"
+            matches!(result, OutputConsistency::Diverged { .. }),
+            "outputs from wrong weights should be detected, got {result:?}"
         );
     }
 
     #[test]
     fn output_consistency_near_zero_stability() {
-        let expected = [1e-15, 0.0, -1e-15];
-        let actual = [0.0, 0.0, 0.0];
-        let err = compute_max_rel_err(&expected, &actual);
+        let result = classify_output_consistency(&[1e-15, 0.0, -1e-15], &[0.0, 0.0, 0.0]);
         assert!(
-            err <= OUTPUT_CONSISTENCY_THRESHOLD,
-            "near-zero values should not trigger false positives, got {err}"
+            matches!(result, OutputConsistency::Consistent { .. }),
+            "near-zero values should not trigger false positives, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn output_consistency_nan_detected() {
+        let result = classify_output_consistency(&[1.0, f64::NAN, 3.0], &[1.0, 2.0, 3.0]);
+        assert!(
+            matches!(result, OutputConsistency::Diverged { max_rel_err } if max_rel_err.is_infinite())
+        );
+    }
+
+    #[test]
+    fn output_consistency_inf_detected() {
+        let result = classify_output_consistency(&[1.0, 2.0, 3.0], &[1.0, f64::INFINITY, 3.0]);
+        assert!(
+            matches!(result, OutputConsistency::Diverged { max_rel_err } if max_rel_err.is_infinite())
         );
     }
 }
