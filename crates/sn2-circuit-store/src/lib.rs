@@ -732,12 +732,12 @@ impl CircuitStore {
         let total = components.len();
         let parsed = Self::parse_components(components)?;
 
-        Self::invalidate_stale_components(slices_dir, &parsed);
+        Self::invalidate_stale_components(slices_dir, &parsed)?;
         Self::ensure_component_dirs(slices_dir, &parsed)?;
 
         for (idx, comp) in parsed.iter().enumerate() {
             self.download_component_files(slices_dir, comp).await?;
-            Self::write_component_stamp(slices_dir, comp);
+            Self::write_component_stamp(slices_dir, comp)?;
             if (idx + 1) % 50 == 0 || idx + 1 == total {
                 info!(
                     model_id,
@@ -815,30 +815,32 @@ impl CircuitStore {
             .collect()
     }
 
-    fn invalidate_stale_components(slices_dir: &Path, components: &[ParsedComponent]) {
+    fn invalidate_stale_components(
+        slices_dir: &Path,
+        components: &[ParsedComponent],
+    ) -> Result<()> {
         for comp in components {
             let comp_dir = slices_dir.join(&comp.name);
             let stamp_path = comp_dir.join("component.sha");
-            match std::fs::read_to_string(&stamp_path) {
-                Ok(stamp) if stamp.trim() != comp.sha => {
+            if let Ok(stamp) = std::fs::read_to_string(&stamp_path) {
+                if stamp.trim() != comp.sha {
                     info!(
                         name = comp.name,
                         sha = comp.sha,
                         old_sha = stamp.trim(),
                         "component SHA changed, clearing stale cache"
                     );
-                    if let Err(e) = std::fs::remove_dir_all(&comp_dir) {
-                        warn!(
-                            name = comp.name,
-                            dir = %comp_dir.display(),
-                            error = %e,
-                            "failed to remove stale component directory"
-                        );
-                    }
+                    std::fs::remove_dir_all(&comp_dir).with_context(|| {
+                        format!(
+                            "removing stale component {} at {}",
+                            comp.name,
+                            comp_dir.display()
+                        )
+                    })?;
                 }
-                _ => {}
             }
         }
+        Ok(())
     }
 
     fn ensure_component_dirs(slices_dir: &Path, components: &[ParsedComponent]) -> Result<()> {
@@ -896,11 +898,10 @@ impl CircuitStore {
         Ok(())
     }
 
-    fn write_component_stamp(slices_dir: &Path, comp: &ParsedComponent) {
+    fn write_component_stamp(slices_dir: &Path, comp: &ParsedComponent) -> Result<()> {
         let stamp_path = slices_dir.join(&comp.name).join("component.sha");
-        if let Err(e) = std::fs::write(&stamp_path, &comp.sha) {
-            warn!(name = comp.name, error = %e, "failed to write component SHA stamp");
-        }
+        std::fs::write(&stamp_path, &comp.sha)
+            .with_context(|| format!("writing component SHA stamp for {}", comp.name))
     }
 
     async fn download_model_artifacts(
