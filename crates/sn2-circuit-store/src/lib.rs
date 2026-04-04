@@ -822,22 +822,39 @@ impl CircuitStore {
         for comp in components {
             let comp_dir = slices_dir.join(&comp.name);
             let stamp_path = comp_dir.join("component.sha");
-            if let Ok(stamp) = std::fs::read_to_string(&stamp_path) {
-                if stamp.trim() != comp.sha {
+            let should_clear = match std::fs::read_to_string(&stamp_path) {
+                Ok(stamp) if stamp.trim() != comp.sha => {
                     info!(
                         name = comp.name,
                         sha = comp.sha,
                         old_sha = stamp.trim(),
                         "component SHA changed, clearing stale cache"
                     );
-                    std::fs::remove_dir_all(&comp_dir).with_context(|| {
-                        format!(
-                            "removing stale component {} at {}",
-                            comp.name,
-                            comp_dir.display()
-                        )
-                    })?;
+                    true
                 }
+                Err(_) if comp_dir.exists() && comp.has_circuit => {
+                    let bundle_dir = comp_dir.join("jstprove").join("circuit.bundle");
+                    let missing = !bundle_dir.is_dir()
+                        || bundle_dir.read_dir().map_or(true, |mut d| d.next().is_none());
+                    if missing {
+                        info!(
+                            name = comp.name,
+                            sha = comp.sha,
+                            "component missing circuit bundle and SHA stamp, clearing incomplete cache"
+                        );
+                    }
+                    missing
+                }
+                _ => false,
+            };
+            if should_clear {
+                std::fs::remove_dir_all(&comp_dir).with_context(|| {
+                    format!(
+                        "removing stale component {} at {}",
+                        comp.name,
+                        comp_dir.display()
+                    )
+                })?;
             }
         }
         Ok(())
