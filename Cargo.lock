@@ -276,7 +276,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -287,7 +287,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -352,22 +352,6 @@ dependencies = [
 [[package]]
 name = "arith"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "ark-std 0.4.0",
- "criterion",
- "ethnum",
- "halo2curves",
- "itertools 0.13.0",
- "log",
- "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "tynm",
-]
-
-[[package]]
-name = "arith"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
  "ark-std 0.4.0",
@@ -377,7 +361,7 @@ dependencies = [
  "itertools 0.13.0",
  "log",
  "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
  "tynm",
 ]
 
@@ -1091,25 +1075,13 @@ dependencies = [
 [[package]]
 name = "babybear"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "ethnum",
- "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
-]
-
-[[package]]
-name = "babybear"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
  "ethnum",
  "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
 ]
 
 [[package]]
@@ -1195,60 +1167,30 @@ dependencies = [
 [[package]]
 name = "bin"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "babybear 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "bytes",
- "chrono",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "clap",
- "config_macros 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gf2_128 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "goldilocks 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "log",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "poly_commit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "tokio",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "warp",
-]
-
-[[package]]
-name = "bin"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "babybear 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
+ "babybear",
  "bytes",
  "chrono",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "circuit",
  "clap",
- "config_macros 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gf2_128 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "goldilocks 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "config_macros",
+ "gf2",
+ "gf2_128",
+ "gkr",
+ "gkr_engine",
+ "gkr_hashers",
+ "goldilocks",
  "log",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "poly_commit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "mersenne31",
+ "poly_commit",
+ "polynomials",
+ "serdes",
+ "sumcheck",
  "tokio",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "transcript",
+ "utils",
  "warp",
 ]
 
@@ -2015,64 +1957,19 @@ dependencies = [
 [[package]]
 name = "circuit"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "bytes",
- "ethnum",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "log",
- "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "thiserror 2.0.18",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
-]
-
-[[package]]
-name = "circuit"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
  "bytes",
  "ethnum",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "gkr_engine",
+ "gkr_hashers",
  "log",
  "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
  "thiserror 2.0.18",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
-]
-
-[[package]]
-name = "circuit-std-rs"
-version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-bls12-381",
- "ark-ec",
- "ark-ff 0.4.2",
- "ark-std 0.4.0",
- "big-int",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ethnum",
- "expander_compiler 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "halo2curves",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "num-bigint",
- "num-traits",
- "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "sha2 0.10.9",
- "tiny-keccak",
+ "transcript",
 ]
 
 [[package]]
@@ -2080,24 +1977,24 @@ name = "circuit-std-rs"
 version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-bls12-381",
  "ark-ec",
  "ark-ff 0.4.2",
  "ark-std 0.4.0",
  "big-int",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "circuit",
  "ethnum",
- "expander_compiler 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "expander_compiler",
+ "gf2",
+ "gkr",
+ "gkr_hashers",
  "halo2curves",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "mersenne31",
  "num-bigint",
  "num-traits",
  "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
  "sha2 0.10.9",
  "tiny-keccak",
 ]
@@ -2206,29 +2103,15 @@ dependencies = [
 [[package]]
 name = "config_macros"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "poly_commit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
-]
-
-[[package]]
-name = "config_macros"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "poly_commit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "gkr_engine",
+ "gkr_hashers",
+ "poly_commit",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "transcript",
 ]
 
 [[package]]
@@ -2580,39 +2463,20 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 [[package]]
 name = "crosslayer_prototype"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "env_logger 0.11.10",
- "ethnum",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "log",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "thiserror 2.0.18",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
-]
-
-[[package]]
-name = "crosslayer_prototype"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "env_logger 0.11.10",
  "ethnum",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "gkr_engine",
+ "gkr_hashers",
  "log",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "polynomials",
  "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
+ "sumcheck",
  "thiserror 2.0.18",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "transcript",
 ]
 
 [[package]]
@@ -3339,7 +3203,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3409,7 +3273,7 @@ version = "0.0.0"
 source = "git+https://github.com/inference-labs-inc/dsperse?rev=62a6df1f9714e57bbcb63c262c6bac2f02627a98#62a6df1f9714e57bbcb63c262c6bac2f02627a98"
 dependencies = [
  "clap",
- "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "jstprove_circuits",
  "libc",
  "ndarray 0.17.2",
  "prost 0.13.5",
@@ -3719,7 +3583,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3818,83 +3682,42 @@ dependencies = [
 [[package]]
 name = "expander_compiler"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "axum",
- "babybear 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "bin 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "chrono",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "clap",
- "crosslayer_prototype 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ethnum",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "goldilocks 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "halo2curves",
- "macros 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "num_cpus",
- "once_cell",
- "poly_commit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "rand 0.8.5",
- "rayon",
- "reqwest 0.11.27",
- "serde",
- "serde_json",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "shared_memory",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "tiny-keccak",
- "tokio",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
-]
-
-[[package]]
-name = "expander_compiler"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
  "axum",
- "babybear 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "bin 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "babybear",
+ "bin",
  "chrono",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "circuit",
  "clap",
- "crosslayer_prototype 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "crosslayer_prototype",
  "ethnum",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "goldilocks 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "gf2",
+ "gkr",
+ "gkr_engine",
+ "gkr_hashers",
+ "goldilocks",
  "halo2curves",
- "macros 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "macros",
+ "mersenne31",
  "num_cpus",
  "once_cell",
- "poly_commit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "poly_commit",
+ "polynomials",
  "rand 0.8.5",
  "rayon",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
  "shared_memory",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "sumcheck",
  "tiny-keccak",
  "tokio",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "transcript",
+ "utils",
 ]
 
 [[package]]
@@ -4613,9 +4436,9 @@ dependencies = [
 [[package]]
 name = "gf2"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
+source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
+ "arith",
  "ark-std 0.4.0",
  "cfg-if",
  "ethnum",
@@ -4623,38 +4446,8 @@ dependencies = [
  "log",
  "rand 0.8.5",
  "raw-cpuid",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
+ "serdes",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "gf2"
-version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "ark-std 0.4.0",
- "cfg-if",
- "ethnum",
- "halo2curves",
- "log",
- "rand 0.8.5",
- "raw-cpuid",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "gf2_128"
-version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "ethnum",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
 ]
 
 [[package]]
@@ -4662,12 +4455,12 @@ name = "gf2_128"
 version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
  "ethnum",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "gf2",
  "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
 ]
 
 [[package]]
@@ -4710,83 +4503,33 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 [[package]]
 name = "gkr"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "babybear 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "config_macros 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "env_logger 0.11.10",
- "ethnum",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gf2_128 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "goldilocks 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "halo2curves",
- "log",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "poly_commit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "rand 0.8.5",
- "rayon",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "sha2 0.10.9",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "thiserror 2.0.18",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
-]
-
-[[package]]
-name = "gkr"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
- "babybear 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "config_macros 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "babybear",
+ "circuit",
+ "config_macros",
  "env_logger 0.11.10",
  "ethnum",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gf2_128 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "goldilocks 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "gf2",
+ "gf2_128",
+ "gkr_engine",
+ "gkr_hashers",
+ "goldilocks",
  "halo2curves",
  "log",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "poly_commit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "mersenne31",
+ "poly_commit",
+ "polynomials",
  "rand 0.8.5",
  "rayon",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
  "sha2 0.10.9",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "sumcheck",
  "thiserror 2.0.18",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
-]
-
-[[package]]
-name = "gkr_engine"
-version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "babybear 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gf2_128 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "goldilocks 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "itertools 0.13.0",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "thiserror 2.0.18",
+ "transcript",
+ "utils",
 ]
 
 [[package]]
@@ -4794,39 +4537,27 @@ name = "gkr_engine"
 version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "babybear 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gf2_128 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "goldilocks 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
+ "babybear",
+ "gf2",
+ "gf2_128",
+ "goldilocks",
  "itertools 0.13.0",
- "mersenne31 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "mersenne31",
+ "polynomials",
  "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "gkr_hashers"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "halo2curves",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "sha2 0.10.9",
- "tiny-keccak",
-]
-
-[[package]]
-name = "gkr_hashers"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "halo2curves",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
  "sha2 0.10.9",
  "tiny-keccak",
 ]
@@ -4834,25 +4565,13 @@ dependencies = [
 [[package]]
 name = "goldilocks"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "ethnum",
- "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
-]
-
-[[package]]
-name = "goldilocks"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
  "ethnum",
  "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
 ]
 
 [[package]]
@@ -5653,7 +5372,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.2",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6069,18 +5788,6 @@ dependencies = [
 [[package]]
 name = "jstprove-io"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "anyhow",
- "crc32c",
- "rmp-serde",
- "serde",
- "zstd 0.13.3",
-]
-
-[[package]]
-name = "jstprove-io"
-version = "0.1.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
  "anyhow",
@@ -6088,17 +5795,6 @@ dependencies = [
  "rmp-serde",
  "serde",
  "zstd 0.13.3",
-]
-
-[[package]]
-name = "jstprove-onnx"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "anyhow",
- "prost 0.13.5",
- "prost-build",
- "serde",
 ]
 
 [[package]]
@@ -6115,60 +5811,21 @@ dependencies = [
 [[package]]
 name = "jstprove_circuits"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "anyhow",
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "chrono",
- "circuit-std-rs 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "clap",
- "console 0.15.11",
- "ethnum",
- "expander_compiler 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "halo2curves",
- "indicatif",
- "jstprove-io 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "jstprove-onnx 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "lazy_static",
- "ndarray 0.16.1",
- "num-bigint",
- "num-traits",
- "once_cell",
- "openssl",
- "rand 0.8.5",
- "rmp-serde",
- "rmpv",
- "serde",
- "serde_bytes",
- "serde_json",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "tempfile",
- "thiserror 2.0.18",
- "tiny-keccak",
- "tracing",
- "zstd 0.13.3",
-]
-
-[[package]]
-name = "jstprove_circuits"
-version = "0.1.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
  "anyhow",
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
  "chrono",
- "circuit-std-rs 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "circuit-std-rs",
  "clap",
  "console 0.15.11",
  "ethnum",
- "expander_compiler 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "expander_compiler",
  "halo2curves",
  "indicatif",
- "jstprove-io 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "jstprove-onnx 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "jstprove-io",
+ "jstprove-onnx",
  "lazy_static",
  "ndarray 0.16.1",
  "num-bigint",
@@ -6522,16 +6179,6 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "macros"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
  "proc-macro2",
@@ -6645,36 +6292,18 @@ dependencies = [
 [[package]]
 name = "mersenne31"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "cfg-if",
- "ethnum",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "halo2curves",
- "log",
- "rand 0.8.5",
- "raw-cpuid",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "mersenne31"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
  "cfg-if",
  "ethnum",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "gkr_hashers",
  "halo2curves",
  "log",
  "rand 0.8.5",
  "raw-cpuid",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
  "thiserror 2.0.18",
 ]
 
@@ -6926,7 +6555,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10220,65 +9849,26 @@ dependencies = [
 [[package]]
 name = "poly_commit"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "derivative",
- "ethnum",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "halo2curves",
- "itertools 0.13.0",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "rand 0.8.5",
- "rayon",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "thiserror 2.0.18",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "transpose",
- "tree 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
-]
-
-[[package]]
-name = "poly_commit"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
  "derivative",
  "ethnum",
- "gf2 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "gf2",
+ "gkr_engine",
  "halo2curves",
  "itertools 0.13.0",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "polynomials",
  "rand 0.8.5",
  "rayon",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "sumcheck 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
+ "sumcheck",
  "thiserror 2.0.18",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "transcript",
  "transpose",
- "tree 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
-]
-
-[[package]]
-name = "polynomials"
-version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "criterion",
- "halo2curves",
- "itertools 0.13.0",
- "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
+ "tree",
+ "utils",
 ]
 
 [[package]]
@@ -10286,13 +9876,13 @@ name = "polynomials"
 version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
  "criterion",
  "halo2curves",
  "itertools 0.13.0",
  "rand 0.8.5",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
 ]
 
 [[package]]
@@ -10512,8 +10102,8 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
- "heck 0.4.1",
- "itertools 0.11.0",
+ "heck 0.5.0",
+ "itertools 0.12.1",
  "log",
  "multimap",
  "once_cell",
@@ -10533,7 +10123,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.12.1",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -10546,7 +10136,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.12.1",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -11286,7 +10876,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -11456,7 +11046,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 1.0.6",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -12231,33 +11821,12 @@ dependencies = [
 [[package]]
 name = "serdes"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "ethnum",
- "halo2curves",
- "serdes_derive 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "serdes"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
  "ethnum",
  "halo2curves",
- "serdes_derive 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes_derive",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "serdes_derive"
-version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -12767,8 +12336,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
- "jstprove-io 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "jstprove_circuits 0.1.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
+ "jstprove-io",
+ "jstprove_circuits",
  "rmp-serde",
  "serde",
  "serde_json",
@@ -13119,7 +12688,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -14631,37 +14200,19 @@ dependencies = [
 [[package]]
 name = "sumcheck"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "env_logger 0.11.10",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "log",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "rayon",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
-]
-
-[[package]]
-name = "sumcheck"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "circuit 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
+ "circuit",
  "env_logger 0.11.10",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "gkr_engine",
+ "gkr_hashers",
  "log",
- "polynomials 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "polynomials",
  "rayon",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "transcript 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "utils 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
+ "transcript",
+ "utils",
 ]
 
 [[package]]
@@ -14790,7 +14341,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -15516,25 +15067,12 @@ dependencies = [
 [[package]]
 name = "transcript"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "sha2 0.10.9",
- "tiny-keccak",
-]
-
-[[package]]
-name = "transcript"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_engine 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "gkr_hashers 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
+ "gkr_engine",
+ "gkr_hashers",
+ "serdes",
  "sha2 0.10.9",
  "tiny-keccak",
 ]
@@ -15552,22 +15090,11 @@ dependencies = [
 [[package]]
 name = "tree"
 version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
-dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "ark-std 0.4.0",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603)",
- "tiny-keccak",
-]
-
-[[package]]
-name = "tree"
-version = "0.4.0"
 source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2#719813e249ad7297993f4be5cf8cc2a8698d163d"
 dependencies = [
- "arith 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "arith",
  "ark-std 0.4.0",
- "serdes 0.4.0 (git+https://github.com/inference-labs-inc/JSTprove.git?rev=719813e2)",
+ "serdes",
  "tiny-keccak",
 ]
 
@@ -15818,11 +15345,6 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
-
-[[package]]
-name = "utils"
-version = "0.4.0"
-source = "git+https://github.com/inference-labs-inc/JSTprove.git?rev=4ef9603#4ef960351fb54fe7473fa62a85d68c7f13d4a96e"
 
 [[package]]
 name = "utils"
@@ -16517,7 +16039,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
