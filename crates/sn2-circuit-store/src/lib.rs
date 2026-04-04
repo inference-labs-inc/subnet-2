@@ -832,7 +832,11 @@ impl CircuitStore {
                     );
                     true
                 }
-                Err(_) if comp_dir.exists() && comp.has_circuit => {
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::NotFound
+                        && comp_dir.exists()
+                        && comp.has_circuit =>
+                {
                     let bundle_dir = comp_dir.join("jstprove").join("circuit.bundle");
                     let missing = !bundle_dir.is_dir()
                         || bundle_dir

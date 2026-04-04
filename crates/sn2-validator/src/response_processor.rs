@@ -28,7 +28,6 @@ fn resolve_circuit_path(response: &MinerResponse, circuit: &Circuit) -> String {
 struct CircuitContext {
     num_inputs: usize,
     weights_as_inputs: bool,
-    output_names: Vec<String>,
 }
 
 fn load_circuit_context(
@@ -62,15 +61,10 @@ fn load_circuit_context(
         });
 
     let weights_as_inputs = params.as_ref().is_some_and(|p| p.weights_as_inputs);
-    let output_names = params
-        .as_ref()
-        .map(|p| p.outputs.iter().map(|o| o.name.clone()).collect())
-        .unwrap_or_default();
 
     CircuitContext {
         num_inputs,
         weights_as_inputs,
-        output_names,
     }
 }
 
