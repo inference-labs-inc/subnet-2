@@ -835,7 +835,9 @@ impl CircuitStore {
                 Err(_) if comp_dir.exists() && comp.has_circuit => {
                     let bundle_dir = comp_dir.join("jstprove").join("circuit.bundle");
                     let missing = !bundle_dir.is_dir()
-                        || bundle_dir.read_dir().map_or(true, |mut d| d.next().is_none());
+                        || bundle_dir
+                            .read_dir()
+                            .map_or(true, |mut d| d.next().is_none());
                     if missing {
                         info!(
                             name = comp.name,
