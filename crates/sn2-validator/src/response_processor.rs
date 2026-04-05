@@ -4,25 +4,19 @@ use anyhow::Result;
 use sn2_types::{Circuit, MinerResponse, ProofSystem};
 use tracing::warn;
 
-fn resolve_circuit_path(response: &MinerResponse, circuit: &Circuit) -> String {
-    if response.is_incremental {
-        let slice_num = response.dsperse_slice_num.unwrap_or(0);
-        let slices_dir = circuit.paths.base_path.join("slices");
-        let bundle = slices_dir
-            .join(format!("slice_{slice_num}"))
-            .join("jstprove/circuit.bundle");
-        if bundle.is_dir() {
-            return bundle.to_string_lossy().to_string();
-        }
-        let compiled = slices_dir
-            .join(format!("slice_{slice_num}"))
-            .join("model.compiled");
-        if compiled.exists() {
-            return compiled.to_string_lossy().to_string();
-        }
+fn resolve_circuit_path(response: &MinerResponse, circuit: &Circuit) -> Option<String> {
+    let slice_num = response.dsperse_slice_num.unwrap_or(0);
+    let bundle = circuit
+        .paths
+        .base_path
+        .join("slices")
+        .join(format!("slice_{slice_num}"))
+        .join("jstprove/circuit.bundle");
+    if bundle.is_dir() {
+        Some(bundle.to_string_lossy().to_string())
+    } else {
+        None
     }
-
-    circuit.paths.compiled_model.to_string_lossy().to_string()
 }
 
 struct CircuitContext {
@@ -184,12 +178,14 @@ impl ResponseProcessor {
             return Ok(false);
         }
 
-        let circuit_path = resolve_circuit_path(response, circuit);
-
-        if !std::path::Path::new(&circuit_path).exists() {
-            warn!(uid = response.uid, path = %circuit_path, "compiled model not found");
-            return Ok(false);
-        }
+        let circuit_path = match resolve_circuit_path(response, circuit) {
+            Some(p) => p,
+            None => {
+                let slice_num = response.dsperse_slice_num.unwrap_or(0);
+                warn!(uid = response.uid, slice = slice_num, "circuit bundle not found for slice");
+                return Ok(false);
+            }
+        };
 
         let ctx = load_circuit_context(circuit, &response.inputs, &circuit_path);
         let num_inputs = ctx.num_inputs;

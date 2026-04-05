@@ -12261,7 +12261,6 @@ dependencies = [
  "sn2-types",
  "tokio",
  "tracing",
- "zip",
 ]
 
 [[package]]

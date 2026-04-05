@@ -12,94 +12,12 @@ use sn2_types::{
 use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 
-const SKIP_AUTO_DOWNLOAD: &[&str] = &["metadata.json", "full_model.onnx"];
 const CIRCUIT_METADATA_FILENAME: &str = "circuit_metadata.json";
 const DSLICE_READY_MARKER: &str = ".dslice_ready";
 const REFRESH_INTERVAL_SECS: u64 = 600;
 
 fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-fn resolve_files(data: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
-    let file_map = data.get("file_map").and_then(|v| v.as_object());
-
-    if let Some(files_obj) = data.get("files").and_then(|v| v.as_object()) {
-        if let Some(fmap) = file_map {
-            let files_lower: HashMap<String, serde_json::Value> = files_obj
-                .iter()
-                .map(|(k, v)| (k.to_lowercase(), v.clone()))
-                .collect();
-            let mut resolved = serde_json::Map::new();
-            for (filename, hash_val) in fmap {
-                if let Some(hash) = hash_val.as_str() {
-                    let hash_lower = hash.to_lowercase();
-                    if let Some(url) = files_lower.get(&hash_lower) {
-                        resolved.insert(filename.clone(), url.clone());
-                    } else {
-                        warn!(
-                            filename,
-                            hash, "file_map entry has no matching download URL in files"
-                        );
-                    }
-                }
-            }
-            return resolved;
-        }
-
-        let all_hash_keys = !files_obj.is_empty() && files_obj.keys().all(|k| is_sha256_hex(k));
-        if all_hash_keys {
-            warn!(
-                "API returned content-addressed files without file_map, cannot resolve filenames"
-            );
-            return serde_json::Map::new();
-        }
-
-        return files_obj.clone();
-    }
-
-    if let Some(arr) = data.get("files").and_then(|v| v.as_array()) {
-        warn!(
-            count = arr.len(),
-            "API returned files as array without file_map, skipping downloads"
-        );
-    }
-
-    serde_json::Map::new()
-}
-
-fn derive_checksums(
-    file_map: Option<&serde_json::Map<String, serde_json::Value>>,
-    explicit: &serde_json::Map<String, serde_json::Value>,
-) -> serde_json::Map<String, serde_json::Value> {
-    if !explicit.is_empty() {
-        return explicit.clone();
-    }
-    let Some(fmap) = file_map else {
-        return serde_json::Map::new();
-    };
-    let mut checksums = serde_json::Map::new();
-    for (filename, hash_val) in fmap {
-        if let Some(hash) = hash_val.as_str() {
-            if is_sha256_hex(hash) {
-                checksums.insert(
-                    filename.clone(),
-                    serde_json::Value::String(hash.to_lowercase()),
-                );
-            }
-        }
-    }
-    checksums
-}
-
-fn extract_content_hash_from_url(url: &str) -> Option<String> {
-    let segment = url.rsplit('/').next()?;
-    let clean = segment.split('?').next()?;
-    if is_sha256_hex(clean) {
-        Some(clean.to_lowercase())
-    } else {
-        None
-    }
 }
 
 struct WeightRef {
@@ -307,14 +225,6 @@ impl CircuitStore {
         }
 
         Ok(removed)
-    }
-
-    pub fn get_benchmark_circuits(&self) -> Vec<Circuit> {
-        self.circuits
-            .values()
-            .filter(|c| c.metadata.circuit_type != CircuitType::DSPERSE_PROOF_GENERATION)
-            .cloned()
-            .collect()
     }
 
     pub fn get_dsperse_circuits(&self) -> Vec<Circuit> {
@@ -557,7 +467,6 @@ impl CircuitStore {
             serde_json::from_value(metadata_value.clone()).context("parsing circuit metadata")?;
 
         let metadata_json = serde_json::to_string_pretty(metadata_value)?;
-        let is_dsperse = metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION;
 
         let has_composition = data.get("composition").is_some_and(|c| {
             c.get("components")
@@ -565,15 +474,12 @@ impl CircuitStore {
                 .is_some_and(|a| !a.is_empty())
         });
 
-        let mut sha_mappings = Vec::new();
-        if has_composition && is_dsperse {
+        let sha_mappings = if has_composition {
             match self
                 .download_composable_model(circuit_id, data, &cache_path)
                 .await
             {
-                Ok(mappings) => {
-                    sha_mappings = mappings;
-                }
+                Ok(mappings) => mappings,
                 Err(e) => {
                     if is_fresh {
                         let _ = std::fs::remove_dir_all(&cache_path);
@@ -582,48 +488,9 @@ impl CircuitStore {
                 }
             }
         } else {
-            let files = resolve_files(data);
-            if files.is_empty() && data.get("files").is_some() {
-                warn!(
-                    circuit_id,
-                    "API provided files but none could be resolved, circuit may be unusable"
-                );
-            }
-            if !files.is_empty() {
-                if is_dsperse {
-                    let slices_dir = cache_path.join("slices");
-                    std::fs::create_dir_all(&slices_dir)
-                        .with_context(|| format!("creating slices dir {}", slices_dir.display()))?;
-                }
-
-                let file_map = data.get("file_map").and_then(|v| v.as_object());
-                let explicit_checksums = data
-                    .get("checksums")
-                    .and_then(|v| v.as_object())
-                    .cloned()
-                    .unwrap_or_default();
-                let checksums = derive_checksums(file_map, &explicit_checksums);
-
-                let deferred_downloads = match self
-                    .download_circuit_files(&files, &cache_path, is_dsperse, &checksums)
-                    .await
-                {
-                    Ok(d) => d,
-                    Err(e) => {
-                        if is_fresh {
-                            let _ = std::fs::remove_dir_all(&cache_path);
-                        }
-                        return Err(e);
-                    }
-                };
-
-                if !deferred_downloads.is_empty() {
-                    self.spawn_deferred_downloads(circuit_id, &cache_path, deferred_downloads);
-                } else if is_dsperse {
-                    let _ = std::fs::write(cache_path.join(DSLICE_READY_MARKER), b"");
-                }
-            }
-        }
+            warn!(circuit_id, "non-composable circuit skipped (deprecated)");
+            Vec::new()
+        };
 
         let metadata_path = cache_path.join(CIRCUIT_METADATA_FILENAME);
         std::fs::write(&metadata_path, metadata_json).context("writing metadata")?;
@@ -732,11 +599,13 @@ impl CircuitStore {
         let total = components.len();
         let parsed = Self::parse_components(components)?;
 
-        Self::invalidate_stale_components(slices_dir, &parsed)?;
+        let stale = Self::find_stale_components(slices_dir, &parsed);
         Self::ensure_component_dirs(slices_dir, &parsed)?;
 
         for (idx, comp) in parsed.iter().enumerate() {
-            self.download_component_files(slices_dir, comp).await?;
+            let needs_download = stale.contains(&comp.name);
+            self.download_component_files(slices_dir, comp, needs_download)
+                .await?;
             Self::write_component_stamp(slices_dir, comp)?;
             if (idx + 1) % 50 == 0 || idx + 1 == total {
                 info!(
@@ -815,55 +684,67 @@ impl CircuitStore {
             .collect()
     }
 
-    fn invalidate_stale_components(
+    fn find_stale_components(
         slices_dir: &Path,
         components: &[ParsedComponent],
-    ) -> Result<()> {
+    ) -> HashSet<String> {
+        let mut stale = HashSet::new();
         for comp in components {
             let comp_dir = slices_dir.join(&comp.name);
             let stamp_path = comp_dir.join("component.sha");
-            let should_clear = match std::fs::read_to_string(&stamp_path) {
-                Ok(stamp) if stamp.trim() != comp.sha => {
+            let needs_redownload = match std::fs::read_to_string(&stamp_path) {
+                Ok(stamp) if stamp.trim() == comp.sha => {
+                    if comp.has_circuit {
+                        let bundle_dir = comp_dir.join("jstprove").join("circuit.bundle");
+                        let has_circuit_bin = bundle_dir.join("circuit.bin").exists();
+                        if !has_circuit_bin {
+                            info!(
+                                name = comp.name,
+                                "component missing circuit.bin, will re-download"
+                            );
+                        }
+                        !has_circuit_bin
+                    } else {
+                        false
+                    }
+                }
+                Ok(stamp) => {
                     info!(
                         name = comp.name,
                         sha = comp.sha,
                         old_sha = stamp.trim(),
-                        "component SHA changed, clearing stale cache"
+                        "component SHA changed, will re-download"
                     );
                     true
                 }
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::NotFound
-                        && comp_dir.exists()
-                        && comp.has_circuit =>
-                {
-                    let bundle_dir = comp_dir.join("jstprove").join("circuit.bundle");
-                    let missing = !bundle_dir.is_dir()
-                        || bundle_dir
-                            .read_dir()
-                            .map_or(true, |mut d| d.next().is_none());
-                    if missing {
-                        info!(
-                            name = comp.name,
-                            sha = comp.sha,
-                            "component missing circuit bundle and SHA stamp, clearing incomplete cache"
-                        );
+                Err(_) => {
+                    if !comp_dir.exists() {
+                        true
+                    } else if comp.has_circuit {
+                        let has_circuit_bin = comp_dir
+                            .join("jstprove")
+                            .join("circuit.bundle")
+                            .join("circuit.bin")
+                            .exists();
+                        !has_circuit_bin
+                    } else {
+                        let has_payload = comp_dir.join("payload").exists()
+                            && comp_dir
+                                .join("payload")
+                                .read_dir()
+                                .is_ok_and(|mut d| d.next().is_some());
+                        !has_payload
                     }
-                    missing
                 }
-                _ => false,
             };
-            if should_clear {
-                std::fs::remove_dir_all(&comp_dir).with_context(|| {
-                    format!(
-                        "removing stale component {} at {}",
-                        comp.name,
-                        comp_dir.display()
-                    )
-                })?;
+            if needs_redownload {
+                stale.insert(comp.name.clone());
             }
         }
-        Ok(())
+        if !stale.is_empty() {
+            info!(count = stale.len(), "components requiring download");
+        }
+        stale
     }
 
     fn ensure_component_dirs(slices_dir: &Path, components: &[ParsedComponent]) -> Result<()> {
@@ -881,6 +762,7 @@ impl CircuitStore {
         &self,
         slices_dir: &Path,
         comp: &ParsedComponent,
+        force: bool,
     ) -> Result<()> {
         if comp.has_circuit {
             let bundle_dir = slices_dir
@@ -893,7 +775,7 @@ impl CircuitStore {
                 }
                 let filename = Self::sanitize_name(raw_filename, "component file")?;
                 let dest = bundle_dir.join(filename);
-                if dest.exists() {
+                if dest.exists() && !force {
                     continue;
                 }
                 let url = format!(
@@ -910,7 +792,7 @@ impl CircuitStore {
         for wb in &comp.weights {
             let filename = Self::sanitize_name(&wb.filename, "weight blob file")?;
             let dest = payload_dir.join(filename);
-            if dest.exists() {
+            if dest.exists() && !force {
                 continue;
             }
             let url = format!("{}/models/wb/{}", self.api_url, wb.sha);
@@ -962,134 +844,6 @@ impl CircuitStore {
             info!(filename, "downloaded model artifact");
         }
         Ok(())
-    }
-
-    async fn download_circuit_files(
-        &self,
-        files: &serde_json::Map<String, serde_json::Value>,
-        cache_path: &Path,
-        is_dsperse: bool,
-        checksums: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<Vec<(String, PathBuf)>> {
-        let mut deferred_downloads: Vec<(String, PathBuf)> = Vec::new();
-
-        for (filename, url_val) in files {
-            let safe_name = Path::new(filename).file_name().and_then(|n| n.to_str());
-            if safe_name != Some(filename.as_str()) {
-                anyhow::bail!("rejecting filename with path traversal: {filename}");
-            }
-
-            let skip = if is_dsperse {
-                filename == "full_model.onnx"
-            } else {
-                SKIP_AUTO_DOWNLOAD.contains(&filename.as_str())
-            };
-            if skip {
-                continue;
-            }
-
-            if is_dsperse && filename.ends_with(".dslice") {
-                let cache_path = cache_path.to_path_buf();
-                let filename_owned = filename.clone();
-                let checksums = checksums.clone();
-                let url_val = url_val.clone();
-                match tokio::task::spawn_blocking(move || {
-                    resolve_dslice_download(&cache_path, &filename_owned, &checksums, &url_val)
-                })
-                .await
-                {
-                    Ok(Ok(Some(url))) => deferred_downloads.push(url),
-                    Ok(Ok(None)) => {}
-                    Ok(Err(e)) => {
-                        return Err(e.context(format!("dslice preflight failed: {filename}")));
-                    }
-                    Err(e) => {
-                        anyhow::bail!("spawn_blocking panicked for dslice check: {filename}: {e}");
-                    }
-                }
-                continue;
-            }
-
-            let dest =
-                if is_dsperse && (filename == "metadata.json" || filename == "metadata.msgpack") {
-                    cache_path.join("slices").join(filename)
-                } else {
-                    cache_path.join(filename)
-                };
-            if dest.exists() {
-                continue;
-            }
-            let url = url_val.as_str().with_context(|| {
-                format!("circuit file {filename} has non-string URL value: {url_val}")
-            })?;
-            self.download_file(url, &dest)
-                .await
-                .with_context(|| format!("downloading required circuit file: {filename}"))?;
-        }
-
-        Ok(deferred_downloads)
-    }
-
-    fn spawn_deferred_downloads(
-        &self,
-        circuit_id: &str,
-        cache_path: &Path,
-        deferred_downloads: Vec<(String, PathBuf)>,
-    ) {
-        if !self
-            .inflight_downloads
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(circuit_id.to_string())
-        {
-            return;
-        }
-        let _ = std::fs::remove_file(cache_path.join(DSLICE_READY_MARKER));
-        let count = deferred_downloads.len();
-        let http = self.http.clone();
-        let inflight = Arc::clone(&self.inflight_downloads);
-        let cid = circuit_id.to_string();
-        let marker_path = cache_path.join(DSLICE_READY_MARKER);
-        info!(circuit = %circuit_id, files = count, "spawning background dslice downloads");
-        tokio::spawn(async move {
-            let mut downloaded = 0usize;
-            let mut failed = 0usize;
-            for (url, dest) in &deferred_downloads {
-                if dest.exists() {
-                    downloaded += 1;
-                    continue;
-                }
-                match download_file_static(&http, url, dest).await {
-                    Ok(()) => {
-                        downloaded += 1;
-                        if downloaded % 20 == 0 || downloaded == count {
-                            info!(progress = %format!("{downloaded}/{count}"), "dslice download progress");
-                        }
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        warn!(file = %dest.display(), error = %e, "failed to download dslice file");
-                    }
-                }
-            }
-            if failed == 0 {
-                let _ = std::fs::write(&marker_path, b"");
-            } else {
-                warn!(circuit = %cid, failed, "dslice downloads incomplete, will retry on next refresh");
-            }
-            match inflight.lock() {
-                Ok(mut set) => {
-                    set.remove(&cid);
-                }
-                Err(poisoned) => {
-                    poisoned.into_inner().remove(&cid);
-                }
-            }
-            info!(
-                count = downloaded,
-                failed, "dslice background downloads complete"
-            );
-        });
     }
 
     fn load_from_cache(&mut self, active_ids: &HashSet<String>) {
@@ -1155,12 +909,11 @@ impl CircuitStore {
 
         match load_circuit_from_cache(&circuit_id, &entry.path(), cache_dir) {
             Ok(circuit) => {
-                if circuit.metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION {
-                    migrate_dslice_layout(&entry.path());
-                    if !entry.path().join(DSLICE_READY_MARKER).exists() {
-                        warn!(id = %circuit_id, "skipping incomplete DSPERSE circuit from cache");
-                        return None;
-                    }
+                if circuit.metadata.circuit_type == CircuitType::DSPERSE_PROOF_GENERATION
+                    && !entry.path().join(DSLICE_READY_MARKER).exists()
+                {
+                    warn!(id = %circuit_id, "skipping incomplete DSPERSE circuit from cache");
+                    return None;
                 }
                 Some((circuit_id, circuit))
             }
@@ -1193,7 +946,15 @@ async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) ->
         .get("x-checksum-sha256")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_lowercase())
-        .or_else(|| extract_content_hash_from_url(url));
+        .or_else(|| {
+            let segment = url.rsplit('/').next()?;
+            let clean = segment.split('?').next()?;
+            if is_sha256_hex(clean) {
+                Some(clean.to_lowercase())
+            } else {
+                None
+            }
+        });
 
     let partial = dest.with_extension("partial");
 
@@ -1281,150 +1042,4 @@ fn load_settings(dir: &Path) -> HashMap<String, serde_json::Value> {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
-}
-
-fn migrate_dslice_layout(model_dir: &Path) {
-    let slices_dir = model_dir.join("slices");
-    if slices_dir.exists() {
-        return;
-    }
-    let entries = match std::fs::read_dir(model_dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    let dslice_files: Vec<_> = entries
-        .flatten()
-        .filter(|e| e.file_name().to_string_lossy().ends_with(".dslice"))
-        .collect();
-    if dslice_files.is_empty() {
-        return;
-    }
-    if std::fs::create_dir_all(&slices_dir).is_err() {
-        return;
-    }
-    for entry in dslice_files {
-        let dest = slices_dir.join(entry.file_name());
-        if let Err(e) = std::fs::rename(entry.path(), &dest) {
-            warn!(
-                file = %entry.file_name().to_string_lossy(),
-                error = %e,
-                "failed to migrate dslice file to slices/"
-            );
-        }
-    }
-    info!(dir = %model_dir.display(), "migrated dslice files to slices/ subdirectory");
-}
-
-fn validate_slice_id(slice_id: &str) -> Result<()> {
-    anyhow::ensure!(
-        !slice_id.contains('/') && !slice_id.contains('\\') && !slice_id.contains(".."),
-        "invalid slice_id: {slice_id}"
-    );
-    Ok(())
-}
-
-pub fn ensure_slice_extracted(slices_dir: &Path, slice_id: &str) -> Result<()> {
-    validate_slice_id(slice_id)?;
-    let extract_dir = slices_dir.join(slice_id);
-    if extract_dir.exists() {
-        return Ok(());
-    }
-    let archive = slices_dir.join(format!("{slice_id}.dslice"));
-    if !archive.exists() {
-        anyhow::bail!("dslice archive not found: {}", archive.display());
-    }
-    let tmp_dir = slices_dir.join(format!(".{slice_id}.extracting.{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir).with_context(|| format!("creating {}", tmp_dir.display()))?;
-    let file =
-        std::fs::File::open(&archive).with_context(|| format!("opening {}", archive.display()))?;
-    let mut zip =
-        zip::ZipArchive::new(file).with_context(|| format!("reading zip {}", archive.display()))?;
-    if let Err(e) = zip
-        .extract(&tmp_dir)
-        .with_context(|| format!("extracting {} to {}", archive.display(), tmp_dir.display()))
-    {
-        std::fs::remove_dir_all(&tmp_dir).ok();
-        return Err(e);
-    }
-    if let Err(e) = std::fs::rename(&tmp_dir, &extract_dir) {
-        std::fs::remove_dir_all(&tmp_dir).ok();
-        if extract_dir.exists() {
-            return Ok(());
-        }
-        return Err(anyhow::anyhow!(
-            "renaming {} to {}: {e}",
-            tmp_dir.display(),
-            extract_dir.display()
-        ));
-    }
-    Ok(())
-}
-
-fn resolve_dslice_download(
-    cache_path: &Path,
-    filename: &str,
-    checksums: &serde_json::Map<String, serde_json::Value>,
-    url_val: &serde_json::Value,
-) -> Result<Option<(String, PathBuf)>> {
-    let archive_dest = cache_path.join("slices").join(filename);
-    let slice_name = filename.trim_end_matches(".dslice");
-    let extracted_dir = cache_path.join("slices").join(slice_name);
-    if archive_dest.exists() {
-        if file_checksum_valid(&archive_dest, checksums, filename) {
-            return Ok(None);
-        }
-        warn!(file = %filename, "SHA-256 mismatch, removing corrupted dslice");
-        std::fs::remove_file(&archive_dest)
-            .with_context(|| format!("removing corrupted archive {}", archive_dest.display()))?;
-        if extracted_dir.exists() {
-            std::fs::remove_dir_all(&extracted_dir).with_context(|| {
-                format!("removing stale extracted dir {}", extracted_dir.display())
-            })?;
-        }
-    } else if extracted_dir.exists() {
-        return Ok(None);
-    }
-    let url = url_val
-        .as_str()
-        .with_context(|| format!("dslice {filename} has non-string URL value: {url_val}"))?;
-    Ok(Some((url.to_string(), archive_dest)))
-}
-
-fn file_checksum_valid(
-    path: &Path,
-    checksums: &serde_json::Map<String, serde_json::Value>,
-    filename: &str,
-) -> bool {
-    let Some(expected) = checksums.get(filename).and_then(|v| v.as_str()) else {
-        return true;
-    };
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut reader = std::io::BufReader::new(file);
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let Ok(n) = std::io::Read::read(&mut reader, &mut buf) else {
-            return false;
-        };
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    hex::encode(hasher.finalize()) == expected
-}
-
-pub fn cleanup_extracted_slice(slices_dir: &Path, slice_id: &str) {
-    if let Err(e) = validate_slice_id(slice_id) {
-        tracing::warn!(slice_id, error = %e, "refusing to clean up slice with invalid id");
-        return;
-    }
-    let extract_dir = slices_dir.join(slice_id);
-    if extract_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&extract_dir) {
-            tracing::warn!(dir = %extract_dir.display(), error = %e, "failed to remove extracted slice dir");
-        }
-    }
 }

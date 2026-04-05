@@ -45,9 +45,6 @@ pub struct Cli {
     #[arg(long)]
     pub proof_api_url: Option<String>,
 
-    #[arg(long)]
-    pub max_benchmark_concurrent: Option<usize>,
-
     #[arg(long, value_delimiter = ',')]
     pub target_uid: Vec<u16>,
 

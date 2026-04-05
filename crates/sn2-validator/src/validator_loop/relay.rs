@@ -225,7 +225,7 @@ impl ValidatorLoop {
     }
 
     pub(super) async fn teardown_run(&mut self, run_uid: &str) {
-        self.cleanup_extracted_slices(run_uid).await;
+        self.cleanup_run_resources(run_uid).await;
         let removed = self.run_manager.remove_run(run_uid);
         if let Some(ref run) = removed {
             self.spawn_emit_run_complete(run, false);

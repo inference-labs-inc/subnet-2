@@ -1,7 +1,5 @@
 use sha2::{Digest, Sha256};
-use sn2_types::{
-    BoundedFifoSet, Circuit, DSliceProofGenerationDataModel, ProofSystem, Request, RequestType,
-};
+use sn2_types::{BoundedFifoSet, Circuit, DSliceProofGenerationDataModel, ProofSystem};
 use tracing::warn;
 
 const MAX_HASHES: usize = 32768;
@@ -62,38 +60,6 @@ impl RequestPipeline {
         }
         self.hash_guard.insert(hash.clone());
         Some(hash)
-    }
-
-    fn check_benchmark_hash(
-        &mut self,
-        circuit_id: &str,
-        inputs: &serde_json::Value,
-    ) -> Option<String> {
-        let input_bytes = serialize_or_null(inputs);
-        let mut hasher = Sha256::new();
-        hasher.update(circuit_id.as_bytes());
-        hasher.update(b":");
-        hasher.update(&input_bytes);
-        let hash = hex::encode(hasher.finalize());
-        if self.hash_guard.contains(&hash) {
-            return None;
-        }
-        self.hash_guard.insert(hash.clone());
-        Some(hash)
-    }
-
-    pub fn prepare_benchmark_request(
-        &mut self,
-        circuit: &Circuit,
-        inputs: serde_json::Value,
-    ) -> Option<Request> {
-        self.check_benchmark_hash(&circuit.id, &inputs)?;
-        Some(Request {
-            circuit: circuit.clone(),
-            inputs,
-            request_type: RequestType::Benchmark,
-            retry_count: 0,
-        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -254,34 +220,6 @@ mod tests {
             settings: HashMap::new(),
             timeout: 60.0,
         }
-    }
-
-    #[test]
-    fn prepare_benchmark_request_deduplicates() {
-        let mut pipeline = RequestPipeline::new();
-        let circuit = make_test_circuit("test");
-        let inputs = serde_json::json!({"x": 1});
-        assert!(pipeline
-            .prepare_benchmark_request(&circuit, inputs.clone())
-            .is_some());
-        assert!(pipeline
-            .prepare_benchmark_request(&circuit, inputs)
-            .is_none());
-    }
-
-    #[test]
-    fn prepare_benchmark_different_circuits_same_inputs() {
-        let mut pipeline = RequestPipeline::new();
-        let inputs = serde_json::json!({"x": 1});
-        assert!(pipeline
-            .prepare_benchmark_request(&make_test_circuit("circuit_a"), inputs.clone())
-            .is_some());
-        assert!(
-            pipeline
-                .prepare_benchmark_request(&make_test_circuit("circuit_b"), inputs)
-                .is_some(),
-            "different circuit with same inputs should not collide"
-        );
     }
 
     #[test]

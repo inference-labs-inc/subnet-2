@@ -13,6 +13,5 @@ tracing = { workspace = true }
 reqwest = { workspace = true }
 shellexpand = { workspace = true }
 futures-util = { workspace = true }
-zip = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }

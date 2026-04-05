@@ -110,7 +110,6 @@ impl ValidatorLoop {
                 + self.api_dslice_queue.len()
                 + self.stacked_dslice_queue.len();
             let queryable_count = self.get_queryable_neurons().len();
-            let benchmark_count = self.circuit_store.get_benchmark_circuits().len();
             let dsperse_count = self.circuit_store.get_dsperse_circuits().len();
             info!(
                 active_tasks = active_tasks,
@@ -119,7 +118,6 @@ impl ValidatorLoop {
                 stacked_dslice_queue = self.stacked_dslice_queue.len(),
                 active_runs = self.run_manager.active_count(),
                 queryable_neurons = queryable_count,
-                benchmark_circuits = benchmark_count,
                 dsperse_circuits = dsperse_count,
                 verification_concurrency = self.verification_concurrency,
                 verify_tasks = self.verify_tasks.len(),
@@ -155,7 +153,7 @@ impl ValidatorLoop {
             if !evicted.is_empty() {
                 info!(circuit = %circuit_id, runs = ?evicted, "evicted in-flight runs for deactivated circuit");
                 for run_id in &evicted {
-                    self.cleanup_extracted_slices(run_id).await;
+                    self.cleanup_run_resources(run_id).await;
                     self.dslice_input_scales.retain(|(uid, _), _| uid != run_id);
                     self.relay_remove_pending(run_id).await;
                 }
@@ -175,7 +173,7 @@ impl ValidatorLoop {
     async fn gc_stale_runs(&mut self) {
         let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
         for uid in &evicted {
-            self.cleanup_extracted_slices(uid).await;
+            self.cleanup_run_resources(uid).await;
             self.dslice_input_scales
                 .retain(|(run_uid, _), _| run_uid != uid);
             self.relay_remove_pending(uid).await;

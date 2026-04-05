@@ -144,20 +144,46 @@ impl DSperseClient {
         .context("component resolution task panicked")?
     }
 
-    async fn resolve_model_slice(&self, circuit_id: &str, slice_id: &str) -> Result<PathBuf> {
-        let slices_dir = self
-            .cache_dir
-            .join(format!("model_{circuit_id}"))
-            .join("slices");
-        tokio::task::spawn_blocking({
-            let slices_dir = slices_dir.clone();
-            let slice_id = slice_id.to_string();
-            move || sn2_circuit_store::ensure_slice_extracted(&slices_dir, &slice_id)
+    pub async fn prove(
+        &self,
+        model_id: &str,
+        inputs: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        validate_circuit_id(model_id)?;
+        let model_dir = self.cache_dir.join(format!("model_{model_id}"));
+        let circuit_path = model_dir.join("model.compiled");
+
+        anyhow::ensure!(
+            circuit_path.exists(),
+            "compiled model not found at {}",
+            circuit_path.display()
+        );
+
+        info!(
+            model_id,
+            circuit_path = %circuit_path.display(),
+            "generating witness and proof for non-composable model"
+        );
+
+        let inputs_clone = inputs.clone();
+
+        tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
+            let inputs_bytes = rmp_serde::to_vec_named(&inputs_clone)?;
+            let backend = dsperse::backend::jstprove::JstproveBackend::new();
+
+            let params = backend
+                .load_params(&circuit_path)
+                .map_err(|e| anyhow::anyhow!("loading circuit params: {e}"))?;
+
+            let witness_bytes = backend
+                .witness(&circuit_path, &inputs_bytes, &[])
+                .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?;
+
+            let dims = params.as_ref().map(|p| p.effective_input_dims());
+            prove_and_build_response(&backend, &circuit_path, &witness_bytes, dims)
         })
         .await
-        .context("slice extraction task panicked")?
-        .with_context(|| format!("extracting dslice archive for {slice_id}"))?;
-        Ok(slices_dir.join(slice_id))
+        .context("blocking task panicked")?
     }
 
     pub async fn prove_slice(
@@ -165,15 +191,12 @@ impl DSperseClient {
         circuit_id: &str,
         slice_num: &str,
         inputs: &serde_json::Value,
-        resolved_component_dir: Option<PathBuf>,
+        resolved_component_dir: PathBuf,
     ) -> Result<serde_json::Value> {
         validate_circuit_id(circuit_id)?;
-        let slice_id = normalize_slice_id(slice_num)?;
+        let _slice_id = normalize_slice_id(slice_num)?;
 
-        let slice_dir = match resolved_component_dir {
-            Some(dir) => dir,
-            None => self.resolve_model_slice(circuit_id, &slice_id).await?,
-        };
+        let slice_dir = resolved_component_dir;
 
         let circuit_path = slice_dir.join("jstprove").join("circuit.bundle");
         let onnx_path = find_slice_onnx(&slice_dir)?;
@@ -220,48 +243,6 @@ impl DSperseClient {
 
             let witness_bytes = backend
                 .witness_f64(&circuit_path, &input_flat, &inits)
-                .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?;
-
-            let dims = params.as_ref().map(|p| p.effective_input_dims());
-            prove_and_build_response(&backend, &circuit_path, &witness_bytes, dims)
-        })
-        .await
-        .context("blocking task panicked")?
-    }
-
-    pub async fn prove(
-        &self,
-        model_id: &str,
-        inputs: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        validate_circuit_id(model_id)?;
-        let model_dir = self.cache_dir.join(format!("model_{model_id}"));
-        let circuit_path = model_dir.join("model.compiled");
-
-        anyhow::ensure!(
-            circuit_path.exists(),
-            "compiled model not found at {}",
-            circuit_path.display()
-        );
-
-        info!(
-            model_id,
-            circuit_path = %circuit_path.display(),
-            "generating witness and proof"
-        );
-
-        let inputs_clone = inputs.clone();
-
-        tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
-            let inputs_bytes = rmp_serde::to_vec_named(&inputs_clone)?;
-            let backend = dsperse::backend::jstprove::JstproveBackend::new();
-
-            let params = backend
-                .load_params(&circuit_path)
-                .map_err(|e| anyhow::anyhow!("loading circuit params: {e}"))?;
-
-            let witness_bytes = backend
-                .witness(&circuit_path, &inputs_bytes, &[])
                 .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?;
 
             let dims = params.as_ref().map(|p| p.effective_input_dims());

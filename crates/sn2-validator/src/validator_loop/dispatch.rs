@@ -35,7 +35,6 @@ impl ValidatorLoop {
 
         let neuron_refs: Vec<&sn2_chain::NeuronInfo> = neurons.iter().collect();
         let api_eligible = self.compute_api_eligible(&neuron_refs);
-        let benchmark_circuits = self.circuit_store.get_benchmark_circuits();
 
         let pow_ready = self.pow_manager.should_batch();
         let pow_circuit = if pow_ready {
@@ -64,7 +63,7 @@ impl ValidatorLoop {
                 let was_at_capacity = active + 1 >= cap;
 
                 let dispatched = match self
-                    .select_request(uid, &pow_circuit, &benchmark_circuits)
+                    .select_request(uid, &pow_circuit)
                     .await
                 {
                     Some(d) => d,
@@ -89,7 +88,6 @@ impl ValidatorLoop {
         &mut self,
         uid: u16,
         pow_circuit: &Option<Circuit>,
-        benchmark_circuits: &[Circuit],
     ) -> Option<DispatchedRequest> {
         if let Some(pow_circ) = pow_circuit
             .as_ref()
@@ -238,58 +236,6 @@ impl ValidatorLoop {
                 dsperse_circuit_path: circuit_path,
                 component_sha,
             });
-        }
-
-        if !self.config.disable_benchmark
-            && !benchmark_circuits.is_empty()
-            && self
-                .config
-                .max_benchmark_concurrent
-                .is_none_or(|max| self.benchmark_in_flight < max)
-        {
-            let weights: Vec<f64> = benchmark_circuits
-                .iter()
-                .map(|c| c.metadata.benchmark_choice_weight.unwrap_or(1.0))
-                .collect();
-            let dist = match rand::distributions::WeightedIndex::new(&weights) {
-                Ok(d) => d,
-                Err(_) => return None,
-            };
-            let circuit_idx = rand::Rng::sample(&mut rand::thread_rng(), &dist);
-            let circuit = &benchmark_circuits[circuit_idx];
-            let inputs = circuit
-                .settings
-                .get("default_input")
-                .cloned()
-                .unwrap_or(serde_json::json!({}));
-            match self.pipeline.prepare_benchmark_request(circuit, inputs) {
-                Some(req) => {
-                    let body = serde_json::json!({
-                        "model_id": req.circuit.id,
-                        "query_input": req.inputs,
-                    });
-                    return Some(DispatchedRequest {
-                        request_type: RequestType::Benchmark,
-                        guard_hash: Some(String::new()),
-                        external_request_hash: None,
-                        body,
-                        synapse_name: QueryZkProof::NAME,
-                        retry_count: 0,
-                        slice_num: None,
-                        run_uid: None,
-                        is_tile: false,
-                        task_id: None,
-                        tile_idx: None,
-                        task_circuit: Some(circuit.clone()),
-                        task_inputs: Some(req.inputs),
-                        task_proof_system: Some(circuit.proof_system),
-                        retry_payload: RetryPayload::None,
-                        dsperse_circuit_path: None,
-                        component_sha: None,
-                    });
-                }
-                None => return None,
-            }
         }
 
         None

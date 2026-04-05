@@ -170,22 +170,7 @@ impl ValidatorLoop {
             .await;
     }
 
-    pub(super) async fn cleanup_extracted_slices(&mut self, run_uid: &str) {
-        if let Some(slices) = self.active_extracted_slices.remove(run_uid) {
-            let uid = run_uid.to_string();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                for (dir, sid) in slices {
-                    let slice_path = dir.join(&sid);
-                    sn2_verify::evict_circuit_cache(&slice_path.to_string_lossy());
-                    sn2_circuit_store::cleanup_extracted_slice(&dir, &sid);
-                }
-                tracing::debug!(run_uid = %uid, "extracted slices cleaned up");
-            })
-            .await
-            {
-                warn!(run_uid = %run_uid, error = %e, "slice cleanup task failed");
-            }
-        }
+    pub(super) async fn cleanup_run_resources(&mut self, _run_uid: &str) {
     }
 
     fn normalize_tensor(
@@ -205,30 +190,6 @@ impl ValidatorLoop {
                 input_max_abs,
                 "normalized circuit slice inputs to [-1, 1]"
             );
-        }
-    }
-
-    async fn extract_slice(
-        run_uid: &str,
-        slices_dir: &std::path::Path,
-        slice_id: &str,
-    ) -> Result<()> {
-        let dir = slices_dir.to_path_buf();
-        let sid = slice_id.to_string();
-        match tokio::task::spawn_blocking(move || {
-            sn2_circuit_store::ensure_slice_extracted(&dir, &sid)
-        })
-        .await
-        {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => {
-                warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "failed to extract slice");
-                Err(e)
-            }
-            Err(e) => {
-                warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "slice extraction panicked");
-                Err(anyhow::anyhow!(e))
-            }
         }
     }
 
@@ -255,8 +216,6 @@ impl ValidatorLoop {
         circuit: &Circuit,
         run_source: RunSource,
     ) {
-        let slices_dir = circuit.paths.base_path.join("slices");
-
         let work_items = match self.run_manager.all_circuit_work(run_uid) {
             Ok(items) => items,
             Err(e) => {
@@ -272,22 +231,9 @@ impl ValidatorLoop {
             return;
         }
 
-        self.active_extracted_slices
-            .insert(run_uid.to_string(), Vec::new());
         let mut staged = StagedWork::new();
 
         for work in work_items {
-            if Self::extract_slice(run_uid, &slices_dir, &work.slice_id)
-                .await
-                .is_err()
-            {
-                self.teardown_run(run_uid).await;
-                return;
-            }
-            if let Some(slices) = self.active_extracted_slices.get_mut(run_uid) {
-                slices.push((slices_dir.clone(), work.slice_id.clone()));
-            }
-
             let mut input_tensor = work.input;
 
             if input_tensor.iter().any(|v| !v.is_finite()) {
@@ -433,7 +379,7 @@ impl ValidatorLoop {
     }
 
     pub(super) async fn finalize_combined_run(&mut self, run_uid: &str) {
-        self.cleanup_extracted_slices(run_uid).await;
+        self.cleanup_run_resources(run_uid).await;
         self.dslice_input_scales
             .retain(|(uid, _), _| uid != run_uid);
 

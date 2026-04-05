@@ -22,7 +22,6 @@ pub struct ValidatorConfig {
     pub disable_benchmark: bool,
     pub metrics_port: u16,
     pub proof_api_url: Option<String>,
-    pub max_benchmark_concurrent: Option<usize>,
     pub target_uids: Option<HashSet<u16>>,
     pub circuit_api_url: Option<String>,
     pub disable_metric_logging: bool,
@@ -85,7 +84,6 @@ impl ValidatorConfig {
             disable_benchmark: cli.disable_benchmark,
             metrics_port: cli.metrics_port,
             proof_api_url: cli.proof_api_url.clone(),
-            max_benchmark_concurrent: cli.max_benchmark_concurrent,
             target_uids: if cli.target_uid.is_empty() {
                 None
             } else {
@@ -150,7 +148,6 @@ impl ValidatorConfig {
             disable_benchmark: cli.disable_benchmark,
             metrics_port: cli.metrics_port,
             proof_api_url: None,
-            max_benchmark_concurrent: cli.max_benchmark_concurrent,
             target_uids: Some([0].into_iter().collect()),
             circuit_api_url: cli.circuit_api_url.clone(),
             disable_metric_logging: true,
