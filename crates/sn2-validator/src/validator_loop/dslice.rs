@@ -171,6 +171,7 @@ impl ValidatorLoop {
     }
 
     pub(super) async fn cleanup_run_resources(&mut self, _run_uid: &str) {
+        // Composable model components persist on disk across runs — no cleanup needed.
     }
 
     fn normalize_tensor(

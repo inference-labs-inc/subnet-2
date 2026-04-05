@@ -194,7 +194,7 @@ impl DSperseClient {
         resolved_component_dir: PathBuf,
     ) -> Result<serde_json::Value> {
         validate_circuit_id(circuit_id)?;
-        let _slice_id = normalize_slice_id(slice_num)?;
+        let _ = normalize_slice_id(slice_num)?;
 
         let slice_dir = resolved_component_dir;
 

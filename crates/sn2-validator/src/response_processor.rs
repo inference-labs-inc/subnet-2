@@ -182,7 +182,11 @@ impl ResponseProcessor {
             Some(p) => p,
             None => {
                 let slice_num = response.dsperse_slice_num.unwrap_or(0);
-                warn!(uid = response.uid, slice = slice_num, "circuit bundle not found for slice");
+                warn!(
+                    uid = response.uid,
+                    slice = slice_num,
+                    "circuit bundle not found for slice"
+                );
                 return Ok(false);
             }
         };

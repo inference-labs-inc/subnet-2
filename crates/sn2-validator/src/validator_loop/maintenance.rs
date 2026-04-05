@@ -122,7 +122,6 @@ impl ValidatorLoop {
                 verification_concurrency = self.verification_concurrency,
                 verify_tasks = self.verify_tasks.len(),
                 pending_verifications = self.pending_verifications.len(),
-                benchmark_in_flight = self.benchmark_in_flight,
                 "health"
             );
             if let Some(reporter) = &mut self.stats_reporter {

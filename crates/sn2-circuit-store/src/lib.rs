@@ -684,10 +684,7 @@ impl CircuitStore {
             .collect()
     }
 
-    fn find_stale_components(
-        slices_dir: &Path,
-        components: &[ParsedComponent],
-    ) -> HashSet<String> {
+    fn find_stale_components(slices_dir: &Path, components: &[ParsedComponent]) -> HashSet<String> {
         let mut stale = HashSet::new();
         for comp in components {
             let comp_dir = slices_dir.join(&comp.name);

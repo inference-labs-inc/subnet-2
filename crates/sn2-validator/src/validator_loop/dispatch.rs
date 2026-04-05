@@ -62,10 +62,7 @@ impl ValidatorLoop {
                 let active = self.miner_active_count.get(&uid).copied().unwrap_or(0);
                 let was_at_capacity = active + 1 >= cap;
 
-                let dispatched = match self
-                    .select_request(uid, &pow_circuit)
-                    .await
-                {
+                let dispatched = match self.select_request(uid, &pow_circuit).await {
                     Some(d) => d,
                     None => break,
                 };
@@ -358,14 +355,10 @@ impl ValidatorLoop {
                 retry_payload,
             }
         });
-        let is_benchmark = request_type == RequestType::Benchmark;
         self.task_meta
-            .insert(abort_handle.id(), (uid, task_guard_hash, is_benchmark));
+            .insert(abort_handle.id(), (uid, task_guard_hash));
 
         *self.miner_active_count.entry(uid).or_insert(0) += 1;
-        if is_benchmark {
-            self.benchmark_in_flight += 1;
-        }
         metrics::record_request_sent(&request_type.to_string());
     }
 

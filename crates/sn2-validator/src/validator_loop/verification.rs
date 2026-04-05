@@ -12,9 +12,6 @@ impl ValidatorLoop {
         if let Some(count) = self.miner_active_count.get_mut(&uid) {
             *count = count.saturating_sub(1);
         }
-        if result.request_type == RequestType::Benchmark {
-            self.benchmark_in_flight = self.benchmark_in_flight.saturating_sub(1);
-        }
 
         if self.verify_tasks.len() >= self.verification_concurrency {
             self.pending_verifications.push_back(result);
