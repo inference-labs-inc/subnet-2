@@ -24,8 +24,8 @@ pub struct MinerQueryClient {
 impl MinerQueryClient {
     pub fn new(wallet: Arc<Wallet>) -> Result<Self> {
         let config = btlightning::LightningClientConfig {
-            max_frame_payload_bytes: 128 * 1024 * 1024,
-            max_stream_payload_bytes: 128 * 1024 * 1024,
+            max_frame_payload_bytes: sn2_types::TRANSPORT_PAYLOAD_LIMIT,
+            max_stream_payload_bytes: sn2_types::TRANSPORT_PAYLOAD_LIMIT,
             ..Default::default()
         };
         let mut lightning = LightningClient::with_config(wallet.hotkey_ss58().to_string(), config)

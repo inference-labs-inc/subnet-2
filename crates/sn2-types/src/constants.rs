@@ -2,6 +2,7 @@ pub const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const IS_RELEASE_BUILD: bool = option_env!("SN2_RELEASE_CHANNEL").is_some();
 
+pub const TRANSPORT_PAYLOAD_LIMIT: usize = 128 * 1024 * 1024;
 pub const VALIDATOR_REQUEST_TIMEOUT_SECONDS: u64 = 120;
 pub const CIRCUIT_TIMEOUT_SECONDS: u64 = 180;
 pub const WEIGHTS_VERSION: u32 = 11003;
