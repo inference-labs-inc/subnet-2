@@ -725,11 +725,20 @@ impl CircuitStore {
                             .exists();
                         !has_circuit_bin
                     } else {
-                        let has_payload = comp_dir.join("payload").exists()
-                            && comp_dir
-                                .join("payload")
-                                .read_dir()
-                                .is_ok_and(|mut d| d.next().is_some());
+                        let payload_dir = comp_dir.join("payload");
+                        let has_payload = match payload_dir.read_dir() {
+                            Ok(mut d) => d.next().is_some(),
+                            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                                warn!(
+                                    name = comp.name,
+                                    path = %payload_dir.display(),
+                                    error = %e,
+                                    "permission denied reading payload dir, skipping re-download"
+                                );
+                                true
+                            }
+                            Err(_) => false,
+                        };
                         !has_payload
                     }
                 }

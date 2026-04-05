@@ -194,9 +194,17 @@ impl DSperseClient {
         resolved_component_dir: PathBuf,
     ) -> Result<serde_json::Value> {
         validate_circuit_id(circuit_id)?;
+        // Validate slice format; the normalized path is not needed since
+        // resolved_component_dir already contains the canonical slice path.
         let _ = normalize_slice_id(slice_num)?;
 
         let slice_dir = resolved_component_dir;
+
+        anyhow::ensure!(
+            slice_dir.is_dir(),
+            "resolved component directory not found at {}",
+            slice_dir.display()
+        );
 
         let circuit_path = slice_dir.join("jstprove").join("circuit.bundle");
         let onnx_path = find_slice_onnx(&slice_dir)?;
