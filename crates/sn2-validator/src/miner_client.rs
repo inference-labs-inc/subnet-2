@@ -23,7 +23,13 @@ pub struct MinerQueryClient {
 
 impl MinerQueryClient {
     pub fn new(wallet: Arc<Wallet>) -> Result<Self> {
-        let mut lightning = LightningClient::new(wallet.hotkey_ss58().to_string());
+        let config = btlightning::LightningClientConfig {
+            max_frame_payload_bytes: 128 * 1024 * 1024,
+            max_stream_payload_bytes: 128 * 1024 * 1024,
+            ..Default::default()
+        };
+        let mut lightning = LightningClient::with_config(wallet.hotkey_ss58().to_string(), config)
+            .context("building lightning client")?;
         lightning.set_signer(Box::new(WalletSigner(wallet.clone())));
 
         Ok(Self { lightning })

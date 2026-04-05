@@ -22,6 +22,7 @@ pub async fn run_lightning_server(
     let config = LightningServerConfig::builder()
         .handler_timeout_secs(handler_timeout_secs)
         .idle_timeout_secs(idle_timeout)
+        .max_frame_payload_bytes(128 * 1024 * 1024)
         .build()?;
     let mut server =
         LightningServer::with_config(miner_hotkey.to_string(), host.to_string(), port, config)?;
