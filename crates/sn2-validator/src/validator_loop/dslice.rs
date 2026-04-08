@@ -322,17 +322,10 @@ impl ValidatorLoop {
         input_tensor: ndarray::ArrayD<f64>,
         run_source: RunSource,
     ) -> Option<usize> {
-        let input_4d = match input_tensor.into_dimensionality::<ndarray::Ix4>() {
-            Ok(arr) => arr,
-            Err(e) => {
-                warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "tiled slice requires 4D input");
-                return None;
-            }
-        };
-        let tiles = match dsperse::pipeline::split_into_tiles(&input_4d, tiling) {
+        let tiles = match dsperse::pipeline::split_for_tiling(&input_tensor, tiling) {
             Ok(t) => t,
             Err(e) => {
-                warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "split_into_tiles failed");
+                warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "split_for_tiling failed");
                 return None;
             }
         };
