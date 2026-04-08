@@ -209,13 +209,35 @@ impl ValidatorLoop {
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("wallet required in production mode"))?;
             let client = MinerQueryClient::new(wallet.clone())?;
-            let relay = RelayManager::new(
-                config.relay_url.clone(),
-                wallet.clone(),
-                config.relay_enabled,
-                dsperse_tx.clone(),
-                rwr_tx.clone(),
-            );
+            let is_mainnet_validator = config.netuid == DEFAULT_NETUID
+                && config
+                    .metagraph
+                    .get_neuron(config.user_uid)
+                    .is_some_and(|n| n.validator_permit);
+            let relay_reporting_enabled =
+                (IS_RELEASE_BUILD || config.relay_url_override) && is_mainnet_validator;
+            let relay = if relay_reporting_enabled {
+                Some(RelayManager::new(
+                    config.relay_url.clone(),
+                    wallet.clone(),
+                    config.relay_enabled,
+                    dsperse_tx.clone(),
+                    rwr_tx.clone(),
+                ))
+            } else {
+                if !is_mainnet_validator {
+                    info!(
+                        netuid = config.netuid,
+                        "sn2-relay disabled for non-mainnet validator"
+                    );
+                } else {
+                    info!(
+                        version = SOFTWARE_VERSION,
+                        "sn2-relay disabled for non-release build"
+                    );
+                }
+                None
+            };
             let api_reporting_enabled = IS_RELEASE_BUILD || config.proof_api_url.is_some();
             if !api_reporting_enabled {
                 info!(
@@ -223,11 +245,6 @@ impl ValidatorLoop {
                     "sn2-api reporting disabled for non-release build"
                 );
             }
-            let is_mainnet_validator = config.netuid == DEFAULT_NETUID
-                && config
-                    .metagraph
-                    .get_neuron(config.user_uid)
-                    .is_some_and(|n| n.validator_permit);
             let stats_enabled =
                 api_reporting_enabled && !config.disable_metric_logging && is_mainnet_validator;
             if api_reporting_enabled && !is_mainnet_validator {
@@ -265,7 +282,7 @@ impl ValidatorLoop {
             };
             (
                 Arc::new(RwLock::new(client)),
-                Some(relay),
+                relay,
                 uploader,
                 reporter,
                 events,
