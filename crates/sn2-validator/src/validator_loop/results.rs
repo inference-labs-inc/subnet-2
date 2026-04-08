@@ -1,5 +1,5 @@
 use sn2_types::*;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{event_slice_num, RetryPayload, ValidatorLoop};
 use crate::incremental_runner::SliceArtifact;
@@ -144,27 +144,6 @@ impl ValidatorLoop {
             }
 
             if self.run_manager.is_run_complete(run_uid) {
-                let failed_count = self.run_manager.failed_slice_count(run_uid);
-                if failed_count > 0 {
-                    warn!(
-                        run_uid = %run_uid,
-                        failed_count,
-                        "run complete with failed slices"
-                    );
-                }
-                if self.run_manager.get_run_source(run_uid) == Some(RunSource::Api)
-                    && failed_count > 0
-                {
-                    self.relay_set_request_result(
-                        run_uid,
-                        serde_json::json!({
-                            "run_uid": run_uid,
-                            "status": "partial",
-                            "error": format!("{failed_count} slice(s) failed after max retries"),
-                        }),
-                    )
-                    .await;
-                }
                 self.finalize_combined_run(run_uid).await;
             }
         }
@@ -197,6 +176,15 @@ impl ValidatorLoop {
         }
 
         if !self.run_manager.has_run(&run_uid) {
+            return;
+        }
+
+        if self.run_manager.is_slice_failed(&run_uid, &slice_num) {
+            debug!(
+                run_uid = %run_uid,
+                slice = %slice_num,
+                "ignoring late success for failed slice"
+            );
             return;
         }
 

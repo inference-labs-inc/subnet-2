@@ -189,10 +189,6 @@ impl IncrementalRunManager {
         self.evicted.contains(run_uid)
     }
 
-    pub fn get_run_source(&self, run_uid: &str) -> Option<RunSource> {
-        self.runs.get(run_uid).map(|r| r.run_source)
-    }
-
     pub fn all_circuit_work(&self, run_uid: &str) -> anyhow::Result<Vec<SliceWork>> {
         let run = self
             .runs
@@ -324,6 +320,8 @@ impl IncrementalRunManager {
     }
 
     pub fn mark_slice_failed(&mut self, run_uid: &str, slice_id: &str) -> usize {
+        self.tile_counters
+            .remove(&(run_uid.to_string(), slice_id.to_string()));
         if let Some(run) = self.runs.get_mut(run_uid) {
             run.last_activity = Instant::now();
             if let Some(ref mut combined) = run.combined {
@@ -332,6 +330,13 @@ impl IncrementalRunManager {
             }
         }
         0
+    }
+
+    pub fn is_slice_failed(&self, run_uid: &str, slice_id: &str) -> bool {
+        self.runs
+            .get(run_uid)
+            .and_then(|r| r.combined.as_ref())
+            .is_some_and(|c| c.is_slice_failed(slice_id))
     }
 
     pub fn failed_slice_count(&self, run_uid: &str) -> usize {

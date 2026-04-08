@@ -125,15 +125,20 @@ impl ValidatorLoop {
         run_uid: &str,
         active_run: &Option<crate::incremental_runner::ActiveRun>,
         final_output: Option<serde_json::Value>,
+        failed_count: usize,
     ) {
         let notify_circuit_id = active_run
             .as_ref()
             .map(|r| r.circuit_id.as_str())
             .unwrap_or_default()
             .to_string();
-        let mut result = serde_json::json!({"run_uid": run_uid, "status": "complete"});
+        let status = if failed_count > 0 { "partial" } else { "complete" };
+        let mut result = serde_json::json!({"run_uid": run_uid, "status": status});
         if let Some(output) = final_output {
             result["output"] = output;
+        }
+        if failed_count > 0 {
+            result["failed_slices"] = serde_json::json!(failed_count);
         }
         self.relay_set_request_result(run_uid, result).await;
         self.relay_send_notification(
@@ -141,7 +146,7 @@ impl ValidatorLoop {
             serde_json::json!({
                 "run_uid": run_uid,
                 "circuit_id": notify_circuit_id,
-                "status": "completed",
+                "status": status,
             }),
         )
         .await;

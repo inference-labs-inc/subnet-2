@@ -377,7 +377,8 @@ impl ValidatorLoop {
         self.dslice_input_scales
             .retain(|(uid, _), _| uid != run_uid);
 
-        info!(run_uid = %run_uid, "combined run complete");
+        let failed_count = self.run_manager.failed_slice_count(run_uid);
+        info!(run_uid = %run_uid, failed_count, "combined run complete");
 
         let final_output = self.run_manager.final_output_json(run_uid);
         let mut active_run = self.run_manager.remove_run(run_uid);
@@ -389,7 +390,7 @@ impl ValidatorLoop {
 
         let relay_output = final_output.clone();
         self.spawn_artifact_upload(run_uid, &mut active_run, final_output);
-        self.notify_run_completed(run_uid, &active_run, relay_output)
+        self.notify_run_completed(run_uid, &active_run, relay_output, failed_count)
             .await;
     }
 
