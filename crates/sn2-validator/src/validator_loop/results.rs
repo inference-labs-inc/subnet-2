@@ -126,6 +126,10 @@ impl ValidatorLoop {
         reason: &str,
     ) {
         if let Some(run_uid) = run_uid {
+            if !self.run_manager.has_run(run_uid) {
+                return;
+            }
+
             if let Some(snum) = slice_num {
                 if !self.run_manager.is_slice_failed(run_uid, snum) {
                     let ruid = run_uid.clone();
