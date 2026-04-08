@@ -133,20 +133,40 @@ impl ValidatorLoop {
                 self.emit_event(move |ev| async move {
                     ev.emit_slice_failed(&ruid, &event_snum, &err).await;
                 });
+
+                let failed_count = self.run_manager.mark_slice_failed(run_uid, snum);
+                warn!(
+                    run_uid = %run_uid,
+                    slice = %snum,
+                    failed_count,
+                    "slice max retries exceeded, continuing run"
+                );
             }
-            warn!(run_uid = %run_uid, "dslice max retries exceeded, removing run");
-            if self.run_manager.get_run_source(run_uid) == Some(RunSource::Api) {
-                self.relay_set_request_result(
-                    run_uid,
-                    serde_json::json!({
-                        "run_uid": run_uid,
-                        "status": "failed",
-                        "error": "max retries exceeded",
-                    }),
-                )
-                .await;
+
+            if self.run_manager.is_run_complete(run_uid) {
+                let failed_count = self.run_manager.failed_slice_count(run_uid);
+                if failed_count > 0 {
+                    warn!(
+                        run_uid = %run_uid,
+                        failed_count,
+                        "run complete with failed slices"
+                    );
+                }
+                if self.run_manager.get_run_source(run_uid) == Some(RunSource::Api)
+                    && failed_count > 0
+                {
+                    self.relay_set_request_result(
+                        run_uid,
+                        serde_json::json!({
+                            "run_uid": run_uid,
+                            "status": "partial",
+                            "error": format!("{failed_count} slice(s) failed after max retries"),
+                        }),
+                    )
+                    .await;
+                }
+                self.finalize_combined_run(run_uid).await;
             }
-            self.teardown_run(run_uid).await;
         }
     }
 

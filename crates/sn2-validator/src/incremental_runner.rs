@@ -323,6 +323,25 @@ impl IncrementalRunManager {
         false
     }
 
+    pub fn mark_slice_failed(&mut self, run_uid: &str, slice_id: &str) -> usize {
+        if let Some(run) = self.runs.get_mut(run_uid) {
+            run.last_activity = Instant::now();
+            if let Some(ref mut combined) = run.combined {
+                combined.mark_slice_failed(slice_id);
+                return combined.failed_count();
+            }
+        }
+        0
+    }
+
+    pub fn failed_slice_count(&self, run_uid: &str) -> usize {
+        self.runs
+            .get(run_uid)
+            .and_then(|r| r.combined.as_ref())
+            .map(|c| c.failed_count())
+            .unwrap_or(0)
+    }
+
     pub fn is_run_complete(&self, run_uid: &str) -> bool {
         self.runs
             .get(run_uid)
