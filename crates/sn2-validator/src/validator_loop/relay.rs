@@ -132,7 +132,11 @@ impl ValidatorLoop {
             .map(|r| r.circuit_id.as_str())
             .unwrap_or_default()
             .to_string();
-        let status = if failed_count > 0 { "partial" } else { "complete" };
+        let status = if failed_count > 0 {
+            "partial"
+        } else {
+            "complete"
+        };
         let mut result = serde_json::json!({"run_uid": run_uid, "status": status});
         if let Some(output) = final_output {
             result["output"] = output;
@@ -141,15 +145,16 @@ impl ValidatorLoop {
             result["failed_slices"] = serde_json::json!(failed_count);
         }
         self.relay_set_request_result(run_uid, result).await;
-        self.relay_send_notification(
-            "subnet-2.batch_completed",
-            serde_json::json!({
-                "run_uid": run_uid,
-                "circuit_id": notify_circuit_id,
-                "status": status,
-            }),
-        )
-        .await;
+        let mut notification = serde_json::json!({
+            "run_uid": run_uid,
+            "circuit_id": notify_circuit_id,
+            "status": status,
+        });
+        if failed_count > 0 {
+            notification["failed_slices"] = serde_json::json!(failed_count);
+        }
+        self.relay_send_notification("subnet-2.batch_completed", notification)
+            .await;
     }
 
     pub(super) fn report_dsperse_completion(&self, run: &crate::incremental_runner::ActiveRun) {
