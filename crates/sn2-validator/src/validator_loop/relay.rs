@@ -145,10 +145,15 @@ impl ValidatorLoop {
             result["failed_slices"] = serde_json::json!(failed_count);
         }
         self.relay_set_request_result(run_uid, result).await;
+        let notification_status = if failed_count > 0 {
+            "partial"
+        } else {
+            "completed"
+        };
         let mut notification = serde_json::json!({
             "run_uid": run_uid,
             "circuit_id": notify_circuit_id,
-            "status": status,
+            "status": notification_status,
         });
         if failed_count > 0 {
             notification["failed_slices"] = serde_json::json!(failed_count);

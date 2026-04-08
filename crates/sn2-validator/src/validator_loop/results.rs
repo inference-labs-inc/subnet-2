@@ -127,20 +127,22 @@ impl ValidatorLoop {
     ) {
         if let Some(run_uid) = run_uid {
             if let Some(snum) = slice_num {
-                let ruid = run_uid.clone();
-                let event_snum = event_slice_num(snum, is_tile, tile_idx);
-                let err = reason.to_string();
-                self.emit_event(move |ev| async move {
-                    ev.emit_slice_failed(&ruid, &event_snum, &err).await;
-                });
+                if !self.run_manager.is_slice_failed(run_uid, snum) {
+                    let ruid = run_uid.clone();
+                    let event_snum = event_slice_num(snum, is_tile, tile_idx);
+                    let err = reason.to_string();
+                    self.emit_event(move |ev| async move {
+                        ev.emit_slice_failed(&ruid, &event_snum, &err).await;
+                    });
 
-                let failed_count = self.run_manager.mark_slice_failed(run_uid, snum);
-                warn!(
-                    run_uid = %run_uid,
-                    slice = %snum,
-                    failed_count,
-                    "slice max retries exceeded, continuing run"
-                );
+                    let failed_count = self.run_manager.mark_slice_failed(run_uid, snum);
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %snum,
+                        failed_count,
+                        "slice max retries exceeded, continuing run"
+                    );
+                }
             }
 
             if self.run_manager.is_run_complete(run_uid) {
