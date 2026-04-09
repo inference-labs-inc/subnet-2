@@ -56,6 +56,28 @@ fn extract_input_json(inputs: &serde_json::Value) -> &serde_json::Value {
     inputs
 }
 
+fn detect_curve_from_bundle(circuit_path: &Path) -> Option<dsperse::backend::jstprove::Curve> {
+    use dsperse::backend::jstprove::Curve;
+    let blob = jstprove_io::bundle::read_circuit_blob(circuit_path).ok()?;
+    let data = jstprove_io::compress::auto_decompress_bytes(&blob).ok()?;
+    if data.len() < 40 {
+        return None;
+    }
+    let modulus = &data[8..40];
+    #[rustfmt::skip]
+    const BN254_MODULUS: [u8; 32] = [
+        0x01, 0x00, 0x00, 0xf0, 0x93, 0xf5, 0xe1, 0x43,
+        0x91, 0x70, 0xb9, 0x79, 0x48, 0xe8, 0x33, 0x28,
+        0x5d, 0x58, 0x81, 0x81, 0xb6, 0x45, 0x50, 0xb8,
+        0x29, 0xa0, 0x31, 0xe1, 0x72, 0x4e, 0x64, 0x30,
+    ];
+    if modulus[..32] == BN254_MODULUS {
+        Some(Curve::Bn254)
+    } else {
+        Some(Curve::GoldilocksWhirPQ)
+    }
+}
+
 fn prove_and_build_response(
     backend: &dsperse::backend::jstprove::JstproveBackend,
     circuit_path: &Path,
@@ -169,7 +191,10 @@ impl DSperseClient {
 
         tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
             let inputs_bytes = rmp_serde::to_vec_named(&inputs_clone)?;
-            let backend = dsperse::backend::jstprove::JstproveBackend::new();
+            let mut backend = dsperse::backend::jstprove::JstproveBackend::new();
+            if let Some(curve) = detect_curve_from_bundle(&circuit_path) {
+                backend = backend.with_curve(curve);
+            }
 
             let params = backend
                 .load_params(&circuit_path)
@@ -236,7 +261,10 @@ impl DSperseClient {
                 "invalid input tensor: flattened input is empty"
             );
 
-            let backend = dsperse::backend::jstprove::JstproveBackend::new();
+            let mut backend = dsperse::backend::jstprove::JstproveBackend::new();
+            if let Some(curve) = detect_curve_from_bundle(&circuit_path) {
+                backend = backend.with_curve(curve);
+            }
             let params = backend
                 .load_params(&circuit_path)
                 .map_err(|e| anyhow::anyhow!("loading circuit params: {e}"))?;

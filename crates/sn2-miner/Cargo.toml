@@ -25,3 +25,4 @@ hex = { workspace = true }
 subxt = { workspace = true }
 shellexpand = { workspace = true }
 rmp-serde = { workspace = true }
+jstprove-io = { workspace = true }
