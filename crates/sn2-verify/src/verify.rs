@@ -6,11 +6,18 @@ use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use jstprove_circuits::onnx::{
-    deserialize_circuit_bn254, flatten_circuit_bn254, verify_and_extract_bn254_with_flat_ref,
-    FlatCircuitBN254,
+    deserialize_circuit_bn254, deserialize_circuit_goldilocks_whir_pq, flatten_circuit_bn254,
+    flatten_circuit_goldilocks_whir_pq, verify_and_extract_bn254_with_flat_ref,
+    verify_and_extract_goldilocks_whir_pq_with_flat_ref, FlatCircuitBN254,
+    FlatCircuitGoldilocksWhirPQ,
 };
 
-static CIRCUIT_CACHE: LazyLock<RwLock<HashMap<String, Arc<FlatCircuitBN254>>>> =
+enum CachedCircuit {
+    BN254(Arc<FlatCircuitBN254>),
+    GoldilocksWhirPQ(Arc<FlatCircuitGoldilocksWhirPQ>),
+}
+
+static CIRCUIT_CACHE: LazyLock<RwLock<HashMap<String, CachedCircuit>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 static LOADING_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
@@ -42,11 +49,11 @@ pub fn clear_circuit_cache() {
     }
 }
 
-fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
+fn get_or_load(circuit_path: &str) -> Result<()> {
     {
         let cache = CIRCUIT_CACHE.read().unwrap();
-        if let Some(cached) = cache.get(circuit_path) {
-            return Ok(Arc::clone(cached));
+        if cache.contains_key(circuit_path) {
+            return Ok(());
         }
     }
 
@@ -58,8 +65,8 @@ fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
 
     {
         let cache = CIRCUIT_CACHE.read().unwrap();
-        if let Some(cached) = cache.get(circuit_path) {
-            return Ok(Arc::clone(cached));
+        if cache.contains_key(circuit_path) {
+            return Ok(());
         }
     }
 
@@ -75,22 +82,35 @@ fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
         }
     };
 
-    let layered = deserialize_circuit_bn254(&circuit_bytes)
-        .with_context(|| format!("deserializing circuit {circuit_path}"))?;
-
-    let flat = flatten_circuit_bn254(&layered);
-    drop(layered);
-
-    let arc = Arc::new(flat);
-
-    let mut cache = CIRCUIT_CACHE.write().unwrap();
-    if EVICTION_GEN.load(Ordering::SeqCst) == gen_before {
+    let cached = if let Ok(layered) = deserialize_circuit_bn254(&circuit_bytes) {
+        let flat = flatten_circuit_bn254(&layered);
+        drop(layered);
         info!(
             path = %circuit_path,
+            config = "BN254",
             size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),
             "cached flattened circuit"
         );
-        cache.insert(circuit_path.to_string(), Arc::clone(&arc));
+        CachedCircuit::BN254(Arc::new(flat))
+    } else if let Ok(layered) = deserialize_circuit_goldilocks_whir_pq(&circuit_bytes) {
+        let flat = flatten_circuit_goldilocks_whir_pq(&layered);
+        drop(layered);
+        info!(
+            path = %circuit_path,
+            config = "GoldilocksWhirPQ",
+            size_mb = circuit_bytes.len() as f64 / (1024.0 * 1024.0),
+            "cached flattened circuit"
+        );
+        CachedCircuit::GoldilocksWhirPQ(Arc::new(flat))
+    } else {
+        anyhow::bail!(
+            "circuit {circuit_path} does not match any supported config (BN254, GoldilocksWhirPQ)"
+        );
+    };
+
+    let mut cache = CIRCUIT_CACHE.write().unwrap();
+    if EVICTION_GEN.load(Ordering::SeqCst) == gen_before {
+        cache.insert(circuit_path.to_string(), cached);
     } else {
         info!(
             path = %circuit_path,
@@ -98,13 +118,58 @@ fn get_or_load_flat(circuit_path: &str) -> Result<Arc<FlatCircuitBN254>> {
         );
     }
 
-    Ok(arc)
+    Ok(())
 }
 
 pub struct VerifyResult {
     pub rescaled_outputs: Vec<f64>,
     pub scale_base: u64,
     pub scale_exponent: u64,
+}
+
+fn verify_with_cache(
+    circuit_path: &str,
+    witness_bytes: &[u8],
+    proof_bytes: &[u8],
+    num_inputs: usize,
+    expected_inputs: Option<&[f64]>,
+) -> Result<VerifyResult> {
+    get_or_load(circuit_path)?;
+
+    let cache = CIRCUIT_CACHE.read().unwrap();
+    let cached = cache
+        .get(circuit_path)
+        .ok_or_else(|| anyhow::anyhow!("circuit evicted during verify"))?;
+
+    let result = match cached {
+        CachedCircuit::BN254(circuit) => verify_and_extract_bn254_with_flat_ref(
+            circuit,
+            witness_bytes,
+            proof_bytes,
+            num_inputs,
+            expected_inputs,
+        ),
+        CachedCircuit::GoldilocksWhirPQ(circuit) => {
+            verify_and_extract_goldilocks_whir_pq_with_flat_ref(
+                circuit,
+                witness_bytes,
+                proof_bytes,
+                num_inputs,
+                expected_inputs,
+            )
+        }
+    }
+    .map_err(|e| anyhow::anyhow!("verification: {e}"))?;
+
+    if !result.valid {
+        anyhow::bail!("proof verification failed");
+    }
+
+    Ok(VerifyResult {
+        rescaled_outputs: result.outputs,
+        scale_base: result.scale_base,
+        scale_exponent: result.scale_exponent,
+    })
 }
 
 pub async fn verify_inner(
@@ -122,28 +187,16 @@ pub async fn verify_inner(
     let expected_inputs = expected_inputs.clone();
 
     tokio::task::spawn_blocking(move || {
-        let cached = get_or_load_flat(&circuit_path)?;
         let witness_bytes = hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
         let proof_bytes = hex::decode(proof_hex.trim()).context("hex-decoding proof")?;
 
-        let result = verify_and_extract_bn254_with_flat_ref(
-            &cached,
+        verify_with_cache(
+            &circuit_path,
             &witness_bytes,
             &proof_bytes,
             num_inputs,
             expected_inputs.as_deref(),
         )
-        .map_err(|e| anyhow::anyhow!("verification: {e}"))?;
-
-        if !result.valid {
-            anyhow::bail!("proof verification failed");
-        }
-
-        Ok(VerifyResult {
-            rescaled_outputs: result.outputs,
-            scale_base: result.scale_base,
-            scale_exponent: result.scale_exponent,
-        })
     })
     .await
     .context("verification task panicked")?

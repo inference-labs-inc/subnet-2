@@ -54,5 +54,5 @@ dsperse = { git = "https://github.com/inference-labs-inc/dsperse", rev = "3d1db7
 ndarray = { version = "0.17", features = ["serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 bittensor-drand = { git = "https://github.com/inference-labs-inc/bittensor-drand.git", rev = "e55ed98", default-features = false }
-jstprove_circuits = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "9bf385d1" }
-jstprove-io = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "9bf385d1" }
+jstprove_circuits = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "7515b9ff" }
+jstprove-io = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "7515b9ff" }
