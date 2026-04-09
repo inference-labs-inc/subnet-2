@@ -874,7 +874,7 @@ impl CircuitStore {
         for entry in entries.flatten() {
             let dir_name = entry.file_name().to_string_lossy().to_string();
             let circuit_id = match dir_name.strip_prefix("model_") {
-                Some(id) if id.len() == 64 => id,
+                Some(id) if is_sha256_hex(id) => id,
                 _ => continue,
             };
 
@@ -882,7 +882,12 @@ impl CircuitStore {
                 continue;
             }
 
-            match std::fs::remove_dir_all(entry.path()) {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            match std::fs::remove_dir_all(&path) {
                 Ok(()) => {
                     purged += 1;
                 }
