@@ -53,7 +53,7 @@ pub async fn verify_inner(
                 num_inputs,
                 expected_inputs.as_deref(),
             )
-            .map_err(|e| anyhow::anyhow!("verification: {e}"))?;
+            .context("verification")?;
 
         if !verified.valid {
             anyhow::bail!("proof verification failed");
