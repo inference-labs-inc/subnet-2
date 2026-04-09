@@ -138,6 +138,11 @@ impl CircuitStore {
         }
 
         info!(count = self.circuits.len(), "circuits loaded");
+
+        if complete {
+            self.purge_stale_cache_dirs();
+        }
+
         Ok(())
     }
 
@@ -222,6 +227,7 @@ impl CircuitStore {
         for id in &removed {
             info!(id = id, "removing deactivated circuit");
             self.circuits.remove(id);
+            self.remove_cache_dir(id);
         }
 
         Ok(removed)
@@ -850,6 +856,62 @@ impl CircuitStore {
             info!(filename, "downloaded model artifact");
         }
         Ok(())
+    }
+
+    fn remove_cache_dir(&self, circuit_id: &str) {
+        let dir = self.cache_dir.join(format!("model_{circuit_id}"));
+        if dir.exists() {
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => {
+                    info!(id = circuit_id, path = %dir.display(), "removed stale model cache directory")
+                }
+                Err(e) => {
+                    warn!(id = circuit_id, path = %dir.display(), error = %e, "failed to remove stale model cache directory")
+                }
+            }
+        }
+    }
+
+    fn purge_stale_cache_dirs(&self) {
+        let entries = match std::fs::read_dir(&self.cache_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        let downloading = self
+            .inflight_downloads
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+
+        let mut purged = 0usize;
+        for entry in entries.flatten() {
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            let circuit_id = match dir_name.strip_prefix("model_") {
+                Some(id) if id.len() == 64 => id,
+                _ => continue,
+            };
+
+            if self.circuits.contains_key(circuit_id)
+                || self.pinned_ids.contains(circuit_id)
+                || downloading.contains(circuit_id)
+            {
+                continue;
+            }
+
+            match std::fs::remove_dir_all(entry.path()) {
+                Ok(()) => {
+                    purged += 1;
+                }
+                Err(e) => {
+                    warn!(id = circuit_id, error = %e, "failed to purge stale cache directory");
+                }
+            }
+        }
+
+        if purged > 0 {
+            info!(purged, "purged stale model cache directories");
+        }
     }
 
     fn load_from_cache(&mut self, active_ids: &HashSet<String>) {
