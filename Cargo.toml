@@ -50,9 +50,7 @@ futures-util = "0.3"
 shellexpand = "3.1.2"
 openssl = { version = "0.10", features = ["vendored"] }
 flate2 = "1"
-dsperse = { git = "https://github.com/inference-labs-inc/dsperse", rev = "3d1db73f" }
+dsperse = { git = "https://github.com/inference-labs-inc/dsperse", rev = "bf11b93c" }
 ndarray = { version = "0.17", features = ["serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 bittensor-drand = { git = "https://github.com/inference-labs-inc/bittensor-drand.git", rev = "e55ed98", default-features = false }
-jstprove_circuits = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "7515b9ff" }
-jstprove-io = { git = "https://github.com/inference-labs-inc/JSTprove.git", rev = "7515b9ff" }
