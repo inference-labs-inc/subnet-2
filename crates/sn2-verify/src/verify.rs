@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use anyhow::{Context, Result};
@@ -7,16 +8,27 @@ use dsperse::backend::jstprove::JstproveBackend;
 
 static BACKEND: LazyLock<Arc<JstproveBackend>> = LazyLock::new(|| Arc::new(JstproveBackend::new()));
 
+/// Monotonic counter bumped on every eviction or full clear of the
+/// backend's bundle cache. In-flight verifications snapshot this
+/// counter before running and refuse to return success if it has
+/// changed by the time they finish, so a verification that was
+/// reading a stale `Arc<CompiledCircuit>` while eviction happened
+/// elsewhere is rejected instead of attesting against a circuit the
+/// validator no longer trusts.
+static EVICTION_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 use crate::protocol::{StoreResponse, VerifyAndStoreRequest, VerifyRequest, VerifyResponse};
 use crate::store::{StoredTile, TileStore};
 
 /// Evict cached bundles whose canonical path starts with the given prefix.
 pub fn evict_circuit_cache(path_prefix: &str) {
+    EVICTION_GENERATION.fetch_add(1, Ordering::SeqCst);
     BACKEND.evict_cache_by_prefix(std::path::Path::new(path_prefix));
 }
 
 /// Clear all cached bundles.
 pub fn clear_circuit_cache() {
+    EVICTION_GENERATION.fetch_add(1, Ordering::SeqCst);
     BACKEND.clear_cache();
 }
 
@@ -45,6 +57,14 @@ pub async fn verify_inner(
         let witness_bytes = hex::decode(witness_hex.trim()).context("hex-decoding witness")?;
         let proof_bytes = hex::decode(proof_hex.trim()).context("hex-decoding proof")?;
 
+        // Snapshot the eviction generation before loading the bundle.
+        // The dsperse backend hands out an Arc<CompiledCircuit> from
+        // its cache, which keeps the in-memory bytes alive across
+        // an eviction; we re-check the counter after verification
+        // and refuse a positive result if eviction happened between
+        // the two reads.
+        let gen_before = EVICTION_GENERATION.load(Ordering::SeqCst);
+
         let verified = backend
             .verify_and_extract(
                 &circuit_path,
@@ -54,6 +74,13 @@ pub async fn verify_inner(
                 expected_inputs.as_deref(),
             )
             .context("verification")?;
+
+        let gen_after = EVICTION_GENERATION.load(Ordering::SeqCst);
+        if gen_before != gen_after {
+            anyhow::bail!(
+                "circuit cache was evicted during verification; result discarded to avoid attesting against a stale bundle"
+            );
+        }
 
         if !verified.valid {
             anyhow::bail!("proof verification failed");
