@@ -87,6 +87,14 @@ impl ValidatorLoop {
         let Some(uploader) = &self.proof_uploader else {
             return;
         };
+        if self.upload_tasks.len() >= sn2_types::MAX_CONCURRENT_UPLOADS {
+            warn!(
+                run_uid = %run_uid,
+                pending = self.upload_tasks.len(),
+                "upload backpressure: dropping artifact upload"
+            );
+            return;
+        }
         let artifacts = active_run
             .as_mut()
             .map(|r| std::mem::take(&mut r.artifacts))

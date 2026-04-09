@@ -67,6 +67,7 @@ pub const IGNORED_MODEL_HASHES: &[&str] = &[
 
 pub const MAX_SLICE_RETRIES: u32 = 5;
 pub const MAX_API_RETRIES: u32 = 20;
+pub const MAX_CONCURRENT_UPLOADS: usize = 4;
 pub const API_TIMEOUT_SECONDS: f64 = 30.0;
 pub const ADAPTIVE_TIMEOUT_MIN_SAMPLES: usize = 50;
 pub const ADAPTIVE_TIMEOUT_MULTIPLIER: f64 = 2.0;
