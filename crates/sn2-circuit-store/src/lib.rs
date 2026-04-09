@@ -140,7 +140,7 @@ impl CircuitStore {
         info!(count = self.circuits.len(), "circuits loaded");
 
         if complete {
-            self.purge_stale_cache_dirs();
+            self.purge_stale_cache_dirs(&load_ids);
         }
 
         Ok(())
@@ -227,7 +227,7 @@ impl CircuitStore {
         for id in &removed {
             info!(id = id, "removing deactivated circuit");
             self.circuits.remove(id);
-            self.remove_cache_dir(id);
+            self.component_sha_map.retain(|(mid, _), _| mid != id);
         }
 
         Ok(removed)
@@ -858,21 +858,7 @@ impl CircuitStore {
         Ok(())
     }
 
-    fn remove_cache_dir(&self, circuit_id: &str) {
-        let dir = self.cache_dir.join(format!("model_{circuit_id}"));
-        if dir.exists() {
-            match std::fs::remove_dir_all(&dir) {
-                Ok(()) => {
-                    info!(id = circuit_id, path = %dir.display(), "removed stale model cache directory")
-                }
-                Err(e) => {
-                    warn!(id = circuit_id, path = %dir.display(), error = %e, "failed to remove stale model cache directory")
-                }
-            }
-        }
-    }
-
-    fn purge_stale_cache_dirs(&self) {
+    fn purge_stale_cache_dirs(&self, retain_ids: &HashSet<String>) {
         let entries = match std::fs::read_dir(&self.cache_dir) {
             Ok(e) => e,
             Err(_) => return,
@@ -892,10 +878,7 @@ impl CircuitStore {
                 _ => continue,
             };
 
-            if self.circuits.contains_key(circuit_id)
-                || self.pinned_ids.contains(circuit_id)
-                || downloading.contains(circuit_id)
-            {
+            if retain_ids.contains(circuit_id) || downloading.contains(circuit_id) {
                 continue;
             }
 
