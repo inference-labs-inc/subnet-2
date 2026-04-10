@@ -246,7 +246,11 @@ impl ResponseProcessor {
                 Ok(true)
             }
             Err(e) => {
-                warn!(uid = response.uid, error = %e, "verification failed");
+                warn!(
+                    uid = response.uid,
+                    error = format!("{e:#}"),
+                    "verification failed"
+                );
                 Ok(false)
             }
         }

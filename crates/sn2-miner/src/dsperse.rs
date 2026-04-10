@@ -67,9 +67,18 @@ fn prove_and_build_response(
         .map_err(|e| anyhow::anyhow!("proof generation: {e}"))?;
 
     let computed_outputs = if let Some(num_model_inputs) = effective_input_dims {
-        backend
-            .extract_outputs(witness_bytes, num_model_inputs)
-            .map_err(|e| anyhow::anyhow!("extracting outputs: {e}"))?
+        match backend.extract_outputs(witness_bytes, num_model_inputs) {
+            Ok(outputs) => outputs,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    num_model_inputs,
+                    witness_len = witness_bytes.len(),
+                    "output extraction failed; validator will extract from verified proof"
+                );
+                Vec::new()
+            }
+        }
     } else {
         Vec::new()
     };
