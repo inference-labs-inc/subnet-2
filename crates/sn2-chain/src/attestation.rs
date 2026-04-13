@@ -298,26 +298,40 @@ fn verify_dsse_signature(leaf: &X509, envelope: &DsseEnvelope) -> Result<()> {
     let mut pae_bytes = header.into_bytes();
     pae_bytes.extend_from_slice(&payload_raw);
 
-    let sig = envelope
-        .signatures
-        .first()
-        .context("DSSE envelope missing signature")?;
-    let sig_bytes = base64::engine::general_purpose::STANDARD
-        .decode(sig.sig.as_bytes())
-        .context("decoding DSSE signature")?;
-
-    let mut verifier = openssl::sign::Verifier::new(MessageDigest::sha256(), &pubkey)
-        .context("creating DSSE verifier")?;
-    verifier
-        .update(&pae_bytes)
-        .context("feeding DSSE PAE to verifier")?;
-    let ok = verifier
-        .verify(&sig_bytes)
-        .context("DSSE signature verification")?;
-    if !ok {
-        bail!("DSSE signature does not verify under leaf public key");
+    if envelope.signatures.is_empty() {
+        bail!("DSSE envelope missing signature");
     }
-    Ok(())
+
+    let mut errors: Vec<String> = Vec::new();
+    for (idx, sig) in envelope.signatures.iter().enumerate() {
+        let sig_bytes = match base64::engine::general_purpose::STANDARD.decode(sig.sig.as_bytes()) {
+            Ok(b) => b,
+            Err(e) => {
+                errors.push(format!("signature[{idx}]: base64 decode: {e}"));
+                continue;
+            }
+        };
+        let mut verifier = match openssl::sign::Verifier::new(MessageDigest::sha256(), &pubkey) {
+            Ok(v) => v,
+            Err(e) => {
+                errors.push(format!("signature[{idx}]: creating verifier: {e}"));
+                continue;
+            }
+        };
+        if let Err(e) = verifier.update(&pae_bytes) {
+            errors.push(format!("signature[{idx}]: feeding PAE: {e}"));
+            continue;
+        }
+        match verifier.verify(&sig_bytes) {
+            Ok(true) => return Ok(()),
+            Ok(false) => errors.push(format!("signature[{idx}]: invalid under leaf pubkey")),
+            Err(e) => errors.push(format!("signature[{idx}]: verify error: {e}")),
+        }
+    }
+    bail!(
+        "no DSSE signature verifies under leaf public key: [{}]",
+        errors.join("; ")
+    )
 }
 
 fn verify_intoto_subject(envelope: &DsseEnvelope, artifact_sha256_hex: &str) -> Result<()> {
@@ -344,20 +358,37 @@ fn verify_intoto_subject(envelope: &DsseEnvelope, artifact_sha256_hex: &str) -> 
 }
 
 fn verify_rekor_set(entries: &[TlogEntry]) -> Result<()> {
-    let entry = entries
-        .first()
-        .context("attestation missing Rekor transparency log entry")?;
+    if entries.is_empty() {
+        bail!("attestation missing Rekor transparency log entry");
+    }
+
+    let rekor_pub = openssl::pkey::PKey::public_key_from_pem(REKOR_PUBKEY_PEM)
+        .context("parsing Rekor pubkey")?;
+
+    let mut errors: Vec<String> = Vec::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        match verify_single_rekor_entry(entry, &rekor_pub) {
+            Ok(()) => return Ok(()),
+            Err(e) => errors.push(format!("tlogEntry[{idx}]: {e:#}")),
+        }
+    }
+    bail!(
+        "no Rekor SET verifies under pinned Rekor public key: [{}]",
+        errors.join("; ")
+    )
+}
+
+fn verify_single_rekor_entry(
+    entry: &TlogEntry,
+    rekor_pub: &openssl::pkey::PKey<openssl::pkey::Public>,
+) -> Result<()> {
     let promise = entry
         .inclusion_promise
         .as_ref()
         .context("Rekor entry missing inclusion promise / SET")?;
 
-    let rekor_pub = openssl::pkey::PKey::public_key_from_pem(REKOR_PUBKEY_PEM)
-        .context("parsing Rekor pubkey")?;
-
     // Canonicalized payload signed by Rekor per rekor-spec:
     // JSON: {"body":"<canonicalizedBody>","integratedTime":<int>,"logID":"<hex>","logIndex":<int>}
-    // Note: logID is the hex of the raw log key, and keys are lex-sorted.
     let key_id_bytes = base64::engine::general_purpose::STANDARD
         .decode(entry.log_id.key_id.as_bytes())
         .context("decoding Rekor logId")?;
@@ -376,7 +407,7 @@ fn verify_rekor_set(entries: &[TlogEntry]) -> Result<()> {
         .decode(promise.signed_entry_timestamp.as_bytes())
         .context("decoding Rekor SET")?;
 
-    let mut verifier = openssl::sign::Verifier::new(MessageDigest::sha256(), &rekor_pub)
+    let mut verifier = openssl::sign::Verifier::new(MessageDigest::sha256(), rekor_pub)
         .context("creating Rekor verifier")?;
     verifier
         .update(canonical.as_bytes())
