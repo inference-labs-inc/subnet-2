@@ -11,11 +11,18 @@ use sha2::{Digest, Sha256};
 /// sha256: f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5
 const FULCIO_ROOT_PEM: &[u8] = include_bytes!("attestation_roots/fulcio_v1.crt.pem");
 
+/// Pinned Sigstore Fulcio intermediate (fulcio_intermediate_v1.crt.pem).
+/// sha256: f8cbecf186db7714624a5f4e99da31a917cbef70a94dd6921f5c3ca969dfe30a
+const FULCIO_INTERMEDIATE_PEM: &[u8] =
+    include_bytes!("attestation_roots/fulcio_intermediate_v1.crt.pem");
+
 /// Pinned Sigstore Rekor transparency log public key (rekor.pub).
 /// sha256: dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd
 const REKOR_PUBKEY_PEM: &[u8] = include_bytes!("attestation_roots/rekor.pub");
 
 const FULCIO_ROOT_SHA256: &str = "f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5";
+const FULCIO_INTERMEDIATE_SHA256: &str =
+    "f8cbecf186db7714624a5f4e99da31a917cbef70a94dd6921f5c3ca969dfe30a";
 const REKOR_PUBKEY_SHA256: &str =
     "dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd";
 
@@ -23,10 +30,16 @@ const REKOR_PUBKEY_SHA256: &str =
 /// not been silently replaced on disk. Any mismatch aborts the update loop.
 pub fn assert_pinned_roots() -> Result<()> {
     let fulcio_sha = hex::encode(Sha256::digest(FULCIO_ROOT_PEM));
+    let intermediate_sha = hex::encode(Sha256::digest(FULCIO_INTERMEDIATE_PEM));
     let rekor_sha = hex::encode(Sha256::digest(REKOR_PUBKEY_PEM));
     if fulcio_sha != FULCIO_ROOT_SHA256 {
         bail!(
             "embedded Fulcio root hash mismatch: expected {FULCIO_ROOT_SHA256}, got {fulcio_sha}"
+        );
+    }
+    if intermediate_sha != FULCIO_INTERMEDIATE_SHA256 {
+        bail!(
+            "embedded Fulcio intermediate hash mismatch: expected {FULCIO_INTERMEDIATE_SHA256}, got {intermediate_sha}"
         );
     }
     if rekor_sha != REKOR_PUBKEY_SHA256 {
@@ -223,13 +236,20 @@ fn decode_leaf_cert(vm: &VerificationMaterial) -> Result<Vec<u8>> {
 
 fn verify_cert_chain(leaf: &X509) -> Result<()> {
     let root = X509::from_pem(FULCIO_ROOT_PEM).context("parsing pinned Fulcio root")?;
+    let intermediate =
+        X509::from_pem(FULCIO_INTERMEDIATE_PEM).context("parsing pinned Fulcio intermediate")?;
+
     let mut store_builder = X509StoreBuilder::new().context("x509 store builder")?;
     store_builder
         .add_cert(root)
         .context("adding Fulcio root to store")?;
     let store = store_builder.build();
 
-    let chain = Stack::new().context("empty intermediate stack")?;
+    let mut chain: Stack<X509> = Stack::new().context("empty intermediate stack")?;
+    chain
+        .push(intermediate)
+        .context("pushing pinned Fulcio intermediate onto chain")?;
+
     let mut ctx = X509StoreContext::new().context("x509 store context")?;
     let verified = ctx
         .init(&store, leaf, &chain, |c| c.verify_cert())
