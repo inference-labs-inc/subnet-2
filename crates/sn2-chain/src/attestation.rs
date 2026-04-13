@@ -243,6 +243,11 @@ fn verify_cert_chain(leaf: &X509) -> Result<()> {
     store_builder
         .add_cert(root)
         .context("adding Fulcio root to store")?;
+    // Fulcio-issued leaves have a ~10 minute validity window; we validate the
+    // binding to a specific point in time via the pinned Rekor SET instead.
+    store_builder
+        .set_flags(openssl::x509::verify::X509VerifyFlags::NO_CHECK_TIME)
+        .context("disabling wall-clock cert time check")?;
     let store = store_builder.build();
 
     let mut chain: Stack<X509> = Stack::new().context("empty intermediate stack")?;
