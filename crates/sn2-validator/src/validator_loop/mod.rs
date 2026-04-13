@@ -5,7 +5,7 @@ mod relay;
 mod results;
 mod verification;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -159,6 +159,7 @@ pub struct ValidatorLoop {
     pub(super) pending_verifications: VecDeque<TaskResult>,
     pub(super) verification_concurrency: usize,
     pub(super) dslice_input_scales: HashMap<(String, String), f64>,
+    pub(super) disabled_slices: HashMap<String, HashSet<String>>,
 }
 
 impl ValidatorLoop {
@@ -348,6 +349,7 @@ impl ValidatorLoop {
             pending_verifications: VecDeque::new(),
             verification_concurrency,
             dslice_input_scales: HashMap::new(),
+            disabled_slices: HashMap::new(),
         })
     }
 

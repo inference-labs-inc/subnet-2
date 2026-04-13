@@ -146,6 +146,10 @@ impl IncrementalRunManager {
         self.runs.contains_key(run_uid)
     }
 
+    pub fn circuit_id_for_run(&self, run_uid: &str) -> Option<&str> {
+        self.runs.get(run_uid).map(|r| r.circuit_id.as_str())
+    }
+
     pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize, HashMap<String, usize>) {
         let run = match self.runs.get(run_uid) {
             Some(r) => r,

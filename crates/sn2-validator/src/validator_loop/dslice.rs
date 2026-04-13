@@ -226,6 +226,31 @@ impl ValidatorLoop {
             }
         };
 
+        let work_items: Vec<_> = {
+            let disabled = self.disabled_slices.get(&circuit.id).cloned();
+            match disabled {
+                Some(disabled) if !disabled.is_empty() => {
+                    let (kept, skipped): (Vec<_>, Vec<_>) = work_items
+                        .into_iter()
+                        .partition(|w| !disabled.contains(&w.slice_id));
+                    for work in &skipped {
+                        self.run_manager
+                            .mark_slice_failed(run_uid, &work.slice_id);
+                    }
+                    if !skipped.is_empty() {
+                        info!(
+                            run_uid = %run_uid,
+                            circuit_id = %circuit.id,
+                            skipped = skipped.len(),
+                            "skipping slices previously disabled for this circuit"
+                        );
+                    }
+                    kept
+                }
+                _ => work_items,
+            }
+        };
+
         if work_items.is_empty() {
             info!(run_uid = %run_uid, "no circuit slices to dispatch, completing run");
             self.finalize_combined_run(run_uid).await;
@@ -379,6 +404,30 @@ impl ValidatorLoop {
 
         let failed_count = self.run_manager.failed_slice_count(run_uid);
         info!(run_uid = %run_uid, failed_count, "combined run complete");
+
+        if let Some(circuit_id) = self
+            .run_manager
+            .circuit_id_for_run(run_uid)
+            .map(str::to_string)
+        {
+            let (_, _, slice_tiles) = self.run_manager.slice_tile_counts(run_uid);
+            let newly_disabled: Vec<String> = slice_tiles
+                .into_keys()
+                .filter(|slice_id| self.run_manager.is_slice_failed(run_uid, slice_id))
+                .collect();
+            if !newly_disabled.is_empty() {
+                let entry = self.disabled_slices.entry(circuit_id.clone()).or_default();
+                for slice_id in &newly_disabled {
+                    entry.insert(slice_id.clone());
+                }
+                info!(
+                    circuit_id = %circuit_id,
+                    newly_disabled = newly_disabled.len(),
+                    total_disabled_for_circuit = entry.len(),
+                    "disabled slices with zero verified tiles"
+                );
+            }
+        }
 
         let final_output = self.run_manager.final_output_json(run_uid);
         let mut active_run = self.run_manager.remove_run(run_uid);
