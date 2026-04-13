@@ -234,8 +234,7 @@ impl ValidatorLoop {
                         .into_iter()
                         .partition(|w| !disabled.contains(&w.slice_id));
                     for work in &skipped {
-                        self.run_manager
-                            .mark_slice_failed(run_uid, &work.slice_id);
+                        self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
                     }
                     if !skipped.is_empty() {
                         info!(
@@ -411,21 +410,29 @@ impl ValidatorLoop {
             .map(str::to_string)
         {
             let (_, _, slice_tiles) = self.run_manager.slice_tile_counts(run_uid);
-            let newly_disabled: Vec<String> = slice_tiles
+            let candidates: Vec<String> = slice_tiles
                 .into_keys()
-                .filter(|slice_id| self.run_manager.is_slice_failed(run_uid, slice_id))
+                .filter(|slice_id| {
+                    self.run_manager.is_slice_failed(run_uid, slice_id)
+                        && self.run_manager.verified_tile_count(run_uid, slice_id) == 0
+                })
                 .collect();
-            if !newly_disabled.is_empty() {
+            if !candidates.is_empty() {
                 let entry = self.disabled_slices.entry(circuit_id.clone()).or_default();
-                for slice_id in &newly_disabled {
-                    entry.insert(slice_id.clone());
+                let mut inserted = 0usize;
+                for slice_id in &candidates {
+                    if entry.insert(slice_id.clone()) {
+                        inserted += 1;
+                    }
                 }
-                info!(
-                    circuit_id = %circuit_id,
-                    newly_disabled = newly_disabled.len(),
-                    total_disabled_for_circuit = entry.len(),
-                    "disabled slices with zero verified tiles"
-                );
+                if inserted > 0 {
+                    info!(
+                        circuit_id = %circuit_id,
+                        newly_disabled = inserted,
+                        total_disabled_for_circuit = entry.len(),
+                        "disabled slices with zero verified tiles"
+                    );
+                }
             }
         }
 

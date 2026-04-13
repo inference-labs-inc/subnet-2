@@ -91,6 +91,7 @@ pub struct IncrementalRunManager {
     runs: HashMap<String, ActiveRun>,
     evicted: BoundedFifoSet<String>,
     tile_counters: HashMap<(String, String), TileCounter>,
+    verified_tile_counts: HashMap<(String, String), usize>,
 }
 
 impl Default for IncrementalRunManager {
@@ -99,6 +100,7 @@ impl Default for IncrementalRunManager {
             runs: HashMap::new(),
             evicted: BoundedFifoSet::new(EVICTED_CAP),
             tile_counters: HashMap::new(),
+            verified_tile_counts: HashMap::new(),
         }
     }
 }
@@ -148,6 +150,13 @@ impl IncrementalRunManager {
 
     pub fn circuit_id_for_run(&self, run_uid: &str) -> Option<&str> {
         self.runs.get(run_uid).map(|r| r.circuit_id.as_str())
+    }
+
+    pub fn verified_tile_count(&self, run_uid: &str, slice_id: &str) -> usize {
+        self.verified_tile_counts
+            .get(&(run_uid.to_string(), slice_id.to_string()))
+            .copied()
+            .unwrap_or(0)
     }
 
     pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize, HashMap<String, usize>) {
@@ -283,6 +292,7 @@ impl IncrementalRunManager {
             );
             return TileBufferOutcome::Waiting;
         }
+        *self.verified_tile_counts.entry(key.clone()).or_insert(0) += 1;
         debug!(
             run_uid = %run_uid,
             slice = %slice_id,
@@ -373,6 +383,8 @@ impl IncrementalRunManager {
 
     pub fn remove_run(&mut self, run_uid: &str) -> Option<ActiveRun> {
         self.tile_counters.retain(|(uid, _), _| uid != run_uid);
+        self.verified_tile_counts
+            .retain(|(uid, _), _| uid != run_uid);
         self.runs.remove(run_uid)
     }
 
@@ -404,6 +416,8 @@ impl IncrementalRunManager {
         let evict_set: HashSet<&str> = to_remove.iter().map(|s| s.as_str()).collect();
         self.tile_counters
             .retain(|(run_uid, _), _| !evict_set.contains(run_uid.as_str()));
+        self.verified_tile_counts
+            .retain(|(run_uid, _), _| !evict_set.contains(run_uid.as_str()));
         for uid in to_remove.iter() {
             self.runs.remove(uid);
             self.evicted.insert(uid.clone());
@@ -424,6 +438,8 @@ impl IncrementalRunManager {
         }
         let stale_set: HashSet<&str> = stale.iter().map(|s| s.as_str()).collect();
         self.tile_counters
+            .retain(|(run_uid, _), _| !stale_set.contains(run_uid.as_str()));
+        self.verified_tile_counts
             .retain(|(run_uid, _), _| !stale_set.contains(run_uid.as_str()));
         for uid in stale.iter() {
             self.runs.remove(uid);

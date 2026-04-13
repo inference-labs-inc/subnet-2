@@ -148,6 +148,9 @@ impl ValidatorLoop {
                 .cache_dir()
                 .join(format!("model_{circuit_id}"));
             sn2_verify::evict_circuit_cache(&prefix.to_string_lossy());
+            if self.disabled_slices.remove(circuit_id).is_some() {
+                info!(circuit = %circuit_id, "cleared disabled slice set for deactivated circuit");
+            }
             let evicted = self.run_manager.evict_by_circuit(circuit_id);
             if !evicted.is_empty() {
                 info!(circuit = %circuit_id, runs = ?evicted, "evicted in-flight runs for deactivated circuit");
