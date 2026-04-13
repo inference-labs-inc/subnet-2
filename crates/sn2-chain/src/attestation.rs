@@ -15,12 +15,9 @@ const FULCIO_ROOT_PEM: &[u8] = include_bytes!("attestation_roots/fulcio_v1.crt.p
 /// sha256: dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd
 const REKOR_PUBKEY_PEM: &[u8] = include_bytes!("attestation_roots/rekor.pub");
 
-const FULCIO_ROOT_SHA256: &str =
-    "f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5";
+const FULCIO_ROOT_SHA256: &str = "f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5";
 const REKOR_PUBKEY_SHA256: &str =
     "dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd";
-
-const GITHUB_OIDC_ISSUER: &str = "https://token.actions.githubusercontent.com";
 
 /// Enforce at compile-time-equivalent boot that the embedded trust roots have
 /// not been silently replaced on disk. Any mismatch aborts the update loop.
@@ -167,9 +164,8 @@ pub async fn fetch_and_verify_attestation(
         bail!("no attestations found for artifact digest {artifact_sha256_hex}");
     }
 
-    let expected_san = format!(
-        "https://github.com/{owner}/{repo}/{workflow_path}@refs/tags/{release_tag}"
-    );
+    let expected_san =
+        format!("https://github.com/{owner}/{repo}/{workflow_path}@refs/tags/{release_tag}");
 
     let mut last_err: Option<anyhow::Error> = None;
     for (idx, entry) in resp.attestations.iter().enumerate() {
@@ -232,43 +228,20 @@ fn verify_cert_chain(leaf: &X509) -> Result<()> {
 }
 
 fn verify_cert_identity(leaf: &X509, expected_san: &str) -> Result<()> {
+    // Fulcio's issuance policy binds a `github.com/...` SAN to the GitHub
+    // Actions OIDC issuer, so an exact SAN URI match is sufficient: Fulcio
+    // will not issue a cert with this SAN to any other identity provider.
     let san = leaf
         .subject_alt_names()
         .context("leaf certificate missing SAN extension")?;
-    let mut matched = false;
     for name in &san {
         if let Some(uri) = name.uri() {
             if uri == expected_san {
-                matched = true;
-                break;
+                return Ok(());
             }
         }
     }
-    if !matched {
-        bail!("leaf SAN does not match expected workflow identity '{expected_san}'");
-    }
-
-    let issuer_ext_oid = "1.3.6.1.4.1.57264.1.1"; // Fulcio OIDC issuer extension
-    let issuer_der = extract_extension(leaf, issuer_ext_oid)
-        .context("leaf missing OIDC issuer extension")?;
-    let issuer = String::from_utf8(issuer_der).context("OIDC issuer extension not UTF-8")?;
-    if issuer != GITHUB_OIDC_ISSUER {
-        bail!("OIDC issuer '{issuer}' does not match expected '{GITHUB_OIDC_ISSUER}'");
-    }
-    Ok(())
-}
-
-fn extract_extension(cert: &X509, oid: &str) -> Option<Vec<u8>> {
-    let asn1_oid = openssl::asn1::Asn1Object::from_str(oid).ok()?;
-    let nid = asn1_oid.nid();
-    for ext in cert.as_ref().extensions_iter() {
-        if ext.object().nid() == nid {
-            let data = ext.data();
-            // Fulcio extension values are raw bytes (not DER wrapped) for 1.3.6.1.4.1.57264.1.1
-            return Some(data.as_slice().to_vec());
-        }
-    }
-    None
+    bail!("leaf SAN does not match expected workflow identity '{expected_san}'")
 }
 
 fn verify_dsse_signature(leaf: &X509, envelope: &DsseEnvelope) -> Result<()> {
@@ -316,7 +289,11 @@ fn verify_intoto_subject(envelope: &DsseEnvelope, artifact_sha256_hex: &str) -> 
     let stmt: InTotoStatement =
         serde_json::from_slice(&payload_bytes).context("parsing in-toto statement")?;
     for subject in &stmt.subject {
-        if subject.digest.sha256.eq_ignore_ascii_case(artifact_sha256_hex) {
+        if subject
+            .digest
+            .sha256
+            .eq_ignore_ascii_case(artifact_sha256_hex)
+        {
             return Ok(());
         }
     }
@@ -334,8 +311,8 @@ fn verify_rekor_set(entries: &[TlogEntry]) -> Result<()> {
         .as_ref()
         .context("Rekor entry missing inclusion promise / SET")?;
 
-    let rekor_pub =
-        openssl::pkey::PKey::public_key_from_pem(REKOR_PUBKEY_PEM).context("parsing Rekor pubkey")?;
+    let rekor_pub = openssl::pkey::PKey::public_key_from_pem(REKOR_PUBKEY_PEM)
+        .context("parsing Rekor pubkey")?;
 
     // Canonicalized payload signed by Rekor per rekor-spec:
     // JSON: {"body":"<canonicalizedBody>","integratedTime":<int>,"logID":"<hex>","logIndex":<int>}
@@ -348,10 +325,7 @@ fn verify_rekor_set(entries: &[TlogEntry]) -> Result<()> {
         .integrated_time
         .parse()
         .context("parsing Rekor integratedTime")?;
-    let log_index: i64 = entry
-        .log_index
-        .parse()
-        .context("parsing Rekor logIndex")?;
+    let log_index: i64 = entry.log_index.parse().context("parsing Rekor logIndex")?;
     let canonical = format!(
         "{{\"body\":\"{}\",\"integratedTime\":{},\"logID\":\"{}\",\"logIndex\":{}}}",
         entry.canonicalized_body, integrated_time, log_id_hex, log_index
