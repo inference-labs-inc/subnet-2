@@ -285,15 +285,19 @@ fn verify_cert_identity(leaf: &X509, expected_san: &str) -> Result<()> {
 fn verify_dsse_signature(leaf: &X509, envelope: &DsseEnvelope) -> Result<()> {
     let pubkey = leaf.public_key().context("extracting leaf public key")?;
 
-    // DSSE PAE: "DSSEv1 " + len(payloadType) + " " + payloadType + " " + len(payload) + " " + payload
-    let pae = format!(
+    let payload_raw = base64::engine::general_purpose::STANDARD
+        .decode(envelope.payload.as_bytes())
+        .context("decoding DSSE payload for PAE construction")?;
+
+    // DSSE PAE v1: "DSSEv1" SP LEN(type) SP type SP LEN(body) SP body
+    let header = format!(
         "DSSEv1 {} {} {} ",
         envelope.payload_type.len(),
         envelope.payload_type,
-        envelope.payload.len()
+        payload_raw.len(),
     );
-    let mut pae_bytes = pae.into_bytes();
-    pae_bytes.extend_from_slice(envelope.payload.as_bytes());
+    let mut pae_bytes = header.into_bytes();
+    pae_bytes.extend_from_slice(&payload_raw);
 
     let sig = envelope
         .signatures
