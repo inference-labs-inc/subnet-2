@@ -10,6 +10,9 @@ const API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 const RELEASES_URL: &str =
     "https://api.github.com/repos/inference-labs-inc/subnet-2/releases/latest";
+const RELEASE_OWNER: &str = "inference-labs-inc";
+const RELEASE_REPO: &str = "subnet-2";
+const RELEASE_WORKFLOW_PATH: &str = ".github/workflows/release.yml";
 
 fn platform_suffix() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
@@ -145,6 +148,21 @@ async fn check_and_update(
     if actual_hash != expected_hash {
         bail!("SHA256 mismatch: expected {expected_hash}, got {actual_hash}");
     }
+
+    crate::attestation::fetch_and_verify_attestation(
+        client,
+        RELEASE_OWNER,
+        RELEASE_REPO,
+        &actual_hash,
+        &release.tag_name,
+        RELEASE_WORKFLOW_PATH,
+    )
+    .await
+    .context("GitHub attestation verification failed, refusing to install update")?;
+    info!(
+        version = %remote,
+        "attestation verified against pinned Sigstore trust roots"
+    );
 
     let parent = current_exe
         .parent()

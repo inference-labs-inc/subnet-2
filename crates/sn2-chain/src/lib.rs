@@ -1,3 +1,4 @@
+pub mod attestation;
 pub mod auto_update;
 mod metagraph;
 mod registration;
