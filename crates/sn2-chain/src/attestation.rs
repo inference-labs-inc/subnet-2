@@ -272,14 +272,13 @@ fn verify_cert_identity(leaf: &X509, expected_san: &str) -> Result<()> {
     let san = leaf
         .subject_alt_names()
         .context("leaf certificate missing SAN extension")?;
-    for name in &san {
-        if let Some(uri) = name.uri() {
-            if uri == expected_san {
-                return Ok(());
-            }
-        }
+    let uri_sans: Vec<&str> = san.iter().filter_map(|name| name.uri()).collect();
+    if uri_sans.len() == 1 && uri_sans[0] == expected_san {
+        return Ok(());
     }
-    bail!("leaf SAN does not match expected workflow identity '{expected_san}'")
+    bail!(
+        "leaf URI SAN set {uri_sans:?} does not exactly match expected workflow identity '{expected_san}'"
+    )
 }
 
 fn verify_dsse_signature(leaf: &X509, envelope: &DsseEnvelope) -> Result<()> {
