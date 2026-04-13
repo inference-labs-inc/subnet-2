@@ -146,7 +146,7 @@ pub async fn fetch_and_verify_attestation(
     let url = format!(
         "https://api.github.com/repos/{owner}/{repo}/attestations/sha256:{artifact_sha256_hex}"
     );
-    let resp: AttestationsResponse = client
+    let body = client
         .get(&url)
         .timeout(std::time::Duration::from_secs(30))
         .header("User-Agent", "sn2-auto-update")
@@ -156,20 +156,33 @@ pub async fn fetch_and_verify_attestation(
         .context("fetching attestation")?
         .error_for_status()
         .context("attestation endpoint error")?
-        .json()
+        .bytes()
         .await
-        .context("parsing attestation JSON")?;
-
-    if resp.attestations.is_empty() {
-        bail!("no attestations found for artifact digest {artifact_sha256_hex}");
-    }
+        .context("reading attestation response body")?;
 
     let expected_san =
         format!("https://github.com/{owner}/{repo}/{workflow_path}@refs/tags/{release_tag}");
 
+    verify_attestation_response_json(&body, artifact_sha256_hex, &expected_san)
+}
+
+/// Verify a pre-fetched `GET /repos/.../attestations/sha256:...` response body
+/// against a given artifact digest and expected Fulcio SAN. Exposed for tests
+/// and for out-of-band verification against locally stored bundles.
+pub fn verify_attestation_response_json(
+    response_json: &[u8],
+    artifact_sha256_hex: &str,
+    expected_san: &str,
+) -> Result<()> {
+    assert_pinned_roots()?;
+    let resp: AttestationsResponse =
+        serde_json::from_slice(response_json).context("parsing attestation response JSON")?;
+    if resp.attestations.is_empty() {
+        bail!("no attestations found in response");
+    }
     let mut last_err: Option<anyhow::Error> = None;
     for (idx, entry) in resp.attestations.iter().enumerate() {
-        match verify_bundle(&entry.bundle, artifact_sha256_hex, &expected_san) {
+        match verify_bundle(&entry.bundle, artifact_sha256_hex, expected_san) {
             Ok(()) => return Ok(()),
             Err(e) => last_err = Some(e.context(format!("attestation[{idx}]"))),
         }
