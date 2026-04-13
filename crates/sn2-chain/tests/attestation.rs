@@ -37,15 +37,9 @@ fn verification_rejects_wrong_workflow_identity() {
 
 #[test]
 fn verification_rejects_dsse_signature_tampering() {
-    // Flip one byte inside the base64 DSSE signature field.
-    let mut corrupted = REAL_ATTESTATION.to_vec();
-    let needle = br#""sig":""#;
-    let start =
-        find_subsequence(&corrupted, needle).expect("sig field present in fixture") + needle.len();
-    // Replace the character at `start` with a different legal base64 character.
-    let original = corrupted[start];
-    let replacement = if original == b'A' { b'B' } else { b'A' };
-    corrupted[start] = replacement;
+    // Flip one byte inside every base64 DSSE signature field so neither
+    // attestation in the bundle can verify.
+    let corrupted = tamper_all(REAL_ATTESTATION, br#""sig":""#);
     let err = verify_attestation_response_json(&corrupted, REAL_ARTIFACT_SHA256, REAL_EXPECTED_SAN)
         .expect_err("DSSE signature tampering must not verify");
     let msg = format!("{err:#}");
@@ -57,14 +51,7 @@ fn verification_rejects_dsse_signature_tampering() {
 
 #[test]
 fn verification_rejects_rekor_set_tampering() {
-    let mut corrupted = REAL_ATTESTATION.to_vec();
-    let needle = br#""signedEntryTimestamp":""#;
-    let start = find_subsequence(&corrupted, needle)
-        .expect("signedEntryTimestamp field present in fixture")
-        + needle.len();
-    let original = corrupted[start];
-    let replacement = if original == b'A' { b'B' } else { b'A' };
-    corrupted[start] = replacement;
+    let corrupted = tamper_all(REAL_ATTESTATION, br#""signedEntryTimestamp":""#);
     let err = verify_attestation_response_json(&corrupted, REAL_ARTIFACT_SHA256, REAL_EXPECTED_SAN)
         .expect_err("Rekor SET tampering must not verify");
     let msg = format!("{err:#}");
@@ -74,6 +61,19 @@ fn verification_rejects_rekor_set_tampering() {
     );
 }
 
-fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
+fn tamper_all(haystack: &[u8], needle: &[u8]) -> Vec<u8> {
+    let mut out = haystack.to_vec();
+    let mut offset = 0;
+    while let Some(pos) = out[offset..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+    {
+        let target = offset + pos + needle.len();
+        if target < out.len() {
+            let original = out[target];
+            out[target] = if original == b'A' { b'B' } else { b'A' };
+        }
+        offset = offset + pos + needle.len();
+    }
+    out
 }
