@@ -144,6 +144,33 @@ struct SubjectDigest {
     sha256: String,
 }
 
+#[derive(Deserialize)]
+struct RekorDsseBody {
+    #[serde(rename = "apiVersion")]
+    api_version: String,
+    kind: String,
+    spec: RekorDsseSpec,
+}
+
+#[derive(Deserialize)]
+struct RekorDsseSpec {
+    #[serde(rename = "payloadHash")]
+    payload_hash: RekorHash,
+    #[serde(default)]
+    signatures: Vec<RekorDsseSigDescriptor>,
+}
+
+#[derive(Deserialize)]
+struct RekorHash {
+    algorithm: String,
+    value: String,
+}
+
+#[derive(Deserialize)]
+struct RekorDsseSigDescriptor {
+    signature: String,
+}
+
 /// Fetch the GitHub attestation for a given artifact digest, then verify it
 /// end to end against the pinned Sigstore trust roots.
 pub async fn fetch_and_verify_attestation(
@@ -212,7 +239,10 @@ fn verify_bundle(bundle: &Bundle, artifact_sha256_hex: &str, expected_san: &str)
     verify_cert_identity(&leaf, expected_san)?;
     verify_dsse_signature(&leaf, &bundle.dsse_envelope)?;
     verify_intoto_subject(&bundle.dsse_envelope, artifact_sha256_hex)?;
-    verify_rekor_set(&bundle.verification_material.tlog_entries)?;
+    verify_rekor_set(
+        &bundle.verification_material.tlog_entries,
+        &bundle.dsse_envelope,
+    )?;
     Ok(())
 }
 
@@ -343,6 +373,13 @@ fn verify_intoto_subject(envelope: &DsseEnvelope, artifact_sha256_hex: &str) -> 
         .context("decoding DSSE payload")?;
     let stmt: InTotoStatement =
         serde_json::from_slice(&payload_bytes).context("parsing in-toto statement")?;
+    const EXPECTED_STATEMENT_TYPE: &str = "https://in-toto.io/Statement/v1";
+    if stmt._type != EXPECTED_STATEMENT_TYPE {
+        bail!(
+            "unexpected in-toto statement _type '{}', expected '{EXPECTED_STATEMENT_TYPE}'",
+            stmt._type
+        );
+    }
     for subject in &stmt.subject {
         if subject
             .digest
@@ -357,7 +394,7 @@ fn verify_intoto_subject(envelope: &DsseEnvelope, artifact_sha256_hex: &str) -> 
     );
 }
 
-fn verify_rekor_set(entries: &[TlogEntry]) -> Result<()> {
+fn verify_rekor_set(entries: &[TlogEntry], envelope: &DsseEnvelope) -> Result<()> {
     if entries.is_empty() {
         bail!("attestation missing Rekor transparency log entry");
     }
@@ -365,9 +402,20 @@ fn verify_rekor_set(entries: &[TlogEntry]) -> Result<()> {
     let rekor_pub = openssl::pkey::PKey::public_key_from_pem(REKOR_PUBKEY_PEM)
         .context("parsing Rekor pubkey")?;
 
+    // Pre-compute bindings that every candidate Rekor entry must match:
+    //   - sha256 of the raw DSSE payload bytes
+    //   - the set of base64 signatures in this envelope
+    let payload_raw = base64::engine::general_purpose::STANDARD
+        .decode(envelope.payload.as_bytes())
+        .context("decoding DSSE payload for Rekor binding")?;
+    let expected_payload_sha256 = hex::encode(Sha256::digest(&payload_raw));
+    let envelope_sigs: std::collections::HashSet<&str> =
+        envelope.signatures.iter().map(|s| s.sig.as_str()).collect();
+
     let mut errors: Vec<String> = Vec::new();
     for (idx, entry) in entries.iter().enumerate() {
-        match verify_single_rekor_entry(entry, &rekor_pub) {
+        match verify_single_rekor_entry(entry, &rekor_pub, &expected_payload_sha256, &envelope_sigs)
+        {
             Ok(()) => return Ok(()),
             Err(e) => errors.push(format!("tlogEntry[{idx}]: {e:#}")),
         }
@@ -381,11 +429,62 @@ fn verify_rekor_set(entries: &[TlogEntry]) -> Result<()> {
 fn verify_single_rekor_entry(
     entry: &TlogEntry,
     rekor_pub: &openssl::pkey::PKey<openssl::pkey::Public>,
+    expected_payload_sha256: &str,
+    envelope_sigs: &std::collections::HashSet<&str>,
 ) -> Result<()> {
     let promise = entry
         .inclusion_promise
         .as_ref()
         .context("Rekor entry missing inclusion promise / SET")?;
+
+    // Bind this Rekor entry to the DSSE envelope we already verified. Without
+    // this check, an attacker could attach a Rekor SET from an unrelated
+    // (validly-signed) entry and the SET signature alone would satisfy
+    // verification. The Rekor body is base64(JSON), and for the DSSE type
+    // carries a sha256 of the raw payload plus the envelope signatures.
+    let body_bytes = base64::engine::general_purpose::STANDARD
+        .decode(entry.canonicalized_body.as_bytes())
+        .context("decoding Rekor canonicalizedBody")?;
+    let body: RekorDsseBody =
+        serde_json::from_slice(&body_bytes).context("parsing Rekor canonicalizedBody JSON")?;
+    if body.kind != "dsse" {
+        bail!(
+            "Rekor entry kind '{}' is not 'dsse'; cannot bind to DSSE envelope",
+            body.kind
+        );
+    }
+    if body.api_version != "0.0.1" {
+        bail!(
+            "unexpected Rekor DSSE apiVersion '{}', expected '0.0.1'",
+            body.api_version
+        );
+    }
+    if body.spec.payload_hash.algorithm != "sha256" {
+        bail!(
+            "Rekor payloadHash algorithm '{}' is not sha256",
+            body.spec.payload_hash.algorithm
+        );
+    }
+    if !body
+        .spec
+        .payload_hash
+        .value
+        .eq_ignore_ascii_case(expected_payload_sha256)
+    {
+        bail!(
+            "Rekor payloadHash {} does not match DSSE envelope payload sha256 {}",
+            body.spec.payload_hash.value,
+            expected_payload_sha256
+        );
+    }
+    if !body
+        .spec
+        .signatures
+        .iter()
+        .any(|s| envelope_sigs.contains(s.signature.as_str()))
+    {
+        bail!("Rekor entry signatures do not overlap with DSSE envelope signatures");
+    }
 
     // Canonicalized payload signed by Rekor per rekor-spec:
     // JSON: {"body":"<canonicalizedBody>","integratedTime":<int>,"logID":"<hex>","logIndex":<int>}
