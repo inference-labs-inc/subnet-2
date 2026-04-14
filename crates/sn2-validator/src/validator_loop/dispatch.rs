@@ -36,15 +36,7 @@ impl ValidatorLoop {
         let neuron_refs: Vec<&sn2_chain::NeuronInfo> = neurons.iter().collect();
         let api_eligible = self.compute_api_eligible(&neuron_refs);
 
-        let pow_ready = self.pow_manager.should_batch();
-        let pow_circuit = if pow_ready {
-            self.circuit_store
-                .ensure_circuit(BATCHED_PROOF_OF_WEIGHTS_MODEL_ID)
-                .await
-                .ok()
-        } else {
-            None
-        };
+        let pow_circuit: Option<Circuit> = None;
 
         for neuron in &neurons {
             if dispatch_budget == 0 {
