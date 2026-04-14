@@ -24,7 +24,6 @@ use crate::incremental_runner::IncrementalRunManager;
 use crate::metrics_server;
 use crate::miner_client::MinerQueryClient;
 use crate::performance::PerformanceTracker;
-use crate::pow_manager::PowManager;
 use crate::proof_uploader::ProofUploader;
 use crate::relay::{DsperseSubmission, RelayManager, RwrSubmission};
 use crate::request_pipeline::RequestPipeline;
@@ -142,7 +141,6 @@ pub struct ValidatorLoop {
     pub(super) rwr_rx: tokio::sync::mpsc::Receiver<RwrSubmission>,
     pub(super) timings: PeriodicTimings,
     pub(super) uid_hotkeys: HashMap<u16, String>,
-    pub(super) pow_manager: PowManager,
     pub(super) dispatch_notify: Arc<Notify>,
     pub(super) task_meta: HashMap<tokio::task::Id, (u16, Option<String>)>,
     pub(super) run_manager: IncrementalRunManager,
@@ -332,7 +330,6 @@ impl ValidatorLoop {
             rwr_rx,
             timings: PeriodicTimings::new(now),
             uid_hotkeys: HashMap::new(),
-            pow_manager: PowManager::new(),
             dispatch_notify: Arc::new(Notify::new()),
             task_meta: HashMap::new(),
             run_manager,

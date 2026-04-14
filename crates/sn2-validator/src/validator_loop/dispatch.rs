@@ -6,7 +6,6 @@ use sn2_types::*;
 
 use super::{is_valid_ip, DispatchedRequest, RetryPayload, TaskOutcome, TaskResult, ValidatorLoop};
 use crate::metrics_server as metrics;
-use crate::pow_manager::PowManager;
 use crate::relay::FRAME_PROOF_RESULT;
 
 impl ValidatorLoop {
@@ -36,8 +35,6 @@ impl ValidatorLoop {
         let neuron_refs: Vec<&sn2_chain::NeuronInfo> = neurons.iter().collect();
         let api_eligible = self.compute_api_eligible(&neuron_refs);
 
-        let pow_circuit: Option<Circuit> = None;
-
         for neuron in &neurons {
             if dispatch_budget == 0 {
                 break;
@@ -54,7 +51,7 @@ impl ValidatorLoop {
                 let active = self.miner_active_count.get(&uid).copied().unwrap_or(0);
                 let was_at_capacity = active + 1 >= cap;
 
-                let dispatched = match self.select_request(uid, &pow_circuit).await {
+                let dispatched = match self.select_request(uid).await {
                     Some(d) => d,
                     None => break,
                 };
@@ -73,46 +70,7 @@ impl ValidatorLoop {
         Ok(())
     }
 
-    async fn select_request(
-        &mut self,
-        uid: u16,
-        pow_circuit: &Option<Circuit>,
-    ) -> Option<DispatchedRequest> {
-        if let Some(pow_circ) = pow_circuit
-            .as_ref()
-            .filter(|_| self.pow_manager.should_batch())
-        {
-            let items = self.pow_manager.drain_batch();
-            let inputs = PowManager::prepare_inputs(&items);
-            let body = serde_json::json!({
-                "subnet_uid": self.config.netuid,
-                "verification_key_hash": pow_circ.id,
-                "proof_system": pow_circ.proof_system.to_string(),
-                "inputs": inputs,
-                "proof": "",
-                "public_signals": "",
-            });
-            return Some(DispatchedRequest {
-                request_type: RequestType::ProofOfWeights,
-                guard_hash: Some(String::new()),
-                external_request_hash: None,
-                body,
-                synapse_name: ProofOfWeightsDataModel::NAME,
-                retry_count: 0,
-                slice_num: None,
-                run_uid: None,
-                is_tile: false,
-                task_id: None,
-                tile_idx: None,
-                task_circuit: Some(pow_circ.clone()),
-                task_inputs: Some(inputs),
-                task_proof_system: Some(pow_circ.proof_system),
-                retry_payload: RetryPayload::None,
-                dsperse_circuit_path: None,
-                component_sha: None,
-            });
-        }
-
+    async fn select_request(&mut self, uid: u16) -> Option<DispatchedRequest> {
         if let Some(rwr) = self.rwr_queue.pop_front() {
             let circuit = match self.circuit_store.ensure_circuit(&rwr.circuit_id).await {
                 Ok(c) => c,

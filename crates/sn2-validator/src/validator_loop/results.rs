@@ -4,7 +4,6 @@ use tracing::{debug, info, warn};
 use super::{event_slice_num, RetryPayload, ValidatorLoop};
 use crate::incremental_runner::SliceArtifact;
 use crate::metrics_server as metrics;
-use crate::pow_manager::PowItem;
 use crate::relay::{FRAME_PROOF_RESULT, FRAME_SUBMIT_RESULT};
 
 impl ValidatorLoop {
@@ -17,7 +16,6 @@ impl ValidatorLoop {
         let elapsed = response.response_time;
         self.performance_tracker
             .record(uid, true, elapsed, was_at_capacity);
-        let previous_score = self.score_manager.get_score(uid);
         self.score_manager.update_score(
             uid,
             true,
@@ -27,20 +25,6 @@ impl ValidatorLoop {
             self.config.metagraph.n,
         );
         metrics::record_response(true, elapsed);
-
-        let n = self.config.metagraph.n.max(1) as f64;
-        self.pow_manager.push(PowItem {
-            miner_uid: uid,
-            validator_uid: self.config.user_uid,
-            verified: true,
-            response_time: elapsed,
-            proof_size: response.proof_size as u64,
-            previous_score,
-            maximum_score: 1.0 / n,
-            maximum_response_time: VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
-            minimum_response_time: 0.0,
-            block_number: self.config.metagraph.block,
-        });
     }
 
     pub(super) async fn handle_pow_success(&mut self, response: &MinerResponse) {
