@@ -92,7 +92,7 @@ jobs:
           cp target/release/sn2-validator sn2-validator-linux-${{ matrix.arch }}
           cp target/release/sn2-miner sn2-miner-linux-${{ matrix.arch }}
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-linux-${{ matrix.arch }}
           path: |
@@ -170,7 +170,7 @@ jobs:
           cp target/release/sn2-validator sn2-validator-macos-aarch64
           cp target/release/sn2-miner sn2-miner-macos-aarch64
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-macos-aarch64
           path: |

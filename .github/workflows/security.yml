@@ -39,7 +39,7 @@ jobs:
 
       - name: Upload Audit Results
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cargo-audit-results
           path: cargo-audit-results.json
@@ -71,7 +71,7 @@ jobs:
 
       - name: Upload Semgrep Results
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: semgrep-results
           path: |
@@ -113,7 +113,7 @@ jobs:
           output: "trivy-results.json"
 
       - name: Upload Trivy Results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trivy-results
           path: trivy-results.json
@@ -125,7 +125,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979
+      - uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb # v2.0.17
 
   secrets-detection:
     name: Secret Detection
@@ -138,7 +138,7 @@ jobs:
 
       - name: TruffleHog OSS (Pull Request)
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@586f66d7886cd0b037c7c245d4a6e34ef357ab10
+        uses: trufflesecurity/trufflehog@47e7b7cd74f578e1e3145d48f669f22fd1330ca6 # v3.94.3
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -147,7 +147,7 @@ jobs:
 
       - name: TruffleHog OSS (Push)
         if: github.event_name == 'push'
-        uses: trufflesecurity/trufflehog@586f66d7886cd0b037c7c245d4a6e34ef357ab10
+        uses: trufflesecurity/trufflehog@47e7b7cd74f578e1e3145d48f669f22fd1330ca6 # v3.94.3
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -156,7 +156,7 @@ jobs:
 
       - name: TruffleHog OSS (Schedule)
         if: github.event_name == 'schedule'
-        uses: trufflesecurity/trufflehog@586f66d7886cd0b037c7c245d4a6e34ef357ab10
+        uses: trufflesecurity/trufflehog@47e7b7cd74f578e1e3145d48f669f22fd1330ca6 # v3.94.3
         with:
           path: ./
           extra_args: --debug --only-verified
@@ -182,7 +182,7 @@ jobs:
           echo "- Secrets Detection: ${{ needs.secrets-detection.result }}" >> security-summary.md
 
       - name: Upload Security Summary
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: security-summary
           path: security-summary.md
