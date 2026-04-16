@@ -66,7 +66,7 @@ pub async fn verify_inner(
         let gen_before = EVICTION_GENERATION.load(Ordering::SeqCst);
 
         let holographic = circuit_path.join("vk.bin").is_file();
-        tracing::debug!(
+        tracing::info!(
             circuit_path = %circuit_path.display(),
             holographic,
             "dispatching verification path"
@@ -170,6 +170,23 @@ fn verify_holographic_path(
         anyhow::bail!("holographic proof verification failed");
     }
 
+    // Load scale from the bundle's stamped CircuitParams rather than
+    // trusting the witness header. The holographic proof binds the
+    // circuit evaluation to the scale values that appear in the
+    // witness's public-input tail, but those values are miner-chosen
+    // and only constrain arithmetic internal to the circuit. A miner
+    // could therefore ship a witness whose scale fields are
+    // self-consistent yet disagree with what the bundle was compiled
+    // against, producing descaled outputs that reflect a different
+    // quantization than the model's stamped contract. Sourcing scale
+    // from CircuitParams (set at compile time, bound to the same
+    // bundle the holographic vk was set up against) keeps the
+    // descaled outputs tied to the model's real quantization.
+    let params = backend
+        .load_params(circuit_path)
+        .context("loading circuit params for scale")?
+        .context("circuit bundle missing metadata")?;
+
     let extracted = backend
         .extract_outputs_full(witness_bytes, num_inputs)
         .context("holographic output extraction")?;
@@ -196,8 +213,8 @@ fn verify_holographic_path(
 
     Ok(VerifyResult {
         rescaled_outputs: extracted.outputs,
-        scale_base: extracted.scale_base,
-        scale_exponent: extracted.scale_exponent,
+        scale_base: u64::from(params.scale_base),
+        scale_exponent: u64::from(params.scale_exponent),
     })
 }
 
