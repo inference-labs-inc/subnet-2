@@ -2,67 +2,54 @@
 
 This document provides a guide for developers who contribute to subnet 2.
 
+The miner and validator are native Rust binaries organized as a Cargo workspace; see [README.md](README.md#architecture) for the crate layout.
+
+## Toolchain
+
+The pinned toolchain (channel and components) is declared in [`rust-toolchain.toml`](rust-toolchain.toml) and applied automatically by `rustup` on first invocation.
+
+Enable the repository's pre-commit hook (runs `cargo fmt --check`) once after cloning:
+
+```sh
+make setup
+```
+
 ## Adding Dependencies
 
-We use `uv` to manage dependencies. To add new dependencies, follow the steps below:
-
-1. Add the package to `pyproject.toml`:
+Add a workspace member dependency by editing the relevant crate's `Cargo.toml` under `crates/`, or run:
 
 ```sh
-uv add <package-name>
+cargo add <crate-name> -p <workspace-member>
 ```
 
-2. Lock dependencies and generate `requirements.txt`:
-
-```sh
-uv lock
-uv export -o requirements.txt
-```
-
-3. Sync dependencies:
-
-```sh
-uv sync
-```
+Lockfile updates land in `Cargo.lock` — commit it alongside the manifest change.
 
 ## Updating Dependencies
 
-To force uv to update all packages in an existing `pyproject.toml`, run `uv sync --upgrade`.
-
 ```sh
-# only update the bittensor package
-$ uv sync --upgrade-package bittensor
+# update a single crate to the latest semver-compatible version
+cargo update -p <crate-name>
 
-# update both the bittensor and requests packages
-$ uv sync --upgrade-package bittensor --upgrade-package requests
-
-# update the bittensor package to the latest, and requests to v2.0.0
-$ uv sync --upgrade-package bittensor --upgrade-package requests==2.0.0
+# update everything within semver constraints
+cargo update
 ```
 
-## Running Locally for Development
+For a major-version bump, edit the version in the relevant `Cargo.toml` and run `cargo update -p <crate-name>`.
 
-For local development, we recommend using our devcontainer which provides a pre-configured development environment. The devcontainer image is pulled from `ghcr.io/inference-labs-inc/bittensor-devcontainer:latest`.
+## Build, Test, Lint
 
-1. Create the `~/.bittensor/subnet-2` directory on your host machine if it doesn't exist
-2. Open the project in VS Code with the Dev Containers extension installed
-3. VS Code will prompt you to "Reopen in Container" - click this to start the devcontainer
-4. Once the container starts, run:
-   ```sh
-   uv sync
-   ```
-   This will create and activate a virtual environment in `.venv`
-5. In separate terminal windows, run:
+The `makefile` wraps the common cargo invocations:
 
-   ```sh
-   # Terminal 1: Start the local subnet
-   start_localnet.sh
+| Target | Equivalent |
+|---|---|
+| `make cargo-build` | `cargo build --release --locked --bin sn2-validator --bin sn2-miner` |
+| `make check` | `cargo check --workspace` |
+| `make clippy` | `cargo clippy --workspace -- -D warnings` |
+| `make test` | `cargo test --workspace` |
+| `make fmt` / `make fmt-check` | `cargo fmt --all` / `--check` |
 
-   # Terminal 2: Start the miner
-   python neurons/miner.py --localnet
+Run `make clippy` and `make fmt-check` before pushing — CI rejects warnings and unformatted code.
 
-   # Terminal 3: Start the validator
-   python neurons/validator.py --localnet
-   ```
+## Running Locally
 
-Note: btcli is pre-configured to use `ws://127.0.0.1:9944` in `~/.bittensor/config.yml`
+For end-to-end local execution against mainnet, testnet, or a local subtensor, follow [`docs/shared_setup_steps.md`](docs/shared_setup_steps.md) and the network-specific guides in [`docs/`](docs/). The PM2 and Docker invocations in [README.md](README.md#run-the-miner) cover the standard runtime paths.
