@@ -43,7 +43,7 @@ mod tests {
 
         let result = grid_reconstruct(&tiles, 2, 2, 1, 2, 2);
 
-        assert_eq!(result.len(), 1 * 4 * 4);
+        assert_eq!(result.len(), 4 * 4);
         #[rustfmt::skip]
         let expected = vec![
             1.0,  2.0,  5.0,  6.0,
