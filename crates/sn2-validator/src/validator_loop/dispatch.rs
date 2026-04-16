@@ -30,7 +30,7 @@ impl ValidatorLoop {
 
         let queryable = self.get_queryable_neurons();
         let mut neurons: Vec<sn2_chain::NeuronInfo> = queryable.into_iter().cloned().collect();
-        rand::seq::SliceRandom::shuffle(neurons.as_mut_slice(), &mut rand::thread_rng());
+        rand::seq::SliceRandom::shuffle(neurons.as_mut_slice(), &mut rand::rng());
 
         let neuron_refs: Vec<&sn2_chain::NeuronInfo> = neurons.iter().collect();
         let api_eligible = self.compute_api_eligible(&neuron_refs);
