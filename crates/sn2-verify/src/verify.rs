@@ -154,6 +154,15 @@ fn verify_holographic_path(
     //      back to the values the validator actually sent, closing
     //      the gap that a miner could otherwise exploit by producing
     //      a valid proof for a different input vector.
+    // Expected inputs are mandatory on this path; without them there
+    // is nothing to bind the witness against and the validator would
+    // attest to miner-chosen outputs for miner-chosen inputs.
+    let expected = expected_inputs.ok_or_else(|| {
+        anyhow::anyhow!(
+            "holographic verification requires expected_inputs; refusing to attest against a miner-supplied witness with no validator-side anchor"
+        )
+    })?;
+
     let valid = backend
         .verify_holographic(circuit_path, proof_bytes)
         .context("holographic verification")?;
@@ -165,27 +174,24 @@ fn verify_holographic_path(
         .extract_outputs_full(witness_bytes, num_inputs)
         .context("holographic output extraction")?;
 
-    if let Some(expected) = expected_inputs {
+    anyhow::ensure!(
+        expected.len() == extracted.inputs.len(),
+        "holographic input cross-check: expected_inputs len {} does not match witness inputs len {}",
+        expected.len(),
+        extracted.inputs.len()
+    );
+    // Allow a small tolerance for the floating-point quantization
+    // round-trip performed by the witness deserializer. The same
+    // tolerance is effectively what verify_and_extract applies when
+    // it compares scaled field representations; here we apply it
+    // directly in f64 space because extract_outputs_full has already
+    // descaled both sides.
+    const INPUT_TOLERANCE: f64 = 1e-6;
+    for (idx, (lhs, rhs)) in expected.iter().zip(extracted.inputs.iter()).enumerate() {
         anyhow::ensure!(
-            expected.len() == extracted.inputs.len(),
-            "holographic input cross-check: expected_inputs len {} does not match witness inputs len {}",
-            expected.len(),
-            extracted.inputs.len()
+            (lhs - rhs).abs() <= INPUT_TOLERANCE,
+            "holographic input cross-check failed at index {idx}: expected {lhs}, witness declared {rhs}"
         );
-        // Allow a small tolerance for the floating-point
-        // quantization round-trip performed by the witness
-        // deserializer. The same tolerance is effectively what
-        // verify_and_extract applies when it compares scaled field
-        // representations; here we apply it directly in f64 space
-        // because extract_outputs_full has already descaled both
-        // sides.
-        const INPUT_TOLERANCE: f64 = 1e-6;
-        for (idx, (lhs, rhs)) in expected.iter().zip(extracted.inputs.iter()).enumerate() {
-            anyhow::ensure!(
-                (lhs - rhs).abs() <= INPUT_TOLERANCE,
-                "holographic input cross-check failed at index {idx}: expected {lhs}, witness declared {rhs}"
-            );
-        }
     }
 
     Ok(VerifyResult {
