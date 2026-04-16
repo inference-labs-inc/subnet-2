@@ -65,15 +65,26 @@ pub async fn verify_inner(
         // the two reads.
         let gen_before = EVICTION_GENERATION.load(Ordering::SeqCst);
 
-        let verified = backend
-            .verify_and_extract(
+        let holographic = circuit_path.join("vk.bin").is_file();
+
+        let result = if holographic {
+            verify_holographic_path(
+                &backend,
+                &circuit_path,
+                &witness_bytes,
+                &proof_bytes,
+                num_inputs,
+            )?
+        } else {
+            verify_plain_path(
+                &backend,
                 &circuit_path,
                 &witness_bytes,
                 &proof_bytes,
                 num_inputs,
                 expected_inputs.as_deref(),
-            )
-            .context("verification")?;
+            )?
+        };
 
         let gen_after = EVICTION_GENERATION.load(Ordering::SeqCst);
         if gen_before != gen_after {
@@ -82,18 +93,75 @@ pub async fn verify_inner(
             );
         }
 
-        if !verified.valid {
-            anyhow::bail!("proof verification failed");
-        }
-
-        Ok(VerifyResult {
-            rescaled_outputs: verified.outputs,
-            scale_base: verified.scale_base,
-            scale_exponent: verified.scale_exponent,
-        })
+        Ok(result)
     })
     .await
     .context("verification task panicked")?
+}
+
+fn verify_plain_path(
+    backend: &JstproveBackend,
+    circuit_path: &std::path::Path,
+    witness_bytes: &[u8],
+    proof_bytes: &[u8],
+    num_inputs: usize,
+    expected_inputs: Option<&[f64]>,
+) -> Result<VerifyResult> {
+    let verified = backend
+        .verify_and_extract(
+            circuit_path,
+            witness_bytes,
+            proof_bytes,
+            num_inputs,
+            expected_inputs,
+        )
+        .context("verification")?;
+
+    if !verified.valid {
+        anyhow::bail!("proof verification failed");
+    }
+
+    Ok(VerifyResult {
+        rescaled_outputs: verified.outputs,
+        scale_base: verified.scale_base,
+        scale_exponent: verified.scale_exponent,
+    })
+}
+
+fn verify_holographic_path(
+    backend: &JstproveBackend,
+    circuit_path: &std::path::Path,
+    witness_bytes: &[u8],
+    proof_bytes: &[u8],
+    num_inputs: usize,
+) -> Result<VerifyResult> {
+    let valid = backend
+        .verify_holographic(circuit_path, proof_bytes)
+        .context("holographic verification")?;
+    if !valid {
+        anyhow::bail!("holographic proof verification failed");
+    }
+
+    // Scale parameters are stamped authoritatively in the bundle's
+    // CircuitParams at compile time; the holographic vk was set up
+    // against those same params, so they are the trusted root here.
+    // Reading scale from the witness stream the miner supplied would
+    // leave the field unchecked against any bound in the holographic
+    // proof, so prefer the compile-time stamp.
+    let params = backend
+        .load_params(circuit_path)
+        .context("loading circuit params for scale")?
+        .context("circuit bundle missing metadata")?;
+
+    let outputs = backend
+        .extract_outputs(witness_bytes, num_inputs)
+        .context("output extraction")?;
+
+    Ok(VerifyResult {
+        rescaled_outputs: outputs,
+        scale_base: u64::from(params.scale_base),
+        scale_exponent: u64::from(params.scale_exponent),
+    })
 }
 
 pub async fn handle_request(req: VerifyRequest) -> VerifyResponse {

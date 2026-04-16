@@ -3263,9 +3263,10 @@ checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
 [[package]]
 name = "dsperse"
 version = "0.0.0"
-source = "git+https://github.com/inference-labs-inc/dsperse?rev=8ab6f325#8ab6f3257857a273a852a288974a41739d414328"
+source = "git+https://github.com/inference-labs-inc/dsperse?rev=472ca8f0#472ca8f054475c5130363e0df288ca056d794e18"
 dependencies = [
  "clap",
+ "jstprove-io",
  "jstprove_circuits",
  "libc",
  "ndarray 0.17.2",

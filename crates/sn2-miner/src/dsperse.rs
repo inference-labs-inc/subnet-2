@@ -62,9 +62,16 @@ fn prove_and_build_response(
     witness_bytes: &[u8],
     effective_input_dims: Option<usize>,
 ) -> Result<serde_json::Value> {
-    let proof_bytes = backend
-        .prove(circuit_path, witness_bytes)
-        .map_err(|e| anyhow::anyhow!("proof generation: {e}"))?;
+    let holographic = circuit_path.join("vk.bin").is_file();
+    let proof_bytes = if holographic {
+        backend
+            .prove_holographic(circuit_path, witness_bytes)
+            .map_err(|e| anyhow::anyhow!("holographic proof generation: {e}"))?
+    } else {
+        backend
+            .prove(circuit_path, witness_bytes)
+            .map_err(|e| anyhow::anyhow!("proof generation: {e}"))?
+    };
 
     let computed_outputs = if let Some(num_model_inputs) = effective_input_dims {
         match backend.extract_outputs(witness_bytes, num_model_inputs) {
@@ -87,6 +94,7 @@ fn prove_and_build_response(
         witness_size = witness_bytes.len(),
         proof_size = proof_bytes.len(),
         num_outputs = computed_outputs.len(),
+        holographic,
         "witness and proof generated"
     );
 
