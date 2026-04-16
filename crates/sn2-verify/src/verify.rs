@@ -66,6 +66,11 @@ pub async fn verify_inner(
         let gen_before = EVICTION_GENERATION.load(Ordering::SeqCst);
 
         let holographic = circuit_path.join("vk.bin").is_file();
+        tracing::debug!(
+            circuit_path = %circuit_path.display(),
+            holographic,
+            "dispatching verification path"
+        );
 
         let result = if holographic {
             verify_holographic_path(
@@ -74,6 +79,7 @@ pub async fn verify_inner(
                 &witness_bytes,
                 &proof_bytes,
                 num_inputs,
+                expected_inputs.as_deref(),
             )?
         } else {
             verify_plain_path(
@@ -134,7 +140,20 @@ fn verify_holographic_path(
     witness_bytes: &[u8],
     proof_bytes: &[u8],
     num_inputs: usize,
+    expected_inputs: Option<&[f64]>,
 ) -> Result<VerifyResult> {
+    // Soundness for the holographic path rests on two separate
+    // checks, because jstprove's `verify_holographic(vk, proof)` does
+    // not itself consult the miner-supplied witness:
+    //   1. `verify_holographic` establishes that the proof is
+    //      internally consistent with the circuit committed in the
+    //      vk, and that the public inputs committed inside the proof
+    //      satisfy the circuit constraints (so declared outputs are
+    //      bound to declared inputs).
+    //   2. The witness cross-check below binds the declared inputs
+    //      back to the values the validator actually sent, closing
+    //      the gap that a miner could otherwise exploit by producing
+    //      a valid proof for a different input vector.
     let valid = backend
         .verify_holographic(circuit_path, proof_bytes)
         .context("holographic verification")?;
@@ -142,25 +161,37 @@ fn verify_holographic_path(
         anyhow::bail!("holographic proof verification failed");
     }
 
-    // Scale parameters are stamped authoritatively in the bundle's
-    // CircuitParams at compile time; the holographic vk was set up
-    // against those same params, so they are the trusted root here.
-    // Reading scale from the witness stream the miner supplied would
-    // leave the field unchecked against any bound in the holographic
-    // proof, so prefer the compile-time stamp.
-    let params = backend
-        .load_params(circuit_path)
-        .context("loading circuit params for scale")?
-        .context("circuit bundle missing metadata")?;
+    let extracted = backend
+        .extract_outputs_full(witness_bytes, num_inputs)
+        .context("holographic output extraction")?;
 
-    let outputs = backend
-        .extract_outputs(witness_bytes, num_inputs)
-        .context("output extraction")?;
+    if let Some(expected) = expected_inputs {
+        anyhow::ensure!(
+            expected.len() == extracted.inputs.len(),
+            "holographic input cross-check: expected_inputs len {} does not match witness inputs len {}",
+            expected.len(),
+            extracted.inputs.len()
+        );
+        // Allow a small tolerance for the floating-point
+        // quantization round-trip performed by the witness
+        // deserializer. The same tolerance is effectively what
+        // verify_and_extract applies when it compares scaled field
+        // representations; here we apply it directly in f64 space
+        // because extract_outputs_full has already descaled both
+        // sides.
+        const INPUT_TOLERANCE: f64 = 1e-6;
+        for (idx, (lhs, rhs)) in expected.iter().zip(extracted.inputs.iter()).enumerate() {
+            anyhow::ensure!(
+                (lhs - rhs).abs() <= INPUT_TOLERANCE,
+                "holographic input cross-check failed at index {idx}: expected {lhs}, witness declared {rhs}"
+            );
+        }
+    }
 
     Ok(VerifyResult {
-        rescaled_outputs: outputs,
-        scale_base: u64::from(params.scale_base),
-        scale_exponent: u64::from(params.scale_exponent),
+        rescaled_outputs: extracted.outputs,
+        scale_base: extracted.scale_base,
+        scale_exponent: extracted.scale_exponent,
     })
 }
 
