@@ -46,7 +46,7 @@ The `makefile` wraps the common cargo invocations:
 | `make check` | `cargo check --workspace` |
 | `make clippy` | `cargo clippy --workspace -- -D warnings` |
 | `make test` | `cargo test --workspace` |
-| `make fmt` / `make fmt-check` | `cargo fmt --all` / `--check` |
+| `make fmt` / `make fmt-check` | `cargo fmt --all` / `cargo fmt --all -- --check` |
 
 Run `make clippy` and `make fmt-check` before pushing — CI rejects warnings and unformatted code.
 
