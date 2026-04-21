@@ -20,6 +20,22 @@ fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+fn compute_file_sha256(path: &Path) -> Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("opening {} for sha256", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
 struct WeightRef {
     sha: String,
     filename: String,
@@ -790,6 +806,15 @@ impl CircuitStore {
                 if dest.exists() && !force {
                     continue;
                 }
+                if Self::try_hardlink_from_component_cache(
+                    &self.cache_dir,
+                    slices_dir,
+                    &comp.sha,
+                    &PathBuf::from("jstprove/circuit.bundle").join(filename),
+                    &dest,
+                ) {
+                    continue;
+                }
                 let url = format!(
                     "{}/components/{}/files/{}",
                     self.api_url, comp.sha, filename
@@ -807,12 +832,134 @@ impl CircuitStore {
             if dest.exists() && !force {
                 continue;
             }
+            if Self::try_hardlink_from_weight_cache(
+                &self.cache_dir,
+                slices_dir,
+                &wb.sha,
+                filename,
+                &dest,
+            ) {
+                continue;
+            }
             let url = format!("{}/models/wb/{}", self.api_url, wb.sha);
             self.download_file(&url, &dest)
                 .await
                 .with_context(|| format!("downloading weight blob for {}", comp.name))?;
         }
         Ok(())
+    }
+
+    /// Scan sibling cached circuits for a component stamped with the same SHA
+    /// and hard-link the requested file from there. Returns true on success.
+    fn try_hardlink_from_component_cache(
+        cache_dir: &Path,
+        current_slices_dir: &Path,
+        component_sha: &str,
+        relative_path: &Path,
+        dest: &Path,
+    ) -> bool {
+        let root_entries = match std::fs::read_dir(cache_dir) {
+            Ok(entries) => entries,
+            Err(_) => return false,
+        };
+        for entry in root_entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let candidate_slices = path.join("slices");
+            if candidate_slices == current_slices_dir {
+                continue;
+            }
+            let slice_entries = match std::fs::read_dir(&candidate_slices) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for slice_entry in slice_entries.flatten() {
+                let slice_path = slice_entry.path();
+                let stamp = slice_path.join("component.sha");
+                let matches = match std::fs::read_to_string(&stamp) {
+                    Ok(stamp_value) => stamp_value.trim() == component_sha,
+                    Err(_) => false,
+                };
+                if !matches {
+                    continue;
+                }
+                let source = slice_path.join(relative_path);
+                if !source.exists() {
+                    continue;
+                }
+                if let Some(parent) = dest.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if std::fs::hard_link(&source, dest).is_ok() {
+                    info!(
+                        source = %source.display(),
+                        dest = %dest.display(),
+                        sha = component_sha,
+                        "hard-linked component file from sibling circuit cache",
+                    );
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Scan sibling cached circuits for a weight blob with the same SHA and
+    /// hard-link it into place. Returns true on success.
+    fn try_hardlink_from_weight_cache(
+        cache_dir: &Path,
+        current_slices_dir: &Path,
+        weight_sha: &str,
+        filename: &str,
+        dest: &Path,
+    ) -> bool {
+        let root_entries = match std::fs::read_dir(cache_dir) {
+            Ok(entries) => entries,
+            Err(_) => return false,
+        };
+        for entry in root_entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let candidate_slices = path.join("slices");
+            if candidate_slices == current_slices_dir {
+                continue;
+            }
+            let slice_entries = match std::fs::read_dir(&candidate_slices) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for slice_entry in slice_entries.flatten() {
+                let payload_dir = slice_entry.path().join("payload");
+                let candidate = payload_dir.join(filename);
+                if !candidate.exists() {
+                    continue;
+                }
+                let sha = match compute_file_sha256(&candidate) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                if sha != weight_sha {
+                    continue;
+                }
+                if let Some(parent) = dest.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if std::fs::hard_link(&candidate, dest).is_ok() {
+                    info!(
+                        source = %candidate.display(),
+                        dest = %dest.display(),
+                        sha = weight_sha,
+                        "hard-linked weight blob from sibling circuit cache",
+                    );
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn write_component_stamp(slices_dir: &Path, comp: &ParsedComponent) -> Result<()> {
