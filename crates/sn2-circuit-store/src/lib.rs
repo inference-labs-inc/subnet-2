@@ -806,13 +806,15 @@ impl CircuitStore {
                 if dest.exists() && !force {
                     continue;
                 }
-                if Self::try_hardlink_from_component_cache(
-                    &self.cache_dir,
-                    slices_dir,
-                    &comp.sha,
-                    &PathBuf::from("jstprove/circuit.bundle").join(filename),
-                    &dest,
-                ) {
+                if !force
+                    && Self::try_hardlink_from_component_cache(
+                        &self.cache_dir,
+                        slices_dir,
+                        &comp.sha,
+                        &PathBuf::from("jstprove/circuit.bundle").join(filename),
+                        &dest,
+                    )
+                {
                     continue;
                 }
                 let url = format!(
@@ -832,13 +834,9 @@ impl CircuitStore {
             if dest.exists() && !force {
                 continue;
             }
-            if Self::try_hardlink_from_weight_cache(
-                &self.cache_dir,
-                slices_dir,
-                &wb.sha,
-                filename,
-                &dest,
-            ) {
+            if !force
+                && Self::try_hardlink_from_weight_cache(&self.cache_dir, slices_dir, &wb.sha, &dest)
+            {
                 continue;
             }
             let url = format!("{}/models/wb/{}", self.api_url, wb.sha);
@@ -847,6 +845,21 @@ impl CircuitStore {
                 .with_context(|| format!("downloading weight blob for {}", comp.name))?;
         }
         Ok(())
+    }
+
+    /// True when `path` is a `model_<sha256>` directory under the cache root.
+    fn is_model_cache_dir(path: &Path) -> bool {
+        if !path.is_dir() {
+            return false;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => return false,
+        };
+        match name.strip_prefix("model_") {
+            Some(id) => is_sha256_hex(id),
+            None => false,
+        }
     }
 
     /// Scan sibling cached circuits for a component stamped with the same SHA
@@ -864,7 +877,7 @@ impl CircuitStore {
         };
         for entry in root_entries.flatten() {
             let path = entry.path();
-            if !path.is_dir() {
+            if !Self::is_model_cache_dir(&path) {
                 continue;
             }
             let candidate_slices = path.join("slices");
@@ -906,13 +919,12 @@ impl CircuitStore {
         false
     }
 
-    /// Scan sibling cached circuits for a weight blob with the same SHA and
-    /// hard-link it into place. Returns true on success.
+    /// Scan sibling cached circuits for any weight blob whose contents hash to
+    /// `weight_sha` and hard-link it into place. Returns true on success.
     fn try_hardlink_from_weight_cache(
         cache_dir: &Path,
         current_slices_dir: &Path,
         weight_sha: &str,
-        filename: &str,
         dest: &Path,
     ) -> bool {
         let root_entries = match std::fs::read_dir(cache_dir) {
@@ -921,7 +933,7 @@ impl CircuitStore {
         };
         for entry in root_entries.flatten() {
             let path = entry.path();
-            if !path.is_dir() {
+            if !Self::is_model_cache_dir(&path) {
                 continue;
             }
             let candidate_slices = path.join("slices");
@@ -934,28 +946,34 @@ impl CircuitStore {
             };
             for slice_entry in slice_entries.flatten() {
                 let payload_dir = slice_entry.path().join("payload");
-                let candidate = payload_dir.join(filename);
-                if !candidate.exists() {
-                    continue;
-                }
-                let sha = match compute_file_sha256(&candidate) {
-                    Ok(value) => value,
+                let payload_files = match std::fs::read_dir(&payload_dir) {
+                    Ok(entries) => entries,
                     Err(_) => continue,
                 };
-                if sha != weight_sha {
-                    continue;
-                }
-                if let Some(parent) = dest.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if std::fs::hard_link(&candidate, dest).is_ok() {
-                    info!(
-                        source = %candidate.display(),
-                        dest = %dest.display(),
-                        sha = weight_sha,
-                        "hard-linked weight blob from sibling circuit cache",
-                    );
-                    return true;
+                for payload_entry in payload_files.flatten() {
+                    let candidate = payload_entry.path();
+                    if !candidate.is_file() {
+                        continue;
+                    }
+                    let sha = match compute_file_sha256(&candidate) {
+                        Ok(value) => value,
+                        Err(_) => continue,
+                    };
+                    if sha != weight_sha {
+                        continue;
+                    }
+                    if let Some(parent) = dest.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if std::fs::hard_link(&candidate, dest).is_ok() {
+                        info!(
+                            source = %candidate.display(),
+                            dest = %dest.display(),
+                            sha = weight_sha,
+                            "hard-linked weight blob from sibling circuit cache",
+                        );
+                        return true;
+                    }
                 }
             }
         }
