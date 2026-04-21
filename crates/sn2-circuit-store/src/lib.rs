@@ -806,15 +806,16 @@ impl CircuitStore {
                 if dest.exists() && !force {
                     continue;
                 }
-                if !force
-                    && Self::try_hardlink_from_component_cache(
-                        &self.cache_dir,
-                        slices_dir,
-                        &comp.sha,
-                        &PathBuf::from("jstprove/circuit.bundle").join(filename),
-                        &dest,
-                    )
-                {
+                if force && dest.exists() {
+                    let _ = std::fs::remove_file(&dest);
+                }
+                if Self::try_hardlink_from_component_cache(
+                    &self.cache_dir,
+                    slices_dir,
+                    &comp.sha,
+                    &PathBuf::from("jstprove/circuit.bundle").join(filename),
+                    &dest,
+                ) {
                     continue;
                 }
                 let url = format!(
@@ -834,9 +835,10 @@ impl CircuitStore {
             if dest.exists() && !force {
                 continue;
             }
-            if !force
-                && Self::try_hardlink_from_weight_cache(&self.cache_dir, slices_dir, &wb.sha, &dest)
-            {
+            if force && dest.exists() {
+                let _ = std::fs::remove_file(&dest);
+            }
+            if Self::try_hardlink_from_weight_cache(&self.cache_dir, slices_dir, &wb.sha, &dest) {
                 continue;
             }
             let url = format!("{}/models/wb/{}", self.api_url, wb.sha);
