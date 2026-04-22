@@ -162,6 +162,13 @@ jobs:
           path: ./
           extra_args: --debug --only-verified
 
+      - name: TruffleHog OSS (Release gate)
+        if: github.event_name == 'workflow_call'
+        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26 # v3.95.2
+        with:
+          path: ./
+          extra_args: --debug --only-verified
+
   security-summary:
     name: Security Summary
     runs-on: ubuntu-latest

@@ -30,7 +30,6 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [build, security-gate]
     runs-on: ubuntu-latest
-    environment: mainnet-release
     permissions:
       contents: write
       attestations: write
