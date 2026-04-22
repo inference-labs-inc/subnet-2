@@ -324,7 +324,7 @@ impl ValidatorLoop {
                     run_uid = %run_uid,
                     circuit_id = %circuit.id,
                     unsatisfiable,
-                    "preflight filtered slices with mismatched activation sizes"
+                    "preflight filtered slices due to mismatched activation sizes or invalid metadata"
                 );
             }
             kept
