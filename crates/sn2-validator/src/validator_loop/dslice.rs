@@ -195,6 +195,31 @@ impl ValidatorLoop {
         }
     }
 
+    /// Sum of per-input element counts declared in slice metadata.
+    /// Returns None when the metadata does not advertise input shapes so the
+    /// caller falls through to dispatch untouched.
+    fn expected_input_elements(input_shape: &[Vec<i64>]) -> Option<usize> {
+        if input_shape.is_empty() {
+            return None;
+        }
+        let mut total: usize = 0;
+        for shape in input_shape {
+            if shape.is_empty() {
+                return None;
+            }
+            let mut product: usize = 1;
+            for &dim in shape {
+                if dim <= 0 {
+                    return None;
+                }
+                let dim_usize = usize::try_from(dim).ok()?;
+                product = product.checked_mul(dim_usize)?;
+            }
+            total = total.checked_add(product)?;
+        }
+        Some(total)
+    }
+
     fn flush_staged(&mut self, staged: StagedWork) {
         for request in staged.requests {
             match request.run_source {
@@ -255,6 +280,36 @@ impl ValidatorLoop {
                 }
                 _ => work_items,
             }
+        };
+
+        let work_items: Vec<_> = {
+            let mut kept = Vec::with_capacity(work_items.len());
+            let mut unsatisfiable = 0usize;
+            for work in work_items {
+                match Self::expected_input_elements(&work.slice_meta.input_shape) {
+                    Some(expected) if expected != work.input.len() => {
+                        warn!(
+                            run_uid = %run_uid,
+                            slice = %work.slice_id,
+                            expected,
+                            actual = work.input.len(),
+                            "preflight: slice input activation count does not match circuit expectation, skipping"
+                        );
+                        self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
+                        unsatisfiable += 1;
+                    }
+                    _ => kept.push(work),
+                }
+            }
+            if unsatisfiable > 0 {
+                info!(
+                    run_uid = %run_uid,
+                    circuit_id = %circuit.id,
+                    unsatisfiable,
+                    "preflight filtered slices with mismatched activation sizes"
+                );
+            }
+            kept
         };
 
         if work_items.is_empty() {
