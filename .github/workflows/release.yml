@@ -42,12 +42,10 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect binaries and generate SHA256SUMS
+      - name: Collect binaries
         run: |
           cd artifacts
           find . -type f -name 'sn2-*' -exec cp {} ../ \;
-          cd ..
-          sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-linux-aarch64 sn2-miner-linux-aarch64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
 
       - name: Generate SBOM
         uses: anchore/sbom-action@57aae528053a48a3f6235f2d9461b05fbcb7366d # v0.23.1
@@ -56,6 +54,9 @@ jobs:
           format: cyclonedx-json
           output-file: sbom.cdx.json
           artifact-name: sbom-release
+
+      - name: Generate SHA256SUMS
+        run: sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-linux-aarch64 sn2-miner-linux-aarch64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 sbom.cdx.json > SHA256SUMS
 
       - name: Attest release binaries
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
@@ -72,7 +73,7 @@ jobs:
         uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
 
       - name: Sign SHA256SUMS with cosign keyless
-        run: cosign sign-blob --yes --output-signature SHA256SUMS.sig --output-certificate SHA256SUMS.pem SHA256SUMS
+        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
@@ -86,8 +87,7 @@ jobs:
             sn2-validator-macos-aarch64
             sn2-miner-macos-aarch64
             SHA256SUMS
-            SHA256SUMS.sig
-            SHA256SUMS.pem
+            SHA256SUMS.sigstore.json
             sbom.cdx.json
 
   release-testnet:
