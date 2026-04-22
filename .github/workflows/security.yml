@@ -7,6 +7,7 @@ on:
     branches: [main, testnet]
   schedule:
     - cron: "0 6 * * 1"
+  workflow_call: {}
 
 permissions:
   actions: read
@@ -25,7 +26,7 @@ jobs:
 
       - name: Cache cargo-audit binary
         id: cache-audit
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-${{ env.CARGO_AUDIT_VERSION }}
@@ -81,7 +82,7 @@ jobs:
 
       - name: Upload SARIF results to GitHub
         if: always() && hashFiles('semgrep-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4.34.1
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
@@ -138,7 +139,7 @@ jobs:
 
       - name: TruffleHog OSS (Pull Request)
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@47e7b7cd74f578e1e3145d48f669f22fd1330ca6 # v3.94.3
+        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26 # v3.95.2
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -147,7 +148,7 @@ jobs:
 
       - name: TruffleHog OSS (Push)
         if: github.event_name == 'push'
-        uses: trufflesecurity/trufflehog@47e7b7cd74f578e1e3145d48f669f22fd1330ca6 # v3.94.3
+        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26 # v3.95.2
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -156,7 +157,7 @@ jobs:
 
       - name: TruffleHog OSS (Schedule)
         if: github.event_name == 'schedule'
-        uses: trufflesecurity/trufflehog@47e7b7cd74f578e1e3145d48f669f22fd1330ca6 # v3.94.3
+        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26 # v3.95.2
         with:
           path: ./
           extra_args: --debug --only-verified

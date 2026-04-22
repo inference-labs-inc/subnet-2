@@ -11,6 +11,14 @@ permissions:
   contents: read
 
 jobs:
+  security-gate:
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/security.yml
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
   build:
     if: startsWith(github.ref, 'refs/tags/') || contains(github.event.pull_request.labels.*.name, 'run-build') || github.ref == 'refs/heads/testnet'
     uses: ./.github/workflows/build-binaries.yml
@@ -20,8 +28,9 @@ jobs:
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build]
+    needs: [build, security-gate]
     runs-on: ubuntu-latest
+    environment: mainnet-release
     permissions:
       contents: write
       attestations: write
@@ -49,7 +58,7 @@ jobs:
           output-file: sbom.cdx.json
           artifact-name: sbom-release
 
-      - name: Attest Linux binaries
+      - name: Attest release binaries
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: |
@@ -57,6 +66,14 @@ jobs:
             sn2-miner-linux-x86_64
             sn2-validator-linux-aarch64
             sn2-miner-linux-aarch64
+            sn2-validator-macos-aarch64
+            sn2-miner-macos-aarch64
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+
+      - name: Sign SHA256SUMS with cosign keyless
+        run: cosign sign-blob --yes --output-signature SHA256SUMS.sig --output-certificate SHA256SUMS.pem SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
@@ -70,6 +87,8 @@ jobs:
             sn2-validator-macos-aarch64
             sn2-miner-macos-aarch64
             SHA256SUMS
+            SHA256SUMS.sig
+            SHA256SUMS.pem
             sbom.cdx.json
 
   release-testnet:
