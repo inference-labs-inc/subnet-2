@@ -207,9 +207,6 @@ impl ValidatorLoop {
         }
         let mut total: usize = 0;
         for shape in input_shape {
-            if shape.is_empty() {
-                return ExpectedInputs::NoMetadata;
-            }
             let mut product: usize = 1;
             for &dim in shape {
                 if dim <= 0 {
