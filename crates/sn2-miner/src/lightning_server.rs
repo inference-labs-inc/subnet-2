@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use btlightning::{typed_async_handler, LightningServer, LightningServerConfig};
+use btlightning::{
+    typed_async_handler, LightningServer, LightningServerConfig, ValidatorPermitResolver,
+};
 use tracing::info;
 
 use sn2_types::*;
@@ -17,17 +19,25 @@ pub async fn run_lightning_server(
     port: u16,
     handler_timeout_secs: u64,
     handlers: Arc<MinerHandlers>,
+    permit_resolver: Option<Box<dyn ValidatorPermitResolver>>,
 ) -> Result<()> {
     let idle_timeout = handler_timeout_secs.saturating_mul(2).max(150);
+    let require_validator_permit = permit_resolver.is_some();
     let config = LightningServerConfig::builder()
         .handler_timeout_secs(handler_timeout_secs)
         .idle_timeout_secs(idle_timeout)
         .max_frame_payload_bytes(sn2_types::TRANSPORT_PAYLOAD_LIMIT)
+        .require_validator_permit(require_validator_permit)
         .build()?;
     let mut server =
         LightningServer::with_config(miner_hotkey.to_string(), host.to_string(), port, config)?;
 
     server.set_miner_wallet(wallet_name, wallet_path, hotkey_name)?;
+
+    if let Some(resolver) = permit_resolver {
+        server.set_validator_permit_resolver(resolver);
+        info!("Validator permit enforcement enabled -- only hotkeys with on-chain validator_permit will be admitted");
+    }
 
     let h = handlers.clone();
     server

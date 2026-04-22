@@ -2,6 +2,7 @@ mod cli;
 mod dsperse;
 mod handlers;
 mod lightning_server;
+mod permit_resolver;
 
 use std::sync::Arc;
 
@@ -100,6 +101,16 @@ async fn main() -> Result<()> {
     let handlers = std::sync::Arc::new(handlers);
 
     let handler_timeout = cli.handler_timeout;
+    let permit_resolver: Option<Box<dyn btlightning::ValidatorPermitResolver>> = if cli
+        .disable_blacklist
+    {
+        warn!("--disable-blacklist set; validator permit enforcement is bypassed (TESTING ONLY)");
+        None
+    } else {
+        Some(Box::new(permit_resolver::MetagraphPermitResolver::new(
+            metagraph.clone(),
+        )))
+    };
     let quic_handle = {
         let handlers = handlers.clone();
         let hotkey = wallet.hotkey_ss58().to_string();
@@ -116,6 +127,7 @@ async fn main() -> Result<()> {
                 quic_port,
                 handler_timeout,
                 handlers,
+                permit_resolver,
             )
             .await
         })
@@ -223,6 +235,7 @@ async fn run_loopback(cli: Cli) -> Result<()> {
                 port,
                 handler_timeout,
                 handlers,
+                None,
             )
             .await
         })
