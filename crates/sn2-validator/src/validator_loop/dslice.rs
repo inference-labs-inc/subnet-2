@@ -167,7 +167,7 @@ impl ValidatorLoop {
         self.stacked_dslice_queue.clear();
         self.dsperse_benchmark_backoff_until = Instant::now() + Duration::from_secs(120);
 
-        self.enqueue_all_dslices(&run_uid, &circuit, RunSource::Api)
+        self.enqueue_all_dslices(&run_uid, &circuit, RunSource::Api, submission.prove_pct)
             .await;
     }
 
@@ -217,7 +217,13 @@ impl ValidatorLoop {
         run_uid: &str,
         circuit: &Circuit,
         run_source: RunSource,
+        prove_pct: f64,
     ) {
+        let clamped_prove_pct = if !prove_pct.is_finite() || prove_pct <= 0.0 || prove_pct > 1.0 {
+            1.0
+        } else {
+            prove_pct
+        };
         let work_items = match self.run_manager.all_circuit_work(run_uid) {
             Ok(items) => items,
             Err(e) => {
@@ -290,6 +296,7 @@ impl ValidatorLoop {
                     tiling,
                     input_tensor,
                     run_source,
+                    clamped_prove_pct,
                 ) {
                     Some(n) => n,
                     None => {
@@ -335,6 +342,7 @@ impl ValidatorLoop {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn stage_tiled_work(
         staged: &mut StagedWork,
         run_manager: &mut crate::incremental_runner::IncrementalRunManager,
@@ -346,6 +354,7 @@ impl ValidatorLoop {
         tiling: &dsperse::schema::tiling::TilingInfo,
         input_tensor: ndarray::ArrayD<f64>,
         run_source: RunSource,
+        prove_pct: f64,
     ) -> Option<usize> {
         let tiles = match dsperse::pipeline::split_for_tiling(&input_tensor, tiling) {
             Ok(t) => t,
@@ -367,12 +376,32 @@ impl ValidatorLoop {
             return None;
         }
 
-        if let Err(e) = run_manager.init_tile_counter(run_uid, slice_id, tiling) {
+        let sampled_indices =
+            Self::sample_tile_indices(num_tiles, prove_pct, run_source, run_uid, slice_id);
+        if sampled_indices.is_empty() {
+            warn!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                "prove_pct sampled zero tiles, aborting slice stage"
+            );
+            return None;
+        }
+
+        let mut expected_indices: std::collections::HashSet<u32> =
+            std::collections::HashSet::with_capacity(sampled_indices.len());
+        for &idx in &sampled_indices {
+            expected_indices.insert(idx as u32);
+        }
+
+        if let Err(e) = run_manager.init_tile_counter(run_uid, slice_id, tiling, expected_indices) {
             warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "init_tile_counter failed");
             return None;
         }
 
         for (idx, tile) in tiles.into_iter().enumerate() {
+            if !sampled_indices.contains(&idx) {
+                continue;
+            }
             let tile_json = serde_json::json!({
                 "input_data": crate::tensor::arrayd_to_json(&tile.into_dyn())
             });
@@ -394,7 +423,40 @@ impl ValidatorLoop {
             });
         }
 
-        Some(num_tiles)
+        Some(sampled_indices.len())
+    }
+
+    fn sample_tile_indices(
+        num_tiles: usize,
+        prove_pct: f64,
+        run_source: RunSource,
+        run_uid: &str,
+        slice_id: &str,
+    ) -> std::collections::HashSet<usize> {
+        if run_source == RunSource::Benchmark || prove_pct >= 1.0 || num_tiles <= 1 {
+            return (0..num_tiles).collect();
+        }
+        let target = ((num_tiles as f64) * prove_pct).ceil() as usize;
+        let target = target.clamp(1, num_tiles);
+        if target >= num_tiles {
+            return (0..num_tiles).collect();
+        }
+        let mut indices: Vec<usize> = (0..num_tiles).collect();
+        let mut rng = rand::rng();
+        for i in 0..target {
+            let j = rng.random_range(i..num_tiles);
+            indices.swap(i, j);
+        }
+        indices.truncate(target);
+        info!(
+            run_uid = %run_uid,
+            slice = %slice_id,
+            num_tiles,
+            sampled = target,
+            prove_pct,
+            "sampled subset of tiles for partial proof run"
+        );
+        indices.into_iter().collect()
     }
 
     pub(super) async fn finalize_combined_run(&mut self, run_uid: &str) {
@@ -564,7 +626,7 @@ impl ValidatorLoop {
         }
 
         let circuit = circuit.clone();
-        self.enqueue_all_dslices(&run_uid, &circuit, RunSource::Benchmark)
+        self.enqueue_all_dslices(&run_uid, &circuit, RunSource::Benchmark, 1.0)
             .await;
     }
 }

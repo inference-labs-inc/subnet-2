@@ -73,6 +73,9 @@ pub struct DsperseSubmission {
     pub inputs: serde_json::Value,
     pub tensor_data: Option<Vec<u8>>,
     pub request_id: Option<u32>,
+    /// Fraction of eligible tile proofs the caller requires; values outside
+    /// (0.0, 1.0] are clamped to 1.0 so legacy callers behave as before.
+    pub prove_pct: f64,
     #[allow(dead_code)]
     pub permit: tokio::sync::OwnedSemaphorePermit,
 }
@@ -337,6 +340,17 @@ impl RelayManager {
         Some((circuit_id, inputs))
     }
 
+    fn parse_prove_pct(meta: &serde_json::Value) -> f64 {
+        let raw = match meta.get("prove_pct").and_then(|v| v.as_f64()) {
+            Some(value) => value,
+            None => return 1.0,
+        };
+        if !raw.is_finite() || raw <= 0.0 || raw > 1.0 {
+            return 1.0;
+        }
+        raw
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn handle_binary_message(
         msg_type: u8,
@@ -398,6 +412,7 @@ impl RelayManager {
             }
         };
 
+        let prove_pct = Self::parse_prove_pct(&meta);
         let req_id_opt = if req_id > 0 { Some(req_id) } else { None };
 
         let submission = DsperseSubmission {
@@ -405,6 +420,7 @@ impl RelayManager {
             inputs,
             tensor_data: tensor_data.map(|d| d.to_vec()),
             request_id: req_id_opt,
+            prove_pct,
             permit,
         };
 

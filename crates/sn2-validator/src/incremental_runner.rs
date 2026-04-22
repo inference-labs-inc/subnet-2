@@ -81,7 +81,8 @@ pub struct ActiveRun {
 }
 
 struct TileCounter {
-    total: usize,
+    grid_total: usize,
+    expected: HashSet<u32>,
     received: HashSet<u32>,
 }
 
@@ -221,18 +222,34 @@ impl IncrementalRunManager {
         run_uid: &str,
         slice_id: &str,
         tiling: &TilingInfo,
+        expected_indices: HashSet<u32>,
     ) -> anyhow::Result<()> {
-        let expected = tiling.tiles_y * tiling.tiles_x;
-        if tiling.num_tiles != expected {
+        let grid_total = tiling.tiles_y * tiling.tiles_x;
+        if tiling.num_tiles != grid_total {
             return Err(anyhow::anyhow!(
-                "TilingInfo.num_tiles inconsistent for run {run_uid}, slice {slice_id}: num_tiles={}, tiles_y*tiles_x={expected}",
+                "TilingInfo.num_tiles inconsistent for run {run_uid}, slice {slice_id}: num_tiles={}, tiles_y*tiles_x={grid_total}",
                 tiling.num_tiles,
             ));
         }
+        if expected_indices.is_empty() {
+            return Err(anyhow::anyhow!(
+                "tile counter init requires at least one expected tile for run {run_uid}, slice {slice_id}"
+            ));
+        }
+        if let Some(&max_idx) = expected_indices.iter().max() {
+            if (max_idx as usize) >= tiling.num_tiles {
+                return Err(anyhow::anyhow!(
+                    "expected tile index {max_idx} exceeds tiling.num_tiles {} for run {run_uid}, slice {slice_id}",
+                    tiling.num_tiles,
+                ));
+            }
+        }
+        let expected_count = expected_indices.len();
         info!(
             run_uid = %run_uid,
             slice = %slice_id,
             num_tiles = tiling.num_tiles,
+            expected = expected_count,
             "initialized tile counter"
         );
         let key = (run_uid.to_string(), slice_id.to_string());
@@ -240,8 +257,9 @@ impl IncrementalRunManager {
         match self.tile_counters.entry(key) {
             Entry::Vacant(e) => {
                 e.insert(TileCounter {
-                    total: tiling.num_tiles,
-                    received: HashSet::with_capacity(tiling.num_tiles),
+                    grid_total: tiling.num_tiles,
+                    expected: expected_indices,
+                    received: HashSet::with_capacity(expected_count),
                 });
             }
             Entry::Occupied(_) => {
@@ -276,11 +294,22 @@ impl IncrementalRunManager {
             }
         };
 
-        if (tile_idx as usize) >= counter.total {
+        if (tile_idx as usize) >= counter.grid_total {
             return TileBufferOutcome::Failed(format!(
-                "tile_idx {tile_idx} out of range (expected < {}) for run={run_uid} slice={slice_id}",
-                counter.total
+                "tile_idx {tile_idx} out of range (grid_total {}) for run={run_uid} slice={slice_id}",
+                counter.grid_total
             ));
+        }
+
+        if !counter.expected.contains(&tile_idx) {
+            debug!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                tile_idx,
+                expected = counter.expected.len(),
+                "tile proof for non-sampled tile_idx, ignoring"
+            );
+            return TileBufferOutcome::Waiting;
         }
 
         if !counter.received.insert(tile_idx) {
@@ -298,11 +327,11 @@ impl IncrementalRunManager {
             slice = %slice_id,
             tile_idx = tile_idx,
             received = counter.received.len(),
-            total = counter.total,
+            expected = counter.expected.len(),
             "recorded tile proof"
         );
 
-        if counter.received.len() < counter.total {
+        if counter.received.len() < counter.expected.len() {
             return TileBufferOutcome::Waiting;
         }
 
