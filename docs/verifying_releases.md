@@ -6,7 +6,7 @@ Every release artifact — binaries and Docker images — can be independently v
 
 | Channel | Tag | Trigger | Verification |
 |---|---|---|---|
-| **Mainnet** | semver (e.g. `0.3.0`) | Git tag push | SHA256SUMS |
+| **Mainnet** | semver (e.g. `0.3.0`) | Git tag push | SHA256SUMS + cosign keyless bundle + build provenance attestation |
 | **Testnet latest** | `testnet-latest` | Push to `testnet` branch | SHA256SUMS |
 | **Testnet nightly** | `testnet-nightly` | Nightly cron after E2E passes | SHA256SUMS |
 | **Docker (release)** | `:latest`, `:<tag>` | GitHub Release created | SLSA provenance attestation |
@@ -33,6 +33,44 @@ shasum -a 256 --check --ignore-missing SHA256SUMS
 ```
 
 Both should print `sn2-miner-linux-x86_64: OK`. A mismatch indicates the binary was tampered with or corrupted in transit.
+
+For mainnet (semver) releases, `SHA256SUMS` additionally covers `sbom.cdx.json`, so verifying the checksum file also attests the published SBOM.
+
+## Verifying the Mainnet SHA256SUMS Signature
+
+Mainnet releases (semver tags) ship a cosign keyless signature bundle alongside `SHA256SUMS`. The bundle embeds the Fulcio-issued certificate and the Rekor transparency log entry, so verification confirms both that the checksum file was produced by the release workflow on the expected tag and that the signing event is publicly logged.
+
+Verification requires [cosign](https://github.com/sigstore/cosign) v2.5 or newer:
+
+```console
+TAG="0.3.0"
+curl -fLO "https://github.com/inference-labs-inc/subnet-2/releases/download/${TAG}/SHA256SUMS"
+curl -fLO "https://github.com/inference-labs-inc/subnet-2/releases/download/${TAG}/SHA256SUMS.sigstore.json"
+
+cosign verify-blob \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/inference-labs-inc/subnet-2/.github/workflows/release.yml@refs/tags/${TAG}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  SHA256SUMS
+```
+
+A successful run prints `Verified OK`. The `--certificate-identity` flag pins verification to this repository's release workflow at the exact tag, so a signature produced by any other workflow or repository will fail.
+
+## Verifying Binary Build Provenance
+
+Mainnet binaries (Linux x86_64, Linux aarch64, macOS aarch64 for both `sn2-validator` and `sn2-miner`) carry SLSA build provenance attestations issued by the release workflow. These attestations bind each binary to the source commit and workflow that produced it.
+
+Verification requires the [GitHub CLI](https://cli.github.com/) (`gh >= 2.49.0`):
+
+```console
+TAG="0.3.0"
+curl -fLO "https://github.com/inference-labs-inc/subnet-2/releases/download/${TAG}/sn2-validator-linux-x86_64"
+
+gh attestation verify sn2-validator-linux-x86_64 \
+  --repo inference-labs-inc/subnet-2
+```
+
+Repeat for each binary you intend to run. A successful run reports the workflow, the commit SHA, and the Sigstore bundle used.
 
 ## Verifying Docker Image Attestations
 
