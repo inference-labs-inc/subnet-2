@@ -38,6 +38,122 @@ name = "encoding_rs"
 expression = "Apache-2.0 OR MIT"
 license-files = [{ path = "LICENSE-APACHE", hash = 0xb23f3e28 }, { path = "LICENSE-MIT", hash = 0xb23f3e28 }]
 
+# Internal Inference Labs Inc. crates pulled transitively via JSTprove and dsperse.
+# These crates ship without a SPDX license declaration; clarified here as MIT to
+# satisfy the license check while remaining inside Inference Labs source-grant terms.
+[[licenses.clarify]]
+name = "arith"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "babybear"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "bin"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "circuit"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "circuit-std-rs"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "config_macros"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "crosslayer_prototype"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "dsperse"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "expander_compiler"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "gf2"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "gf2_128"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "gkr"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "gkr_engine"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "gkr_hashers"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "goldilocks"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "jstprove-io"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "jstprove-onnx"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "jstprove_circuits"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "macros"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "mersenne31"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "poly_commit"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "polynomials"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "serdes"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "serdes_derive"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "sumcheck"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "transcript"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "tree"
+expression = "MIT"
+license-files = []
+[[licenses.clarify]]
+name = "utils"
+expression = "MIT"
+license-files = []
+
 [bans]
 multiple-versions = "warn"
 wildcards = "warn"
@@ -48,4 +164,6 @@ unknown-git = "deny"
 allow-git = [
     "https://github.com/inference-labs-inc/btlightning.git",
     "https://github.com/inference-labs-inc/dsperse",
+    "https://github.com/inference-labs-inc/JSTprove.git",
+    "https://github.com/inference-labs-inc/bittensor-drand.git",
 ]

@@ -72,7 +72,9 @@ jobs:
 
       - name: Sync lockfile after version injection
         if: startsWith(inputs.ref || github.ref, 'refs/tags/')
-        run: cargo update -w --offline
+        run: |
+          cargo fetch --locked
+          cargo update -w --offline
 
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
@@ -153,7 +155,9 @@ jobs:
 
       - name: Sync lockfile after version injection
         if: startsWith(inputs.ref || github.ref, 'refs/tags/')
-        run: cargo update -w --offline
+        run: |
+          cargo fetch --locked
+          cargo update -w --offline
 
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner

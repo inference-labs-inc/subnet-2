@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   security-gate:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/testnet'
     uses: ./.github/workflows/security.yml
     permissions:
       actions: read
@@ -93,7 +93,7 @@ jobs:
   release-testnet:
     name: Create Testnet Release
     if: github.ref == 'refs/heads/testnet'
-    needs: [build]
+    needs: [build, security-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: write
