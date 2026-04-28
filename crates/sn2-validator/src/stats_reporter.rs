@@ -227,7 +227,13 @@ impl StatsReporter {
         }
 
         let mut events: Vec<CapEvent> = {
-            let mut pending = self.pending_cap_events.lock().expect("pending lock");
+            let mut pending = match self.pending_cap_events.lock() {
+                Ok(g) => g,
+                Err(e) => {
+                    warn!(error = %e, "cap event pending lock poisoned, skipping flush");
+                    return;
+                }
+            };
             let mut combined: Vec<CapEvent> = pending.drain(..).collect();
             combined.extend(new_events);
             combined
@@ -374,11 +380,11 @@ fn requeue_cap_events(pending: &Mutex<VecDeque<CapEvent>>, events: Vec<CapEvent>
         }
     };
     let count = events.len();
-    for e in events.into_iter().rev() {
-        p.push_front(e);
+    for e in events {
+        p.push_back(e);
     }
     while p.len() > PENDING_CAP_EVENTS_MAX {
-        p.pop_back();
+        p.pop_front();
     }
     warn!(
         count,
@@ -634,24 +640,31 @@ mod tests {
     }
 
     #[test]
-    fn requeue_prepends_so_older_failures_drain_first() {
+    fn requeue_appends_so_older_failures_drain_first() {
         let pending = Mutex::new(VecDeque::new());
         requeue_cap_events(&pending, vec![ev(10, "a")]);
         requeue_cap_events(&pending, vec![ev(11, "b")]);
         let p = pending.lock().unwrap();
-        assert_eq!(p[0].uid, 11, "most recent re-queue lands at the front");
-        assert_eq!(p[1].uid, 10);
+        assert_eq!(p[0].uid, 10, "earlier failure stays at the front");
+        assert_eq!(p[1].uid, 11);
     }
 
     #[test]
     fn requeue_drops_oldest_when_buffer_full() {
         let pending = Mutex::new(VecDeque::new());
-        let big: Vec<CapEvent> = (0..(PENDING_CAP_EVENTS_MAX + 50))
-            .map(|i| ev(i as u16, "a"))
-            .collect();
+        let total = PENDING_CAP_EVENTS_MAX + 50;
+        let big: Vec<CapEvent> = (0..total).map(|i| ev(i as u16, "a")).collect();
         requeue_cap_events(&pending, big);
         let p = pending.lock().unwrap();
         assert_eq!(p.len(), PENDING_CAP_EVENTS_MAX);
+        let actual: Vec<u16> = p.iter().map(|e| e.uid).collect();
+        let expected: Vec<u16> = ((total - PENDING_CAP_EVENTS_MAX)..total)
+            .map(|i| i as u16)
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "buffer should retain the most recent PENDING_CAP_EVENTS_MAX entries in original order"
+        );
     }
 
     #[test]
