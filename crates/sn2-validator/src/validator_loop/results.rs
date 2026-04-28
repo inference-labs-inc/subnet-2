@@ -324,6 +324,7 @@ impl ValidatorLoop {
     pub(super) async fn handle_failure(
         &mut self,
         uid: u16,
+        hotkey: &str,
         request_type: RequestType,
         retry_count: u32,
         retry_payload: RetryPayload,
@@ -342,15 +343,12 @@ impl ValidatorLoop {
                 request_type,
                 RequestType::ProofOfWeights | RequestType::Rwr | RequestType::DSlice
             );
-        if is_verification_failure {
-            let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
-            if !hotkey.is_empty() {
-                let triggered =
-                    self.rsv
-                        .record_strike(&hotkey, self.current_block, self.blocks_per_tempo);
-                if triggered {
-                    info!(uid, "rsv: skiplist triggered via failure path");
-                }
+        if is_verification_failure && !hotkey.is_empty() {
+            let triggered =
+                self.rsv
+                    .record_strike(hotkey, self.current_block, self.blocks_per_tempo);
+            if triggered {
+                info!(uid, "rsv: skiplist triggered via failure path");
             }
         }
 

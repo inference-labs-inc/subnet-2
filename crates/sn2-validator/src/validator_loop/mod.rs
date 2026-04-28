@@ -76,6 +76,7 @@ pub(super) struct VerifyResult {
     pub(super) verify_task_id: tokio::task::Id,
     pub(super) task_result: TaskResult,
     pub(super) verified: bool,
+    pub(super) hotkey: String,
 }
 
 pub(super) struct PeriodicTimings {

@@ -62,15 +62,18 @@ impl ValidatorLoop {
                 if !sample {
                     response.verification_result = true;
                     result.outcome = TaskOutcome::Success(response);
+                    let captured_hotkey = hotkey.clone();
                     self.verify_tasks.spawn(async move {
                         VerifyResult {
                             verify_task_id: tokio::task::id(),
                             task_result: result,
                             verified: true,
+                            hotkey: captured_hotkey,
                         }
                     })
                 } else {
                     let processor = ResponseProcessor::new();
+                    let captured_hotkey = hotkey.clone();
                     self.verify_tasks.spawn(async move {
                         let verify_task_id = tokio::task::id();
                         let verified =
@@ -81,17 +84,22 @@ impl ValidatorLoop {
                             verify_task_id,
                             task_result: result,
                             verified,
+                            hotkey: captured_hotkey,
                         }
                     })
                 }
             }
-            _ => self.verify_tasks.spawn(async move {
-                VerifyResult {
-                    verify_task_id: tokio::task::id(),
-                    task_result: result,
-                    verified: false,
-                }
-            }),
+            _ => {
+                let captured_hotkey = hotkey.clone();
+                self.verify_tasks.spawn(async move {
+                    VerifyResult {
+                        verify_task_id: tokio::task::id(),
+                        task_result: result,
+                        verified: false,
+                        hotkey: captured_hotkey,
+                    }
+                })
+            }
         };
         self.verify_guard_hashes.insert(handle.id(), guard_hash);
     }
@@ -104,11 +112,9 @@ impl ValidatorLoop {
         let result = vr.task_result;
         let verified = vr.verified;
         let uid = result.uid;
-        if let Some(hotkey) = self.uid_hotkeys.get(&uid) {
-            if !hotkey.is_empty() {
-                let hotkey = hotkey.clone();
-                self.rsv.observe(&hotkey, self.current_block);
-            }
+        let dispatch_hotkey = vr.hotkey;
+        if !dispatch_hotkey.is_empty() {
+            self.rsv.observe(&dispatch_hotkey, self.current_block);
         }
         let was_at_capacity = result.was_at_capacity;
         let request_type = result.request_type;
@@ -207,6 +213,7 @@ impl ValidatorLoop {
         if let Some(reason) = failed {
             self.handle_failure(
                 uid,
+                &dispatch_hotkey,
                 request_type,
                 retry_count,
                 retry_payload,
