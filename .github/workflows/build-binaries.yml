@@ -58,6 +58,10 @@ jobs:
             ~/.cargo/git
           key: linux-registry-${{ hashFiles('Cargo.lock') }}-${{ matrix.arch }}
 
+      - name: Pre-fetch dependencies for offline lockfile sync
+        if: startsWith(inputs.ref || github.ref, 'refs/tags/')
+        run: cargo fetch --locked
+
       - name: Set crate versions
         if: startsWith(inputs.ref || github.ref, 'refs/tags/')
         uses: inference-labs-inc/set-toml-version@ff9a4b64df4ce91067737822d2811a69597bf688 # v1
@@ -72,9 +76,7 @@ jobs:
 
       - name: Sync lockfile after version injection
         if: startsWith(inputs.ref || github.ref, 'refs/tags/')
-        run: |
-          cargo fetch --locked
-          cargo update -w --offline
+        run: cargo update -w --offline
 
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
@@ -141,6 +143,10 @@ jobs:
             ~/.cargo/git
           key: macos-aarch64-registry-${{ hashFiles('Cargo.lock') }}
 
+      - name: Pre-fetch dependencies for offline lockfile sync
+        if: startsWith(inputs.ref || github.ref, 'refs/tags/')
+        run: cargo fetch --locked
+
       - name: Set crate versions
         if: startsWith(inputs.ref || github.ref, 'refs/tags/')
         uses: inference-labs-inc/set-toml-version@ff9a4b64df4ce91067737822d2811a69597bf688 # v1
@@ -155,9 +161,7 @@ jobs:
 
       - name: Sync lockfile after version injection
         if: startsWith(inputs.ref || github.ref, 'refs/tags/')
-        run: |
-          cargo fetch --locked
-          cargo update -w --offline
+        run: cargo update -w --offline
 
       - name: Build release binaries
         run: cargo build --release --locked --bin sn2-validator --bin sn2-miner
