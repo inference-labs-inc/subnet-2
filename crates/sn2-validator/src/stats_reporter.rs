@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -10,6 +10,7 @@ use tracing::{info, warn};
 use crate::performance::{CapDirection, CapEvent};
 pub(crate) const STATS_FLUSH_INTERVAL_SECS: u64 = 60;
 const REQUEST_TIMEOUT_SECS: u64 = 5;
+const PENDING_CAP_EVENTS_MAX: usize = 4096;
 
 pub(crate) enum FlushOffset {
     ResponseLog = 0,
@@ -30,6 +31,7 @@ pub struct StatsReporter {
     health_samples: Vec<HealthSample>,
     last_health_flush: Instant,
     last_capacity_flush: Instant,
+    pending_cap_events: Arc<Mutex<VecDeque<CapEvent>>>,
     validator_uid: u16,
 }
 
@@ -81,6 +83,7 @@ impl StatsReporter {
             health_samples: Vec::new(),
             last_health_flush: now - health_offset,
             last_capacity_flush: now - capacity_offset,
+            pending_cap_events: Arc::new(Mutex::new(VecDeque::new())),
             validator_uid,
         }
     }
@@ -213,7 +216,7 @@ impl StatsReporter {
         &mut self,
         block: u64,
         snapshot: HashMap<u16, usize>,
-        events: Vec<CapEvent>,
+        new_events: Vec<CapEvent>,
         uid_hotkeys: &HashMap<u16, String>,
     ) {
         let now = Instant::now();
@@ -222,6 +225,14 @@ impl StatsReporter {
         {
             return;
         }
+
+        let mut events: Vec<CapEvent> = {
+            let mut pending = self.pending_cap_events.lock().expect("pending lock");
+            let mut combined: Vec<CapEvent> = pending.drain(..).collect();
+            combined.extend(new_events);
+            combined
+        };
+
         if snapshot.is_empty() && events.is_empty() {
             return;
         }
@@ -239,7 +250,7 @@ impl StatsReporter {
             .collect();
 
         let events_payload: Vec<serde_json::Value> = events
-            .into_iter()
+            .iter()
             .map(|e| {
                 let direction = match e.direction {
                     CapDirection::Ramp => "ramp",
@@ -269,6 +280,9 @@ impl StatsReporter {
             "software_version": SOFTWARE_VERSION,
         });
 
+        let pending = Arc::clone(&self.pending_cap_events);
+        events.shrink_to_fit();
+        let inflight = std::mem::take(&mut events);
         self.spawn_post("/statistics/capacity/log/", body, move |ok| {
             if ok {
                 info!(
@@ -276,6 +290,8 @@ impl StatsReporter {
                     events = event_count,
                     "submitted capacity stats"
                 );
+            } else {
+                requeue_cap_events(&pending, inflight);
             }
         });
     }
@@ -344,6 +360,31 @@ impl StatsReporter {
             on_done(sign_and_post(&http, &wallet, &url, &body, &path_owned).await);
         });
     }
+}
+
+fn requeue_cap_events(pending: &Mutex<VecDeque<CapEvent>>, events: Vec<CapEvent>) {
+    if events.is_empty() {
+        return;
+    }
+    let mut p = match pending.lock() {
+        Ok(g) => g,
+        Err(e) => {
+            warn!(error = %e, "cap event re-queue lock poisoned");
+            return;
+        }
+    };
+    let count = events.len();
+    for e in events.into_iter().rev() {
+        p.push_front(e);
+    }
+    while p.len() > PENDING_CAP_EVENTS_MAX {
+        p.pop_back();
+    }
+    warn!(
+        count,
+        pending = p.len(),
+        "cap event POST failed, re-queued for next flush"
+    );
 }
 
 pub(crate) async fn sign_and_post(
@@ -560,5 +601,63 @@ fn get_rss_mb() -> f64 {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::performance::CapDirection;
+
+    fn ev(uid: u16, hotkey: &str) -> CapEvent {
+        CapEvent {
+            uid,
+            hotkey: hotkey.to_string(),
+            direction: CapDirection::Ramp,
+            cap_from: 1,
+            cap_to: 2,
+            success_rate: 1.0,
+            at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn requeue_preserves_order() {
+        let pending = Mutex::new(VecDeque::new());
+        let batch = vec![ev(1, "a"), ev(2, "b"), ev(3, "c")];
+        requeue_cap_events(&pending, batch);
+        let p = pending.lock().unwrap();
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].uid, 1);
+        assert_eq!(p[1].uid, 2);
+        assert_eq!(p[2].uid, 3);
+    }
+
+    #[test]
+    fn requeue_prepends_so_older_failures_drain_first() {
+        let pending = Mutex::new(VecDeque::new());
+        requeue_cap_events(&pending, vec![ev(10, "a")]);
+        requeue_cap_events(&pending, vec![ev(11, "b")]);
+        let p = pending.lock().unwrap();
+        assert_eq!(p[0].uid, 11, "most recent re-queue lands at the front");
+        assert_eq!(p[1].uid, 10);
+    }
+
+    #[test]
+    fn requeue_drops_oldest_when_buffer_full() {
+        let pending = Mutex::new(VecDeque::new());
+        let big: Vec<CapEvent> = (0..(PENDING_CAP_EVENTS_MAX + 50))
+            .map(|i| ev(i as u16, "a"))
+            .collect();
+        requeue_cap_events(&pending, big);
+        let p = pending.lock().unwrap();
+        assert_eq!(p.len(), PENDING_CAP_EVENTS_MAX);
+    }
+
+    #[test]
+    fn requeue_no_op_on_empty_input() {
+        let pending = Mutex::new(VecDeque::new());
+        requeue_cap_events(&pending, Vec::new());
+        assert!(pending.lock().unwrap().is_empty());
     }
 }
