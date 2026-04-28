@@ -37,8 +37,15 @@ impl ValidatorLoop {
         let has_proof =
             matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_content.is_some());
         let is_pow = result.request_type == RequestType::ProofOfWeights;
+        let is_customer_rwr = result.request_type == RequestType::Rwr;
+        let has_external_hash = result.external_request_hash.is_some();
+        let is_api_dslice = matches!(
+            &result.retry_payload,
+            RetryPayload::DSlice(d) if d.run_source == RunSource::Api
+        );
+        let force_verify = is_pow || is_customer_rwr || has_external_hash || is_api_dslice;
         let sample = has_proof
-            && (is_pow
+            && (force_verify
                 || hotkey.is_empty()
                 || self
                     .rsv
