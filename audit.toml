@@ -1,9 +1,3 @@
 # cargo-audit configuration. Read at the workspace root.
 [advisories]
-ignore = [
-    "RUSTSEC-2023-0091",
-    "RUSTSEC-2024-0438",
-    "RUSTSEC-2025-0118",
-    "RUSTSEC-2026-0020",
-    "RUSTSEC-2026-0021",
-]
+ignore = []
