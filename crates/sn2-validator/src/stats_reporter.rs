@@ -229,9 +229,9 @@ impl StatsReporter {
         let mut events: Vec<CapEvent> = {
             let mut pending = match self.pending_cap_events.lock() {
                 Ok(g) => g,
-                Err(e) => {
-                    warn!(error = %e, "cap event pending lock poisoned, skipping flush");
-                    return;
+                Err(poisoned) => {
+                    warn!(error = %poisoned, "cap event pending lock poisoned, recovering");
+                    poisoned.into_inner()
                 }
             };
             let mut combined: Vec<CapEvent> = pending.drain(..).collect();
@@ -374,9 +374,9 @@ fn requeue_cap_events(pending: &Mutex<VecDeque<CapEvent>>, events: Vec<CapEvent>
     }
     let mut p = match pending.lock() {
         Ok(g) => g,
-        Err(e) => {
-            warn!(error = %e, "cap event re-queue lock poisoned");
-            return;
+        Err(poisoned) => {
+            warn!(error = %poisoned, "cap event re-queue lock poisoned, recovering");
+            poisoned.into_inner()
         }
     };
     let count = events.len();
