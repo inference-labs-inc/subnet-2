@@ -36,8 +36,10 @@ impl ValidatorLoop {
         let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
         let has_proof =
             matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_content.is_some());
+        let is_pow = result.request_type == RequestType::ProofOfWeights;
         let sample = has_proof
-            && (hotkey.is_empty()
+            && (is_pow
+                || hotkey.is_empty()
                 || self
                     .rsv
                     .should_sample(&hotkey, self.current_block, self.blocks_per_tempo));

@@ -79,6 +79,7 @@ impl ValidatorLoop {
         }
 
         if now.duration_since(self.timings.perf_save) > Duration::from_secs(300) {
+            self.performance_tracker.evict_all_stale();
             self.performance_tracker.save();
             self.rsv.save();
             self.timings.perf_save = now;
@@ -344,6 +345,16 @@ impl ValidatorLoop {
             .as_ref()
             .context("update_weights requires wallet")?;
 
+        let (tempo, reveal_period, current_block) = self
+            .weights_setter
+            .query_commit_params(chain_client)
+            .await?;
+
+        self.current_block = current_block;
+        if tempo > 0 {
+            self.blocks_per_tempo = tempo;
+        }
+
         let blocks_since = self
             .weights_setter
             .blocks_since_last_update(chain_client, self.config.user_uid)
@@ -390,16 +401,6 @@ impl ValidatorLoop {
             .iter()
             .map(|n| (n.uid, crate::scoring::ip_region(&n.axon_ip)))
             .collect();
-
-        let (tempo, reveal_period, current_block) = self
-            .weights_setter
-            .query_commit_params(chain_client)
-            .await?;
-
-        self.current_block = current_block;
-        if tempo > 0 {
-            self.blocks_per_tempo = tempo;
-        }
 
         let skiplisted: HashSet<u16> = uids
             .iter()

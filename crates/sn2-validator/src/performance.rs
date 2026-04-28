@@ -112,6 +112,13 @@ impl PerformanceTracker {
             .collect()
     }
 
+    pub fn evict_all_stale(&mut self) {
+        for w in self.windows.values_mut() {
+            evict_expired(w);
+        }
+        self.windows.retain(|_, w| !w.is_empty());
+    }
+
     pub fn save(&self) {
         let path = match &self.persistence_path {
             Some(p) => p,

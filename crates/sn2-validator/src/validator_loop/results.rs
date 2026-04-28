@@ -337,12 +337,12 @@ impl ValidatorLoop {
     ) {
         warn!(uid = uid, rtype = %request_type, retry = retry_count, error = reason, "miner query failed");
 
-        if reason.starts_with("verification failed")
+        let is_verification_failure = reason.starts_with("verification failed")
             && matches!(
                 request_type,
                 RequestType::ProofOfWeights | RequestType::Rwr | RequestType::DSlice
-            )
-        {
+            );
+        if is_verification_failure {
             let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
             if !hotkey.is_empty() {
                 let triggered =
@@ -379,7 +379,10 @@ impl ValidatorLoop {
 
         let next_retry = retry_count + 1;
 
-        if next_retry <= max_retries && self.attempt_retry(retry_payload, next_retry) {
+        if !is_verification_failure
+            && next_retry <= max_retries
+            && self.attempt_retry(retry_payload, next_retry)
+        {
             return;
         }
 

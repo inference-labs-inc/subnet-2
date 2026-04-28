@@ -60,7 +60,11 @@ impl RsvManager {
         current_block: u64,
         blocks_per_tempo: u64,
     ) -> bool {
-        let tempo_idx = current_block.checked_div(blocks_per_tempo).unwrap_or(0);
+        if blocks_per_tempo == 0 {
+            return false;
+        }
+        let tempo_idx = current_block / blocks_per_tempo;
+        self.sample_budget.retain(|(_, t), _| *t >= tempo_idx);
         let key = (hotkey.to_string(), tempo_idx);
         let budget = self
             .sample_budget
@@ -183,7 +187,11 @@ impl RsvManager {
         };
         let raw = match std::fs::read_to_string(path) {
             Ok(s) => s,
-            Err(_) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "rsv load: read failed, preserving in-memory state");
+                return;
+            }
         };
         let parsed: serde_json::Value = match serde_json::from_str(&raw) {
             Ok(v) => v,
