@@ -26,6 +26,12 @@ struct BundleDispatchMismatch {
     strategy: &'static str,
 }
 
+struct PreflightOutcome {
+    kept: Vec<dsperse::pipeline::SliceWork>,
+    failed: Vec<String>,
+    unsatisfiable: usize,
+}
+
 impl TiledPayload {
     fn len(&self) -> usize {
         match self {
@@ -303,6 +309,69 @@ impl ValidatorLoop {
         }
     }
 
+    /// Synchronous preflight loop, intended to be called from inside a
+    /// `tokio::task::spawn_blocking` scope. Each work item is validated
+    /// against (a) its model-level aggregate input shape and (b) its
+    /// compiled circuit's per-witness expected payload size; mismatches
+    /// produce a slice-id entry in `failed` and are dropped from `kept`.
+    fn preflight_work_items(
+        run_uid: &str,
+        work_items: Vec<dsperse::pipeline::SliceWork>,
+    ) -> PreflightOutcome {
+        let mut kept = Vec::with_capacity(work_items.len());
+        let mut failed: Vec<String> = Vec::new();
+        let mut unsatisfiable = 0usize;
+        for work in work_items {
+            match Self::expected_input_elements(&work.slice_meta.input_shape) {
+                ExpectedInputs::Count(expected) if expected != work.input.len() => {
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %work.slice_id,
+                        expected,
+                        actual = work.input.len(),
+                        "preflight: slice input activation count does not match circuit expectation, skipping"
+                    );
+                    failed.push(work.slice_id.clone());
+                    unsatisfiable += 1;
+                    continue;
+                }
+                ExpectedInputs::Invalid => {
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %work.slice_id,
+                        input_shape = ?work.slice_meta.input_shape,
+                        "preflight: slice input shape metadata is invalid (non-positive, overflow, or out-of-range), skipping"
+                    );
+                    failed.push(work.slice_id.clone());
+                    unsatisfiable += 1;
+                    continue;
+                }
+                ExpectedInputs::Count(_) | ExpectedInputs::NoMetadata => {}
+            }
+
+            if let Some(mismatch) = Self::bundle_dispatch_mismatch(&work) {
+                warn!(
+                    run_uid = %run_uid,
+                    slice = %work.slice_id,
+                    bundle_expected = mismatch.bundle_expected,
+                    per_request_actual = mismatch.per_request_actual,
+                    strategy = mismatch.strategy,
+                    "preflight: per-request payload size will not match the slice's compiled circuit, skipping"
+                );
+                failed.push(work.slice_id.clone());
+                unsatisfiable += 1;
+                continue;
+            }
+
+            kept.push(work);
+        }
+        PreflightOutcome {
+            kept,
+            failed,
+            unsatisfiable,
+        }
+    }
+
     fn expected_input_elements(input_shape: &[Vec<i64>]) -> ExpectedInputs {
         if input_shape.is_empty() {
             return ExpectedInputs::NoMetadata;
@@ -392,63 +461,39 @@ impl ValidatorLoop {
             }
         };
 
-        let work_items: Vec<_> = {
-            let mut kept = Vec::with_capacity(work_items.len());
-            let mut unsatisfiable = 0usize;
-            for work in work_items {
-                match Self::expected_input_elements(&work.slice_meta.input_shape) {
-                    ExpectedInputs::Count(expected) if expected != work.input.len() => {
-                        warn!(
-                            run_uid = %run_uid,
-                            slice = %work.slice_id,
-                            expected,
-                            actual = work.input.len(),
-                            "preflight: slice input activation count does not match circuit expectation, skipping"
-                        );
-                        self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
-                        unsatisfiable += 1;
-                        continue;
-                    }
-                    ExpectedInputs::Invalid => {
-                        warn!(
-                            run_uid = %run_uid,
-                            slice = %work.slice_id,
-                            input_shape = ?work.slice_meta.input_shape,
-                            "preflight: slice input shape metadata is invalid (non-positive, overflow, or out-of-range), skipping"
-                        );
-                        self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
-                        unsatisfiable += 1;
-                        continue;
-                    }
-                    ExpectedInputs::Count(_) | ExpectedInputs::NoMetadata => {}
-                }
-
-                if let Some(mismatch) = Self::bundle_dispatch_mismatch(&work) {
-                    warn!(
-                        run_uid = %run_uid,
-                        slice = %work.slice_id,
-                        bundle_expected = mismatch.bundle_expected,
-                        per_request_actual = mismatch.per_request_actual,
-                        strategy = mismatch.strategy,
-                        "preflight: per-request payload size will not match the slice's compiled circuit, skipping"
-                    );
-                    self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
-                    unsatisfiable += 1;
-                    continue;
-                }
-
-                kept.push(work);
+        // Bundle preflight reads each slice's manifest.msgpack and (for WAI
+        // bundles) the slice's onnx graph; those are synchronous disk reads
+        // that must not run on the async reactor. Move the entire preflight
+        // loop into a blocking task and rejoin afterwards to drive
+        // run_manager updates from the async context.
+        let preflight_run_uid = run_uid.to_string();
+        let preflight = tokio::task::spawn_blocking(move || {
+            Self::preflight_work_items(&preflight_run_uid, work_items)
+        })
+        .await;
+        let PreflightOutcome {
+            kept: work_items,
+            failed: preflight_failed,
+            unsatisfiable,
+        } = match preflight {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                warn!(run_uid = %run_uid, error = %e, "preflight task panicked");
+                self.teardown_run(run_uid).await;
+                return;
             }
-            if unsatisfiable > 0 {
-                info!(
-                    run_uid = %run_uid,
-                    circuit_id = %circuit.id,
-                    unsatisfiable,
-                    "preflight filtered slices due to mismatched activation sizes or invalid metadata"
-                );
-            }
-            kept
         };
+        for slice_id in &preflight_failed {
+            self.run_manager.mark_slice_failed(run_uid, slice_id);
+        }
+        if unsatisfiable > 0 {
+            info!(
+                run_uid = %run_uid,
+                circuit_id = %circuit.id,
+                unsatisfiable,
+                "preflight filtered slices due to mismatched activation sizes or invalid metadata"
+            );
+        }
 
         if work_items.is_empty() {
             info!(run_uid = %run_uid, "no circuit slices to dispatch, completing run");
@@ -636,17 +681,21 @@ impl ValidatorLoop {
                     if !sampled_indices.contains(&idx) {
                         continue;
                     }
+                    // The 1-D shape `[flat.len()]` always matches the
+                    // length of `flat`, so `from_shape_vec` cannot return
+                    // `Err` here. If it ever does, an upstream invariant
+                    // has been violated and panicking with full context
+                    // is preferable to silently dropping the tile.
+                    let len = flat.len();
                     let tile_arr =
-                        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[flat.len()]), flat).ok();
-                    let Some(tile_arr) = tile_arr else {
-                        warn!(
-                            run_uid = %run_uid,
-                            slice = %slice_id,
-                            tile_idx = idx,
-                            "failed to reshape multi-input tile payload"
+                        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[len]), flat).unwrap_or_else(
+                            |e| {
+                                panic!(
+                                    "ndarray::ArrayD::from_shape_vec rejected 1-D shape [{len}] \
+                                     for multi-input tile (run_uid={run_uid} slice={slice_id} tile_idx={idx}): {e}"
+                                )
+                            },
                         );
-                        return None;
-                    };
                     let tile_json = serde_json::json!({
                         "input_data": crate::tensor::arrayd_to_json(&tile_arr)
                     });
