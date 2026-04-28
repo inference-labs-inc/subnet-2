@@ -7,6 +7,7 @@ mod miner_response;
 mod persistence;
 mod protocol;
 mod request;
+pub mod tensor_codec;
 
 pub use bounded_fifo_set::*;
 pub use circuit::*;

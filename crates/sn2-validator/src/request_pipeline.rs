@@ -196,32 +196,6 @@ mod tests {
         );
     }
 
-    fn make_test_circuit(id: &str) -> Circuit {
-        use std::collections::HashMap;
-        Circuit {
-            id: id.into(),
-            paths: sn2_types::CircuitPaths::new(id, "/tmp"),
-            metadata: sn2_types::CircuitMetadata {
-                name: String::new(),
-                description: String::new(),
-                author: String::new(),
-                version: String::new(),
-                circuit_type: sn2_types::CircuitType::PROOF_OF_COMPUTATION,
-                external_files: None,
-                proof_system: "groth16".into(),
-                dslices: None,
-                netuid: None,
-                weights_version: None,
-                timeout: None,
-                benchmark_choice_weight: None,
-                input_schema: None,
-            },
-            proof_system: ProofSystem::JSTPROVE,
-            settings: HashMap::new(),
-            timeout: 60.0,
-        }
-    }
-
     #[test]
     fn clear_guard_resets_state() {
         let mut pipeline = RequestPipeline::new();

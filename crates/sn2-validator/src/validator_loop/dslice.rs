@@ -682,21 +682,21 @@ impl ValidatorLoop {
                     if !sampled_indices.contains(&idx) {
                         continue;
                     }
-                    // The 1-D shape `[flat.len()]` always matches the
-                    // length of `flat`, so `from_shape_vec` cannot return
-                    // `Err` here. If it ever does, an upstream invariant
-                    // has been violated and panicking with full context
-                    // is preferable to silently dropping the tile.
                     let len = flat.len();
                     let tile_arr =
-                        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[len]), flat).unwrap_or_else(
-                            |e| {
-                                panic!(
-                                    "ndarray::ArrayD::from_shape_vec rejected 1-D shape [{len}] \
-                                     for multi-input tile (run_uid={run_uid} slice={slice_id} tile_idx={idx}): {e}"
-                                )
-                            },
-                        );
+                        match ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[len]), flat) {
+                            Ok(arr) => arr,
+                            Err(e) => {
+                                warn!(
+                                    run_uid = %run_uid,
+                                    slice = %slice_id,
+                                    tile_idx = idx,
+                                    error = %e,
+                                    "skipping multi-input tile: from_shape_vec rejected 1-D shape"
+                                );
+                                continue;
+                            }
+                        };
                     let tile_json = serde_json::json!({
                         "input_data": crate::tensor::arrayd_to_json(&tile_arr)
                     });
@@ -865,10 +865,9 @@ impl ValidatorLoop {
 
         let shape: Vec<usize> = match schema.get("shape").and_then(|v| v.as_array()) {
             Some(dims) => {
-                let flat = if dims.first().and_then(|d| d.as_array()).is_some() {
-                    dims.first().and_then(|d| d.as_array()).unwrap()
-                } else {
-                    dims
+                let flat = match dims.first().and_then(|d| d.as_array()) {
+                    Some(nested) => nested,
+                    None => dims,
                 };
                 match flat
                     .iter()

@@ -1,0 +1,9 @@
+[package]
+name = "sn2-frame-codec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }

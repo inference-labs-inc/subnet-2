@@ -11520,6 +11520,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sn2-frame-codec"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tokio",
+]
+
+[[package]]
 name = "sn2-miner"
 version = "0.1.0"
 dependencies = [
@@ -11546,6 +11554,8 @@ name = "sn2-types"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flate2",
+ "ndarray 0.17.2",
  "serde",
  "serde_json",
  "tracing-subscriber",
@@ -11595,6 +11605,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
+ "sn2-frame-codec",
  "sn2-types",
  "tokio",
  "tracing",

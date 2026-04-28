@@ -1,12 +1,14 @@
 [workspace]
 members = [
     "crates/sn2-types",
+    "crates/sn2-frame-codec",
     "crates/sn2-chain",
     "crates/sn2-verify",
     "crates/sn2-circuit-store",
     "crates/sn2-validator",
     "crates/sn2-miner",
 ]
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
@@ -18,6 +20,7 @@ repository = "https://github.com/inference-labs-inc/subnet-2"
 
 [workspace.dependencies]
 sn2-types = { path = "crates/sn2-types" }
+sn2-frame-codec = { path = "crates/sn2-frame-codec" }
 sn2-chain = { path = "crates/sn2-chain" }
 sn2-verify = { path = "crates/sn2-verify" }
 sn2-circuit-store = { path = "crates/sn2-circuit-store" }

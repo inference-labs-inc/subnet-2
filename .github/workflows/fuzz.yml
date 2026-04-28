@@ -1,0 +1,53 @@
+name: Fuzz harness smoke
+
+on:
+  pull_request:
+    branches: [main, testnet]
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: cargo-fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm pkg-config libssl-dev libudev-dev protobuf-compiler
+
+      - name: Install nightly toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add --toolchain nightly rust-src
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version ^0.12
+
+      - name: Smoke-run each fuzz target
+        working-directory: fuzz
+        env:
+          MAX_TOTAL_TIME: "30"
+        run: |
+          set -eux
+          for target in tensor_protobuf tensor_json frame_codec frame_codec_chunked; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=${MAX_TOTAL_TIME} -rss_limit_mb=2048
+          done

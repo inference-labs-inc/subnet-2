@@ -1,0 +1,50 @@
+[package]
+name = "sn2-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt", "io-util", "macros"] }
+serde_json = "1"
+sn2-types = { path = "../crates/sn2-types" }
+sn2-frame-codec = { path = "../crates/sn2-frame-codec" }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "tensor_protobuf"
+path = "fuzz_targets/tensor_protobuf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tensor_json"
+path = "fuzz_targets/tensor_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frame_codec"
+path = "fuzz_targets/frame_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frame_codec_chunked"
+path = "fuzz_targets/frame_codec_chunked.rs"
+test = false
+doc = false
+bench = false
