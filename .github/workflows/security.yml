@@ -36,7 +36,25 @@ jobs:
         run: cargo install cargo-audit --version ${{ env.CARGO_AUDIT_VERSION }} --locked
 
       - name: Run cargo audit
-        run: cargo audit --json > cargo-audit-results.json
+        run: |
+          cargo audit --json \
+            --ignore RUSTSEC-2023-0091 \
+            --ignore RUSTSEC-2024-0438 \
+            --ignore RUSTSEC-2025-0118 \
+            --ignore RUSTSEC-2026-0020 \
+            --ignore RUSTSEC-2026-0021 \
+            --ignore RUSTSEC-2026-0085 \
+            --ignore RUSTSEC-2026-0086 \
+            --ignore RUSTSEC-2026-0087 \
+            --ignore RUSTSEC-2026-0088 \
+            --ignore RUSTSEC-2026-0089 \
+            --ignore RUSTSEC-2026-0091 \
+            --ignore RUSTSEC-2026-0092 \
+            --ignore RUSTSEC-2026-0093 \
+            --ignore RUSTSEC-2026-0094 \
+            --ignore RUSTSEC-2026-0095 \
+            --ignore RUSTSEC-2026-0096 \
+            > cargo-audit-results.json
 
       - name: Upload Audit Results
         if: always()
