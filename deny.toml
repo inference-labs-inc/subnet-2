@@ -5,7 +5,14 @@ all-features = false
 [advisories]
 yanked = "warn"
 unmaintained = "workspace"
-ignore = []
+# wasmtime 8.0.1 is pulled transitively via sc-executor-wasmtime (Substrate runtime
+# host used by subxt for chain RPC). The validator and miner do not execute
+# untrusted WebAssembly; the only WASM ever loaded is the bittensor chain runtime
+# downloaded from a trusted endpoint. Bumping wasmtime requires a coordinated
+# Substrate upgrade across the dependency tree and is tracked separately.
+ignore = [
+    { crate = "wasmtime@8.0.1", reason = "Pulled transitively via sc-executor-wasmtime; we do not execute untrusted WASM. Patched versions require a Substrate-wide upgrade." },
+]
 
 [licenses]
 allow = [
@@ -170,4 +177,7 @@ allow-git = [
     "https://github.com/inference-labs-inc/dsperse",
     "https://github.com/inference-labs-inc/JSTprove.git",
     "https://github.com/inference-labs-inc/bittensor-drand.git",
+    "https://github.com/inference-labs-inc/tract.git",
+    "https://github.com/PolyhedraZK/halo2curves",
+    "https://github.com/ideal-lab5/timelock",
 ]
