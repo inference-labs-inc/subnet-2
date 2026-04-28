@@ -362,19 +362,11 @@ async fn query_neuron_core(
 ) -> Result<NeuronInfo> {
     let (hotkey_bytes, hotkey) = query_hotkey(at_block, netuid, uid).await?;
 
-    let (coldkey, stake, axon) = tokio::join!(
-        async {
-            query_coldkey(at_block, &hotkey_bytes)
-                .await
-                .unwrap_or_default()
-        },
-        async { query_stake(at_block, &hotkey_bytes).await.unwrap_or(0) },
-        async {
-            query_axon(at_block, netuid, &hotkey_bytes)
-                .await
-                .unwrap_or_default()
-        },
-    );
+    let (coldkey, stake, axon) = tokio::try_join!(
+        query_coldkey(at_block, &hotkey_bytes),
+        query_stake(at_block, &hotkey_bytes),
+        query_axon(at_block, netuid, &hotkey_bytes),
+    )?;
 
     Ok(NeuronInfo {
         uid,
