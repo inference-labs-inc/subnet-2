@@ -5,7 +5,9 @@ use std::io::Cursor;
 use tokio::runtime::Builder;
 
 fuzz_target!(|data: &[u8]| {
-    let rt = Builder::new_current_thread().build().unwrap();
+    let Ok(rt) = Builder::new_current_thread().build() else {
+        return;
+    };
     rt.block_on(async {
         let mut cursor = Cursor::new(data);
         loop {

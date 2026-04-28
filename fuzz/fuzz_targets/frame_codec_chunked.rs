@@ -58,7 +58,9 @@ fuzz_target!(|data: &[u8]| {
     }
     let chunk_size = (data[0] as usize) % 17 + 1;
     let body = &data[1..];
-    let rt = Builder::new_current_thread().build().unwrap();
+    let Ok(rt) = Builder::new_current_thread().build() else {
+        return;
+    };
     rt.block_on(async {
         let mut reader = ChunkedReader::new(body, chunk_size);
         for _ in 0..32 {
