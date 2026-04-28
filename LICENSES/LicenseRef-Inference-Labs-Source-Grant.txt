@@ -1,0 +1,26 @@
+Copyright (c) 2025 Inference Labs Inc.
+
+Source Access Grant
+You may access, view, study, and modify the source code of this software.
+
+Redistribution Conditions
+You may redistribute this software in source or modified form provided that:
+a) You retain this license document and all copyright notices
+b) Any modified files carry prominent notices stating you changed them
+c) You do not misrepresent the origin of the software
+
+Usage Restriction
+NO USE RIGHTS ARE GRANTED BY THIS LICENSE. Any operational use including but not limited to:
+- Execution of the software
+- Integration with other systems
+- Deployment in any environment
+- Commercial or production utilization requires express written permission from the IP Owner.
+
+Intellectual Property Reservation
+All rights not expressly granted herein are reserved by the IP Owner. For usage permissions, contact: legal@inferencelabs.com
+
+Disclaimer
+THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE IP OWNER SHALL NOT BE LIABLE FOR ANY DAMAGES ARISING FROM ACCESS OR DISTRIBUTION.
+
+License Propagation
+Any distribution of this software or derivatives must be under this same license agreement.

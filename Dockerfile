@@ -73,6 +73,9 @@ RUN curl -o /tmp/install_nvm.sh https://raw.githubusercontent.com/nvm-sh/nvm/v0.
     ln -s /opt/.snarkjs/node_modules/.bin/snarkjs /home/subnet2/.local/bin/snarkjs
 ENV PATH="/home/subnet2/.local/bin:${PATH}"
 
+# Entrypoint elevates briefly to apply PUID remap, then execs `gosu subnet2`.
+# Override the entrypoint at your own risk; default invocation drops privileges.
+# nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
 RUN cat <<'EOF' > /entrypoint.sh

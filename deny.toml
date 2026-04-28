@@ -24,6 +24,7 @@ allow = [
     "MPL-2.0",
     "Unlicense",
     "CDLA-Permissive-2.0",
+    "LicenseRef-Inference-Labs-Source-Grant",
 ]
 confidence-threshold = 0.8
 
@@ -38,120 +39,123 @@ name = "encoding_rs"
 expression = "Apache-2.0 OR MIT"
 license-files = [{ path = "LICENSE-APACHE", hash = 0xb23f3e28 }, { path = "LICENSE-MIT", hash = 0xb23f3e28 }]
 
-# Internal Inference Labs Inc. crates pulled transitively via JSTprove and dsperse.
-# These crates ship without a SPDX license declaration; clarified here as MIT to
-# satisfy the license check while remaining inside Inference Labs source-grant terms.
+# Inference Labs internal crates pulled transitively via JSTprove and dsperse.
+# These crates ship without a SPDX license declaration; their upstream LICENSE
+# file is the Inference Labs Source Access Grant, vendored at
+# LICENSES/LicenseRef-Inference-Labs-Source-Grant.txt for human audit.
+# Pinned to exact versions so a future republished version cannot inherit the
+# clarification.
 [[licenses.clarify]]
-name = "arith"
-expression = "MIT"
+crate = "arith@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "babybear"
-expression = "MIT"
+crate = "babybear@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "bin"
-expression = "MIT"
+crate = "bin@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "circuit"
-expression = "MIT"
+crate = "circuit@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "circuit-std-rs"
-expression = "MIT"
+crate = "circuit-std-rs@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "config_macros"
-expression = "MIT"
+crate = "config_macros@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "crosslayer_prototype"
-expression = "MIT"
+crate = "crosslayer_prototype@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "dsperse"
-expression = "MIT"
+crate = "dsperse@0.0.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "expander_compiler"
-expression = "MIT"
+crate = "expander_compiler@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "gf2"
-expression = "MIT"
+crate = "gf2@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "gf2_128"
-expression = "MIT"
+crate = "gf2_128@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "gkr"
-expression = "MIT"
+crate = "gkr@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "gkr_engine"
-expression = "MIT"
+crate = "gkr_engine@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "gkr_hashers"
-expression = "MIT"
+crate = "gkr_hashers@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "goldilocks"
-expression = "MIT"
+crate = "goldilocks@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "jstprove-io"
-expression = "MIT"
+crate = "jstprove-io@0.1.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "jstprove-onnx"
-expression = "MIT"
+crate = "jstprove-onnx@0.1.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "jstprove_circuits"
-expression = "MIT"
+crate = "jstprove_circuits@0.1.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "macros"
-expression = "MIT"
+crate = "macros@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "mersenne31"
-expression = "MIT"
+crate = "mersenne31@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "poly_commit"
-expression = "MIT"
+crate = "poly_commit@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "polynomials"
-expression = "MIT"
+crate = "polynomials@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "serdes"
-expression = "MIT"
+crate = "serdes@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "serdes_derive"
-expression = "MIT"
+crate = "serdes_derive@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "sumcheck"
-expression = "MIT"
+crate = "sumcheck@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "transcript"
-expression = "MIT"
+crate = "transcript@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "tree"
-expression = "MIT"
+crate = "tree@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 [[licenses.clarify]]
-name = "utils"
-expression = "MIT"
+crate = "utils@0.4.0"
+expression = "LicenseRef-Inference-Labs-Source-Grant"
 license-files = []
 
 [bans]

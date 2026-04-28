@@ -53,6 +53,7 @@ def _require_https(url: str) -> None:
 def fetch_json(url: str) -> dict:
     _require_https(url)
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
 
@@ -62,6 +63,7 @@ def download_file(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     total = 0
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
     with urllib.request.urlopen(req, timeout=300) as resp, dest.open("wb") as fh:
         while chunk := resp.read(65536):
             fh.write(chunk)
