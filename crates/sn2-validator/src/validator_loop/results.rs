@@ -14,8 +14,9 @@ impl ValidatorLoop {
         was_at_capacity: bool,
     ) {
         let elapsed = response.response_time;
+        let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
         self.performance_tracker
-            .record(uid, true, elapsed, was_at_capacity);
+            .record(uid, &hotkey, true, elapsed, was_at_capacity);
         self.score_manager.update_score(
             uid,
             true,

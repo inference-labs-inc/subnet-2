@@ -204,6 +204,11 @@ impl StatsReporter {
         self.spawn_post("/statistics/health/log/", body, |_| {});
     }
 
+    pub fn capacity_flush_due(&self) -> bool {
+        Instant::now().duration_since(self.last_capacity_flush)
+            >= Duration::from_secs(STATS_FLUSH_INTERVAL_SECS)
+    }
+
     pub fn flush_capacity(
         &mut self,
         block: u64,
@@ -218,7 +223,6 @@ impl StatsReporter {
             return;
         }
         if snapshot.is_empty() && events.is_empty() {
-            self.last_capacity_flush = now;
             return;
         }
         self.last_capacity_flush = now;
@@ -244,7 +248,7 @@ impl StatsReporter {
                 let elapsed_ms = now.saturating_duration_since(e.at).as_millis() as u64;
                 serde_json::json!({
                     "miner_uid": e.uid,
-                    "miner_key": uid_hotkeys.get(&e.uid).cloned().unwrap_or_default(),
+                    "miner_key": e.hotkey,
                     "direction": direction,
                     "cap_from": e.cap_from,
                     "cap_to": e.cap_to,

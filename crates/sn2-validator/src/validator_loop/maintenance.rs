@@ -138,14 +138,16 @@ impl ValidatorLoop {
                 self.config.metagraph.n,
                 self.score_manager.scores_snapshot(),
             );
-            let cap_snapshot = self.performance_tracker.cap_snapshot();
-            let cap_events = self.performance_tracker.drain_cap_events();
-            reporter.flush_capacity(
-                self.current_block,
-                cap_snapshot,
-                cap_events,
-                &self.uid_hotkeys,
-            );
+            if reporter.capacity_flush_due() {
+                let cap_snapshot = self.performance_tracker.cap_snapshot();
+                let cap_events = self.performance_tracker.drain_cap_events();
+                reporter.flush_capacity(
+                    self.current_block,
+                    cap_snapshot,
+                    cap_events,
+                    &self.uid_hotkeys,
+                );
+            }
         }
 
         Ok(())
@@ -274,10 +276,10 @@ impl ValidatorLoop {
         }
 
         for neuron in &self.config.metagraph.neurons {
-            if let Some(prev_hotkey) = self.uid_hotkeys.get(&neuron.uid) {
-                if *prev_hotkey != neuron.hotkey {
+            if let Some(prev_hotkey) = self.uid_hotkeys.get(&neuron.uid).cloned() {
+                if prev_hotkey != neuron.hotkey {
                     info!(uid = neuron.uid, "hotkey changed, resetting performance");
-                    self.performance_tracker.reset_uid(neuron.uid);
+                    self.performance_tracker.reset_uid(neuron.uid, &prev_hotkey);
                     self.score_manager.update_score(
                         neuron.uid,
                         false,
