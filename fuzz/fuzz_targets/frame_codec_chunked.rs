@@ -10,7 +10,6 @@ struct ChunkedReader<'a> {
     chunks: Vec<&'a [u8]>,
     idx: usize,
     off: usize,
-    chunk_size: usize,
 }
 
 impl<'a> ChunkedReader<'a> {
@@ -27,7 +26,6 @@ impl<'a> ChunkedReader<'a> {
             chunks,
             idx: 0,
             off: 0,
-            chunk_size,
         }
     }
 }
@@ -50,7 +48,6 @@ impl AsyncRead for ChunkedReader<'_> {
             self.idx += 1;
             self.off = 0;
         }
-        let _ = self.chunk_size;
         Poll::Ready(Ok(()))
     }
 }

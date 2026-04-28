@@ -6,6 +6,7 @@ use std::io::Read;
 
 const MAX_TENSOR_ELEMENTS: usize = 16_777_216;
 const MAX_PROTOBUF_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PROTO_SHAPE_DIMS: usize = 32;
 
 pub fn decode_gzipped_protobuf_tensor(gzipped: &[u8], shape: &[usize]) -> Result<ArrayD<f64>> {
     let expected = shape
@@ -61,13 +62,14 @@ fn parse_protobuf_floats(raw: &[u8], shape: &[usize], expected: usize) -> Result
                     raw,
                     offset,
                     field,
+                    expected,
                     &mut floats,
                     &mut proto_shape,
                     &mut proto_shape_seen,
                 )?;
             }
             5 => {
-                offset = parse_fixed32(raw, offset, field, &mut floats)?;
+                offset = parse_fixed32(raw, offset, field, expected, &mut floats)?;
             }
             0 => {
                 offset = parse_varint_field(
@@ -104,6 +106,7 @@ fn parse_length_delimited(
     raw: &[u8],
     offset: usize,
     field: usize,
+    expected: usize,
     floats: &mut Vec<f64>,
     proto_shape: &mut Vec<usize>,
     proto_shape_seen: &mut bool,
@@ -119,6 +122,16 @@ fn parse_length_delimited(
             len % 4 == 0,
             "packed float field length {len} not a multiple of 4"
         );
+        let max_new = len / 4;
+        let projected = floats.len().saturating_add(max_new);
+        anyhow::ensure!(
+            projected <= expected,
+            "packed float field would push tensor past declared size: have {} + {} > {}",
+            floats.len(),
+            max_new,
+            expected
+        );
+        floats.reserve(max_new);
         while offset < end {
             let val = f32::from_le_bytes([
                 raw[offset],
@@ -135,6 +148,10 @@ fn parse_length_delimited(
         while pos < end {
             let (val, next) = read_varint(raw, pos)?;
             anyhow::ensure!(next <= end, "packed shape varint crosses field boundary");
+            anyhow::ensure!(
+                proto_shape.len() < MAX_PROTO_SHAPE_DIMS,
+                "protobuf shape exceeds {MAX_PROTO_SHAPE_DIMS} dims"
+            );
             proto_shape.push(val);
             pos = next;
         }
@@ -142,10 +159,20 @@ fn parse_length_delimited(
     Ok(end)
 }
 
-fn parse_fixed32(raw: &[u8], offset: usize, field: usize, floats: &mut Vec<f64>) -> Result<usize> {
+fn parse_fixed32(
+    raw: &[u8],
+    offset: usize,
+    field: usize,
+    expected: usize,
+    floats: &mut Vec<f64>,
+) -> Result<usize> {
     let end = offset.checked_add(4).context("fixed32 overflow")?;
     anyhow::ensure!(end <= raw.len(), "fixed32 overflows buffer");
     if field == 1 {
+        anyhow::ensure!(
+            floats.len() < expected,
+            "unpacked float would push tensor past declared size {expected}"
+        );
         let val = f32::from_le_bytes([
             raw[offset],
             raw[offset + 1],
@@ -167,6 +194,10 @@ fn parse_varint_field(
     let (val, next) = read_varint(raw, offset)?;
     if field == 2 {
         *proto_shape_seen = true;
+        anyhow::ensure!(
+            proto_shape.len() < MAX_PROTO_SHAPE_DIMS,
+            "protobuf shape exceeds {MAX_PROTO_SHAPE_DIMS} dims"
+        );
         proto_shape.push(val);
     }
     Ok(next)
@@ -180,20 +211,24 @@ fn skip_fixed64(raw: &[u8], offset: usize) -> Result<usize> {
 
 fn read_varint(buf: &[u8], offset: usize) -> Result<(usize, usize)> {
     let mut result: usize = 0;
-    let mut shift = 0;
+    let mut shift: u32 = 0;
     let mut pos = offset;
     while pos < buf.len() {
         let byte = buf[pos];
         pos += 1;
-        anyhow::ensure!(
-            shift < usize::BITS as usize,
-            "varint exceeds platform usize"
-        );
-        result |= ((byte & 0x7f) as usize) << shift;
+        let payload = (byte & 0x7f) as usize;
+        let chunk = payload
+            .checked_shl(shift)
+            .filter(|c| (c >> shift) == payload)
+            .context("varint exceeds platform usize")?;
+        result = result.checked_add(chunk).context("varint overflow")?;
         if byte & 0x80 == 0 {
             return Ok((result, pos));
         }
-        shift += 7;
+        shift = shift
+            .checked_add(7)
+            .context("varint exceeds platform usize")?;
+        anyhow::ensure!(shift < usize::BITS, "varint exceeds platform usize");
     }
     anyhow::bail!("unterminated varint")
 }
@@ -225,9 +260,15 @@ pub fn json_to_arrayd(value: &serde_json::Value) -> Result<ArrayD<f64>> {
     ArrayD::from_shape_vec(IxDyn(&shape), flat).context("building array from shape")
 }
 
+fn f64_to_json(v: f64) -> serde_json::Value {
+    serde_json::Number::from_f64(v)
+        .map(serde_json::Value::Number)
+        .unwrap_or(serde_json::Value::Null)
+}
+
 pub fn arrayd_to_json(arr: &ArrayD<f64>) -> serde_json::Value {
     if arr.ndim() == 0 {
-        return serde_json::json!(arr.first().copied().unwrap_or(0.0));
+        return f64_to_json(arr.first().copied().unwrap_or(0.0));
     }
     let data: Vec<f64> = match arr.as_slice() {
         Some(s) => s.to_vec(),
@@ -238,7 +279,7 @@ pub fn arrayd_to_json(arr: &ArrayD<f64>) -> serde_json::Value {
 
 fn build_nested(data: &[f64], shape: &[usize], dim: usize) -> serde_json::Value {
     if dim == shape.len() - 1 {
-        return serde_json::Value::Array(data.iter().map(|&v| serde_json::json!(v)).collect());
+        return serde_json::Value::Array(data.iter().map(|&v| f64_to_json(v)).collect());
     }
     let stride: usize = shape[dim + 1..].iter().product();
     serde_json::Value::Array(

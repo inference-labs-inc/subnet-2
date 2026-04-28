@@ -645,17 +645,8 @@ impl ValidatorLoop {
             return None;
         }
 
-        let mut expected_indices: std::collections::HashSet<u32> =
-            std::collections::HashSet::with_capacity(sampled_indices.len());
-        for &idx in &sampled_indices {
-            expected_indices.insert(idx as u32);
-        }
-
-        if let Err(e) = run_manager.init_tile_counter(run_uid, slice_id, tiling, expected_indices) {
-            warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "init_tile_counter failed");
-            return None;
-        }
-
+        let mut prepared: Vec<(usize, serde_json::Value)> =
+            Vec::with_capacity(sampled_indices.len());
         match tiles_payload {
             TiledPayload::SingleInput(tiles) => {
                 for (idx, tile) in tiles.into_iter().enumerate() {
@@ -665,16 +656,7 @@ impl ValidatorLoop {
                     let tile_json = serde_json::json!({
                         "input_data": crate::tensor::arrayd_to_json(&tile.into_dyn())
                     });
-                    staged.stage_request(Self::build_tile_request(
-                        circuit,
-                        slice_id,
-                        run_uid,
-                        tile_json,
-                        idx as u32,
-                        run_source,
-                        circuit_path,
-                        component_sha,
-                    ));
+                    prepared.push((idx, tile_json));
                 }
             }
             TiledPayload::MultiInput(per_tile) => {
@@ -700,21 +682,42 @@ impl ValidatorLoop {
                     let tile_json = serde_json::json!({
                         "input_data": crate::tensor::arrayd_to_json(&tile_arr)
                     });
-                    staged.stage_request(Self::build_tile_request(
-                        circuit,
-                        slice_id,
-                        run_uid,
-                        tile_json,
-                        idx as u32,
-                        run_source,
-                        circuit_path,
-                        component_sha,
-                    ));
+                    prepared.push((idx, tile_json));
                 }
             }
         }
 
-        Some(sampled_indices.len())
+        if prepared.is_empty() {
+            warn!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                "no tiles survived staging, aborting slice"
+            );
+            return None;
+        }
+
+        let expected_indices: std::collections::HashSet<u32> =
+            prepared.iter().map(|(idx, _)| *idx as u32).collect();
+        if let Err(e) = run_manager.init_tile_counter(run_uid, slice_id, tiling, expected_indices) {
+            warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "init_tile_counter failed");
+            return None;
+        }
+
+        let staged_count = prepared.len();
+        for (idx, tile_json) in prepared {
+            staged.stage_request(Self::build_tile_request(
+                circuit,
+                slice_id,
+                run_uid,
+                tile_json,
+                idx as u32,
+                run_source,
+                circuit_path,
+                component_sha,
+            ));
+        }
+
+        Some(staged_count)
     }
 
     #[allow(clippy::too_many_arguments)]
