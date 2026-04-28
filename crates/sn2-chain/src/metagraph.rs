@@ -152,7 +152,7 @@ impl Metagraph {
             "syncing metagraph"
         );
 
-        let neurons = match self.sync_via_runtime_api(client).await {
+        let neurons = match self.sync_via_runtime_api(&at_block).await {
             Ok(neurons) => {
                 info!(
                     netuid = self.netuid,
@@ -186,10 +186,9 @@ impl Metagraph {
 
     async fn sync_via_runtime_api(
         &self,
-        client: &OnlineClient<PolkadotConfig>,
+        at_block: &OnlineClientAtBlock<PolkadotConfig>,
     ) -> Result<Vec<NeuronInfo>> {
         let params = Encode::encode(&self.netuid);
-        let at_block = at_current_block(client).await?;
         let bytes = at_block
             .runtime_apis()
             .call_raw("NeuronInfoRuntimeApi_get_neurons_lite", Some(&params))
@@ -252,7 +251,7 @@ impl Metagraph {
             emissions,
             actives,
             last_updates,
-        ) = tokio::join!(
+        ) = tokio::try_join!(
             query_vec::<bool>(at_block, "ValidatorPermit", netuid),
             query_vec::<u16>(at_block, "Rank", netuid),
             query_vec::<u16>(at_block, "Trust", netuid),
@@ -262,17 +261,7 @@ impl Metagraph {
             query_vec::<u64>(at_block, "Emission", netuid),
             query_vec::<bool>(at_block, "Active", netuid),
             query_vec::<u64>(at_block, "LastUpdate", netuid),
-        );
-
-        let validator_permits = validator_permits.unwrap_or_default();
-        let ranks = ranks.unwrap_or_default();
-        let trusts = trusts.unwrap_or_default();
-        let consensuses = consensuses.unwrap_or_default();
-        let incentives = incentives.unwrap_or_default();
-        let dividends_vec = dividends_vec.unwrap_or_default();
-        let emissions = emissions.unwrap_or_default();
-        let actives = actives.unwrap_or_default();
-        let last_updates = last_updates.unwrap_or_default();
+        )?;
 
         let neurons: Vec<Option<NeuronInfo>> = stream::iter(0..n)
             .map(|uid| {

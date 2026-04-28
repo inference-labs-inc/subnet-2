@@ -32,10 +32,12 @@ pub(crate) async fn fetch_u128_or(
     keys: Vec<Value>,
     default: u128,
 ) -> Result<u128> {
-    Ok(fetch_value(at_block, entry, keys)
-        .await?
-        .and_then(|v| v.as_u128())
-        .unwrap_or(default))
+    match fetch_value(at_block, entry, keys).await? {
+        None => Ok(default),
+        Some(v) => v
+            .as_u128()
+            .with_context(|| format!("storage entry {PALLET}::{entry} did not decode as u128")),
+    }
 }
 
 pub(crate) async fn fetch_typed<T: IntoVisitor>(

@@ -43,12 +43,13 @@ impl Registration {
 
         let hotkey_bytes = wallet.hotkey_public_bytes()?;
         let at_block = at_current_block(client).await?;
-        if let Ok(Some(v)) = fetch_value(
+        if let Some(v) = fetch_value(
             &at_block,
             "Axons",
             netuid_hotkey_keys(self.netuid, &hotkey_bytes),
         )
         .await
+        .context("fetching existing Axons entry")?
         {
             let chain_ip = v.at("ip").and_then(|v| v.as_u128()).unwrap_or(0) as u64;
             let chain_port = v.at("port").and_then(|v| v.as_u128()).unwrap_or(0) as u16;

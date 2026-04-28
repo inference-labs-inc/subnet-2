@@ -36,7 +36,10 @@ jobs:
         run: cargo install cargo-audit --version ${{ env.CARGO_AUDIT_VERSION }} --locked
 
       - name: Run cargo audit
-        run: cargo audit --json > cargo-audit-results.json
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo audit --json | tee cargo-audit-results.json
 
       - name: Upload Audit Results
         if: always()
