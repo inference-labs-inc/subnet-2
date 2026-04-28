@@ -3191,7 +3191,7 @@ checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
 [[package]]
 name = "dsperse"
 version = "0.0.0"
-source = "git+https://github.com/inference-labs-inc/dsperse?rev=f88c380d#f88c380d8cfc0f455f27c821313190d2c8c07df5"
+source = "git+https://github.com/inference-labs-inc/dsperse?rev=54f00006#54f0000600bbb1e2c99ac54dc4d0c3381b3f8b63"
 dependencies = [
  "clap",
  "jstprove-io",
