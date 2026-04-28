@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    let circuit_store = init_circuit_store(false, &cli.additional_circuits).await;
+    let circuit_store = init_circuit_store(false, &cli.additional_circuits, cli.rehash_cache).await;
 
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
@@ -211,7 +211,7 @@ async fn run_loopback(cli: Cli) -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    let circuit_store = init_circuit_store(true, &cli.additional_circuits).await;
+    let circuit_store = init_circuit_store(true, &cli.additional_circuits, cli.rehash_cache).await;
 
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
@@ -263,9 +263,19 @@ async fn run_loopback(cli: Cli) -> Result<()> {
 async fn init_circuit_store(
     loopback: bool,
     additional_circuits: &[String],
+    rehash_cache: bool,
 ) -> sn2_circuit_store::CircuitStore {
     let mut store =
         sn2_circuit_store::CircuitStore::new(None, loopback, additional_circuits.to_vec());
+    if rehash_cache {
+        match store.rehash_cache().await {
+            Ok(removed) => info!(
+                quarantined = removed,
+                "circuit cache rehash completed before load"
+            ),
+            Err(e) => warn!(error = %e, "circuit cache rehash failed"),
+        }
+    }
     if let Err(e) = store.load_circuits().await {
         warn!(error = %e, "failed to load circuits from cache");
     }

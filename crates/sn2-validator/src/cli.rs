@@ -70,4 +70,11 @@ pub struct Cli {
 
     #[arg(long, value_delimiter = ',')]
     pub additional_circuits: Vec<String>,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Rehash cached circuit bundle files on startup and quarantine any whose content diverges from the recorded SHA-256"
+    )]
+    pub rehash_cache: bool,
 }

@@ -308,6 +308,15 @@ impl ValidatorLoop {
             circuit_store_loopback,
             config.additional_circuits.clone(),
         );
+        if config.rehash_cache {
+            match circuit_store.rehash_cache().await {
+                Ok(removed) => info!(
+                    quarantined = removed,
+                    "circuit cache rehash completed before validator startup"
+                ),
+                Err(e) => warn!(error = %e, "circuit cache rehash failed"),
+            }
+        }
         let run_manager = IncrementalRunManager::new();
 
         let now = Instant::now();

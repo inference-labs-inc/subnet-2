@@ -14,6 +14,7 @@ use tracing::{info, warn};
 
 const CIRCUIT_METADATA_FILENAME: &str = "circuit_metadata.json";
 const DSLICE_READY_MARKER: &str = ".dslice_ready";
+const FILE_SHAS_FILENAME: &str = "file_shas.json";
 const REFRESH_INTERVAL_SECS: u64 = 600;
 
 fn is_sha256_hex(s: &str) -> bool {
@@ -721,8 +722,19 @@ impl CircuitStore {
                                 name = comp.name,
                                 "component missing circuit.bin, will re-download"
                             );
+                            true
+                        } else if let Some(divergent) =
+                            Self::sidecar_divergence(&comp_dir, &bundle_dir)
+                        {
+                            info!(
+                                name = comp.name,
+                                file = %divergent,
+                                "component file content diverged from recorded SHA, will re-download"
+                            );
+                            true
+                        } else {
+                            false
                         }
-                        !has_circuit_bin
                     } else {
                         false
                     }
@@ -775,6 +787,75 @@ impl CircuitStore {
         stale
     }
 
+    /// Returns the first bundle filename whose recorded SHA does not match the
+    /// on-disk content. Returns `None` when every entry validates or when no
+    /// sidecar exists yet (legacy caches downloaded before sidecar persistence).
+    fn sidecar_divergence(comp_dir: &Path, bundle_dir: &Path) -> Option<String> {
+        let sidecar = read_file_shas(comp_dir)?;
+        for (filename, recorded) in &sidecar.bundle {
+            let path = bundle_dir.join(filename);
+            if !path.exists() {
+                return Some(filename.clone());
+            }
+            match compute_file_sha256(&path) {
+                Ok(actual) if &actual == recorded => continue,
+                _ => return Some(filename.clone()),
+            }
+        }
+        None
+    }
+
+    /// Walk every cached model directory and quarantine component dirs whose
+    /// bundle files no longer match the content recorded in their sidecar.
+    /// Returns the number of component directories removed.
+    pub async fn rehash_cache(&self) -> Result<usize> {
+        let mut removed = 0usize;
+        let root_entries = match std::fs::read_dir(&self.cache_dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e).context("reading circuit cache root"),
+        };
+        for entry in root_entries.flatten() {
+            let model_dir = entry.path();
+            if !Self::is_model_cache_dir(&model_dir) {
+                continue;
+            }
+            let slices_dir = model_dir.join("slices");
+            let slice_entries = match std::fs::read_dir(&slices_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for slice_entry in slice_entries.flatten() {
+                let comp_dir = slice_entry.path();
+                if !comp_dir.is_dir() {
+                    continue;
+                }
+                let bundle_dir = comp_dir.join("jstprove").join("circuit.bundle");
+                if !bundle_dir.exists() {
+                    continue;
+                }
+                if let Some(divergent) = Self::sidecar_divergence(&comp_dir, &bundle_dir) {
+                    warn!(
+                        component_dir = %comp_dir.display(),
+                        file = %divergent,
+                        "rehash detected divergent bundle file, quarantining component"
+                    );
+                    if let Err(e) = std::fs::remove_dir_all(&comp_dir) {
+                        warn!(
+                            component_dir = %comp_dir.display(),
+                            error = %e,
+                            "failed to remove quarantined component directory"
+                        );
+                        continue;
+                    }
+                    removed += 1;
+                }
+            }
+        }
+        info!(removed, "circuit cache rehash complete");
+        Ok(removed)
+    }
+
     fn ensure_component_dirs(slices_dir: &Path, components: &[ParsedComponent]) -> Result<()> {
         for comp in components {
             let comp_dir = slices_dir.join(&comp.name);
@@ -792,59 +873,89 @@ impl CircuitStore {
         comp: &ParsedComponent,
         force: bool,
     ) -> Result<()> {
+        let comp_dir = slices_dir.join(&comp.name);
+        let mut sidecar = read_file_shas(&comp_dir).unwrap_or_default();
+        let mut bundle_attested = true;
+
         if comp.has_circuit {
-            let bundle_dir = slices_dir
-                .join(&comp.name)
-                .join("jstprove")
-                .join("circuit.bundle");
+            let bundle_dir = comp_dir.join("jstprove").join("circuit.bundle");
             for raw_filename in &comp.files {
                 if raw_filename.is_empty() {
                     continue;
                 }
                 let filename = Self::sanitize_name(raw_filename, "component file")?;
                 let dest = bundle_dir.join(filename);
-                if dest.exists() && !force {
+                if dest.exists() && !force && sidecar.bundle.contains_key(filename) {
                     continue;
                 }
                 if force && dest.exists() {
                     let _ = std::fs::remove_file(&dest);
                 }
-                if Self::try_hardlink_from_component_cache(
+                let relative = PathBuf::from("jstprove/circuit.bundle").join(filename);
+                if let Some(verified) = Self::try_hardlink_from_component_cache(
                     &self.cache_dir,
                     slices_dir,
                     &comp.sha,
-                    &PathBuf::from("jstprove/circuit.bundle").join(filename),
+                    &relative,
+                    filename,
                     &dest,
                 ) {
+                    sidecar.bundle.insert(filename.to_string(), verified);
                     continue;
                 }
                 let url = format!(
                     "{}/components/{}/files/{}",
                     self.api_url, comp.sha, filename
                 );
-                self.download_file(&url, &dest)
+                let outcome = self
+                    .download_file(&url, &dest)
                     .await
                     .with_context(|| format!("downloading {}/{}", comp.name, filename))?;
+                if !outcome.attested {
+                    bundle_attested = false;
+                    warn!(
+                        component = %comp.name,
+                        filename = filename,
+                        "server did not attest x-checksum-sha256 for bundle file; recording locally hashed bytes"
+                    );
+                }
+                sidecar.bundle.insert(filename.to_string(), outcome.sha);
             }
         }
 
-        let payload_dir = slices_dir.join(&comp.name).join("payload");
+        let payload_dir = comp_dir.join("payload");
         for wb in &comp.weights {
             let filename = Self::sanitize_name(&wb.filename, "weight blob file")?;
             let dest = payload_dir.join(filename);
-            if dest.exists() && !force {
+            if dest.exists() && !force && sidecar.payload.contains_key(filename) {
                 continue;
             }
             if force && dest.exists() {
                 let _ = std::fs::remove_file(&dest);
             }
             if Self::try_hardlink_from_weight_cache(&self.cache_dir, slices_dir, &wb.sha, &dest) {
+                sidecar.payload.insert(filename.to_string(), wb.sha.clone());
                 continue;
             }
             let url = format!("{}/models/wb/{}", self.api_url, wb.sha);
-            self.download_file(&url, &dest)
+            let outcome = self
+                .download_file(&url, &dest)
                 .await
                 .with_context(|| format!("downloading weight blob for {}", comp.name))?;
+            anyhow::ensure!(
+                outcome.sha == wb.sha,
+                "weight blob SHA-256 mismatch for {}/{}: expected {}, got {}",
+                comp.name,
+                filename,
+                wb.sha,
+                outcome.sha
+            );
+            sidecar.payload.insert(filename.to_string(), outcome.sha);
+        }
+
+        sidecar.server_attested = bundle_attested || !comp.has_circuit;
+        if let Err(e) = write_file_shas(&comp_dir, &sidecar) {
+            warn!(component = %comp.name, error = %e, "failed to persist file SHA sidecar");
         }
         Ok(())
     }
@@ -865,18 +976,20 @@ impl CircuitStore {
     }
 
     /// Scan sibling cached circuits for a component stamped with the same SHA
-    /// and hard-link the requested file from there. Returns true on success.
+    /// and hard-link the requested file from there after verifying the source's
+    /// recorded SHA matches its actual on-disk content.
+    ///
+    /// Returns the verified file SHA on success so the caller can propagate it
+    /// into the destination component's sidecar without recomputing.
     fn try_hardlink_from_component_cache(
         cache_dir: &Path,
         current_slices_dir: &Path,
         component_sha: &str,
         relative_path: &Path,
+        bundle_filename: &str,
         dest: &Path,
-    ) -> bool {
-        let root_entries = match std::fs::read_dir(cache_dir) {
-            Ok(entries) => entries,
-            Err(_) => return false,
-        };
+    ) -> Option<String> {
+        let root_entries = std::fs::read_dir(cache_dir).ok()?;
         for entry in root_entries.flatten() {
             let path = entry.path();
             if !Self::is_model_cache_dir(&path) {
@@ -892,16 +1005,39 @@ impl CircuitStore {
             };
             for slice_entry in slice_entries.flatten() {
                 let slice_path = slice_entry.path();
-                let stamp = slice_path.join("component.sha");
-                let matches = match std::fs::read_to_string(&stamp) {
-                    Ok(stamp_value) => stamp_value.trim() == component_sha,
-                    Err(_) => false,
-                };
-                if !matches {
+                let stamp_matches = std::fs::read_to_string(slice_path.join("component.sha"))
+                    .map(|s| s.trim() == component_sha)
+                    .unwrap_or(false);
+                if !stamp_matches {
                     continue;
                 }
                 let source = slice_path.join(relative_path);
                 if !source.exists() {
+                    continue;
+                }
+                let recorded = read_file_shas(&slice_path)
+                    .and_then(|s| s.bundle.get(bundle_filename).cloned());
+                let Some(recorded_sha) = recorded else {
+                    continue;
+                };
+                let actual_sha = match compute_file_sha256(&source) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!(
+                            source = %source.display(),
+                            error = %e,
+                            "failed to hash sibling component file, skipping hardlink candidate"
+                        );
+                        continue;
+                    }
+                };
+                if actual_sha != recorded_sha {
+                    warn!(
+                        source = %source.display(),
+                        recorded = recorded_sha,
+                        actual = actual_sha,
+                        "sibling component file content diverges from its recorded SHA, skipping hardlink"
+                    );
                     continue;
                 }
                 if let Some(parent) = dest.parent() {
@@ -912,13 +1048,14 @@ impl CircuitStore {
                         source = %source.display(),
                         dest = %dest.display(),
                         sha = component_sha,
-                        "hard-linked component file from sibling circuit cache",
+                        file_sha = actual_sha,
+                        "hard-linked component file from sibling circuit cache after content verification",
                     );
-                    return true;
+                    return Some(actual_sha);
                 }
             }
         }
-        false
+        None
     }
 
     /// Scan sibling cached circuits for any weight blob whose contents hash to
@@ -1147,12 +1284,21 @@ impl CircuitStore {
         }
     }
 
-    async fn download_file(&self, url: &str, dest: &Path) -> Result<()> {
+    async fn download_file(&self, url: &str, dest: &Path) -> Result<DownloadOutcome> {
         download_file_static(&self.http, url, dest).await
     }
 }
 
-async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) -> Result<()> {
+pub struct DownloadOutcome {
+    pub sha: String,
+    pub attested: bool,
+}
+
+async fn download_file_static(
+    http: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+) -> Result<DownloadOutcome> {
     let resp = http
         .get(url)
         .timeout(std::time::Duration::from_secs(300))
@@ -1217,8 +1363,9 @@ async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) ->
             .await
             .with_context(|| format!("flushing {}", partial.display()))?;
 
+        let actual = hex::encode(hasher.finalize());
+        let attested = expected_sha256.is_some();
         if let Some(expected) = &expected_sha256 {
-            let actual = hex::encode(hasher.finalize());
             anyhow::ensure!(
                 &actual == expected,
                 "SHA-256 mismatch: expected {expected}, got {actual}"
@@ -1227,7 +1374,12 @@ async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) ->
 
         tokio::fs::rename(&partial, dest)
             .await
-            .with_context(|| format!("renaming {} to {}", partial.display(), dest.display()))
+            .with_context(|| format!("renaming {} to {}", partial.display(), dest.display()))?;
+
+        Ok(DownloadOutcome {
+            sha: actual,
+            attested,
+        })
     }
     .await;
 
@@ -1236,6 +1388,26 @@ async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) ->
     }
 
     result
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct FileShaSidecar {
+    bundle: HashMap<String, String>,
+    payload: HashMap<String, String>,
+    server_attested: bool,
+}
+
+fn read_file_shas(comp_dir: &Path) -> Option<FileShaSidecar> {
+    let path = comp_dir.join(FILE_SHAS_FILENAME);
+    let raw = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn write_file_shas(comp_dir: &Path, sidecar: &FileShaSidecar) -> Result<()> {
+    let path = comp_dir.join(FILE_SHAS_FILENAME);
+    let json = serde_json::to_string_pretty(sidecar).context("serializing file shas")?;
+    std::fs::write(&path, json)
+        .with_context(|| format!("writing file shas sidecar at {}", path.display()))
 }
 
 fn load_circuit_from_cache(circuit_id: &str, dir: &Path, cache_dir: &Path) -> Result<Circuit> {

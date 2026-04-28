@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 sn2-types = { workspace = true }
 tokio = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
