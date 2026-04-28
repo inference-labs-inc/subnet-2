@@ -356,7 +356,7 @@ mod tests {
         }
         let block = 100 + (VERIFICATION_STRIKES_REQUIRED as u64) - 1;
         assert!(mgr.is_skiplisted("hk1", block));
-        assert!(mgr.strikes.get("hk1").is_none());
+        assert!(!mgr.strikes.contains_key("hk1"));
         let until = mgr.skiplist.get("hk1").copied().unwrap();
         assert_eq!(until, block + VERIFICATION_SKIPLIST_TEMPOS * 360);
     }

@@ -56,6 +56,8 @@ RUN mkdir -p /opt/.nvm /opt/.snarkjs && \
     chown -R subnet2:subnet2 /opt/.nvm /opt/.snarkjs
 
 USER subnet2
+COPY --chown=subnet2:subnet2 docker/snarkjs/package.json /opt/.snarkjs/package.json
+COPY --chown=subnet2:subnet2 docker/snarkjs/package-lock.json /opt/.snarkjs/package-lock.json
 RUN curl -o /tmp/install_nvm.sh https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh && \
     echo 'bdea8c52186c4dd12657e77e7515509cda5bf9fa5a2f0046bce749e62645076d /tmp/install_nvm.sh' | sha256sum --check && \
     bash /tmp/install_nvm.sh && \
@@ -64,9 +66,8 @@ RUN curl -o /tmp/install_nvm.sh https://raw.githubusercontent.com/nvm-sh/nvm/v0.
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && \
     nvm install 22 && \
     nvm use 22 && \
-    npm install --prefix /opt/.snarkjs snarkjs@0.7.6 && \
-    npm install --prefix /opt/.snarkjs underscore@1.13.8 --save && \
-    cd /opt/.snarkjs && (npm audit fix || true) && cd - && \
+    npm install -g npm@11.6.2 && \
+    npm ci --prefix /opt/.snarkjs && \
     mkdir -p ~/.local/bin && \
     ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/node" /home/subnet2/.local/bin/node && \
     ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/npm" /home/subnet2/.local/bin/npm && \
