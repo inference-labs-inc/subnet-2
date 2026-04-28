@@ -178,7 +178,11 @@ impl PerformanceTracker {
         };
         let raw = match std::fs::read_to_string(path) {
             Ok(s) => s,
-            Err(_) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "performance tracker load: read failed, preserving in-memory state");
+                return;
+            }
         };
         let parsed: serde_json::Value = match serde_json::from_str(&raw) {
             Ok(v) => v,

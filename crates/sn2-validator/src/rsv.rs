@@ -61,7 +61,7 @@ impl RsvManager {
         blocks_per_tempo: u64,
     ) -> bool {
         if blocks_per_tempo == 0 {
-            return false;
+            return true;
         }
         let tempo_idx = current_block / blocks_per_tempo;
         self.sample_budget.retain(|(_, t), _| *t >= tempo_idx);
