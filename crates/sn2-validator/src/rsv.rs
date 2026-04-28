@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use rand::Rng;
 use sn2_types::{
-    RSV_EXPECTED_SUBS_PER_TEMPO, VERIFICATION_COLDSTART_BLOCKS, VERIFICATION_SAMPLES_PER_TEMPO,
-    VERIFICATION_SKIPLIST_TEMPOS, VERIFICATION_STRIKES_REQUIRED,
+    RSV_EXPECTED_SUBS_PER_TEMPO, VERIFICATION_COLDSTART_BLOCKS,
+    VERIFICATION_COLDSTART_RETENTION_BLOCKS, VERIFICATION_HISTORY_CAP,
+    VERIFICATION_SAMPLES_PER_TEMPO, VERIFICATION_SKIPLIST_TEMPOS, VERIFICATION_STRIKES_REQUIRED,
     VERIFICATION_STRIKES_WINDOW_BLOCKS,
 };
 use tracing::{info, warn};
@@ -100,7 +101,12 @@ impl RsvManager {
             }
         }
         if entry.len() as u32 >= VERIFICATION_STRIKES_REQUIRED {
-            let until = current_block + VERIFICATION_SKIPLIST_TEMPOS * blocks_per_tempo;
+            let bpt = if blocks_per_tempo == 0 {
+                360
+            } else {
+                blocks_per_tempo
+            };
+            let until = current_block + VERIFICATION_SKIPLIST_TEMPOS * bpt;
             self.skiplist.insert(hotkey.to_string(), until);
             self.strikes.remove(hotkey);
             warn!(
@@ -116,18 +122,47 @@ impl RsvManager {
 
     pub fn prune_expired(&mut self, current_block: u64, blocks_per_tempo: u64) {
         self.skiplist.retain(|_, until| *until > current_block);
-        let inactivity_cutoff = current_block.saturating_sub(VERIFICATION_STRIKES_WINDOW_BLOCKS);
-        let stale: Vec<String> = self
+
+        let strikes_cutoff = current_block.saturating_sub(VERIFICATION_STRIKES_WINDOW_BLOCKS);
+        let coldstart_cutoff =
+            current_block.saturating_sub(VERIFICATION_COLDSTART_RETENTION_BLOCKS);
+
+        let strikes_stale: Vec<String> = self
             .last_seen
             .iter()
-            .filter(|(_, &seen)| seen < inactivity_cutoff)
+            .filter(|(_, &seen)| seen < strikes_cutoff)
             .map(|(k, _)| k.clone())
             .collect();
-        for hotkey in &stale {
+        for hotkey in &strikes_stale {
             self.strikes.remove(hotkey);
+        }
+
+        let coldstart_stale: Vec<String> = self
+            .last_seen
+            .iter()
+            .filter(|(_, &seen)| seen < coldstart_cutoff)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for hotkey in &coldstart_stale {
             self.coldstart.remove(hotkey);
             self.last_seen.remove(hotkey);
         }
+
+        if self.last_seen.len() > VERIFICATION_HISTORY_CAP {
+            let mut by_age: Vec<(String, u64)> = self
+                .last_seen
+                .iter()
+                .map(|(k, &v)| (k.clone(), v))
+                .collect();
+            by_age.sort_by_key(|(_, v)| *v);
+            let drop_n = self.last_seen.len() - VERIFICATION_HISTORY_CAP;
+            for (hotkey, _) in by_age.into_iter().take(drop_n) {
+                self.coldstart.remove(&hotkey);
+                self.strikes.remove(&hotkey);
+                self.last_seen.remove(&hotkey);
+            }
+        }
+
         let current_tempo = current_block.checked_div(blocks_per_tempo).unwrap_or(0);
         self.sample_budget
             .retain(|(_, tempo_idx), _| *tempo_idx >= current_tempo);
@@ -432,15 +467,45 @@ mod tests {
             .or_default()
             .push_back(1000);
 
-        let later = 1000 + VERIFICATION_STRIKES_WINDOW_BLOCKS + 10;
-        mgr.observe("hk_active", later);
+        let mid = 1000 + VERIFICATION_STRIKES_WINDOW_BLOCKS + 10;
+        mgr.observe("hk_active", mid);
+        mgr.prune_expired(mid, 360);
 
-        mgr.prune_expired(later, 360);
+        assert!(mgr.coldstart.contains_key("hk_idle"));
+        assert!(mgr.last_seen.contains_key("hk_idle"));
+        assert!(!mgr.strikes.contains_key("hk_idle"));
+
+        let far = 1000 + VERIFICATION_COLDSTART_RETENTION_BLOCKS + 10;
+        mgr.observe("hk_active", far);
+        mgr.prune_expired(far, 360);
 
         assert!(mgr.coldstart.contains_key("hk_active"));
         assert!(mgr.last_seen.contains_key("hk_active"));
         assert!(!mgr.coldstart.contains_key("hk_idle"));
         assert!(!mgr.last_seen.contains_key("hk_idle"));
-        assert!(!mgr.strikes.contains_key("hk_idle"));
+    }
+
+    #[test]
+    fn history_cap_drops_oldest_when_exceeded() {
+        let mut mgr = fresh();
+        for i in 0..(VERIFICATION_HISTORY_CAP + 5) {
+            mgr.observe(&format!("hk_{i}"), 1000 + i as u64);
+        }
+        mgr.prune_expired(2000 + VERIFICATION_HISTORY_CAP as u64, 360);
+        assert!(mgr.last_seen.len() <= VERIFICATION_HISTORY_CAP);
+        assert!(!mgr.last_seen.contains_key("hk_0"));
+        assert!(mgr
+            .last_seen
+            .contains_key(&format!("hk_{}", VERIFICATION_HISTORY_CAP + 4)));
+    }
+
+    #[test]
+    fn skiplist_uses_fallback_tempo_when_unknown() {
+        let mut mgr = fresh();
+        for _ in 0..VERIFICATION_STRIKES_REQUIRED {
+            mgr.record_strike("hk", 1000, 0);
+        }
+        assert!(mgr.is_skiplisted("hk", 1000));
+        assert!(mgr.is_skiplisted("hk", 1000 + 100));
     }
 }
