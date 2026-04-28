@@ -264,9 +264,6 @@ impl ValidatorLoop {
             .iter()
             .map(|io| io.shape.iter().product::<usize>())
             .sum();
-        if bundle_expected == 0 {
-            return None;
-        }
 
         let (per_request_actual, strategy) = if let Some(tiling) = &work.tiling {
             let n = std::cmp::max(work.named_inputs.len(), 1);
@@ -298,7 +295,11 @@ impl ValidatorLoop {
             (work.input.len(), "single")
         };
 
-        if per_request_actual == 0 || per_request_actual == bundle_expected {
+        // The only safe early-out is "both sides agree on zero". Treating
+        // either side's zero independently as a free pass would let an
+        // asymmetric configuration (compiled for empty activations but
+        // dispatched with N elements, or vice versa) slip through preflight.
+        if per_request_actual == bundle_expected {
             None
         } else {
             Some(BundleDispatchMismatch {
