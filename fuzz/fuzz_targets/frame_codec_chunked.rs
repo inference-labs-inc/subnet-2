@@ -7,23 +7,17 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio::runtime::Builder;
 
 struct ChunkedReader<'a> {
-    chunks: Vec<&'a [u8]>,
+    data: &'a [u8],
+    chunk_size: usize,
     idx: usize,
     off: usize,
 }
 
 impl<'a> ChunkedReader<'a> {
     fn new(data: &'a [u8], chunk_size: usize) -> Self {
-        let chunk_size = chunk_size.max(1);
-        let mut chunks = Vec::new();
-        let mut start = 0;
-        while start < data.len() {
-            let end = (start + chunk_size).min(data.len());
-            chunks.push(&data[start..end]);
-            start = end;
-        }
         Self {
-            chunks,
+            data,
+            chunk_size: chunk_size.max(1),
             idx: 0,
             off: 0,
         }
@@ -36,15 +30,18 @@ impl AsyncRead for ChunkedReader<'_> {
         _cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        if self.idx >= self.chunks.len() {
+        let chunk_size = self.chunk_size;
+        let chunk_start = self.idx.saturating_mul(chunk_size);
+        if chunk_start >= self.data.len() {
             return Poll::Ready(Ok(()));
         }
-        let chunk = self.chunks[self.idx];
-        let remaining = &chunk[self.off..];
+        let chunk_end = chunk_start.saturating_add(chunk_size).min(self.data.len());
+        let chunk_len = chunk_end - chunk_start;
+        let remaining = &self.data[chunk_start + self.off..chunk_end];
         let n = remaining.len().min(buf.remaining());
         buf.put_slice(&remaining[..n]);
         self.off += n;
-        if self.off >= chunk.len() {
+        if self.off >= chunk_len {
             self.idx += 1;
             self.off = 0;
         }
