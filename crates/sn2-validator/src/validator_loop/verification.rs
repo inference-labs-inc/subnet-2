@@ -33,10 +33,14 @@ impl ValidatorLoop {
     fn spawn_verification(&mut self, mut result: TaskResult) {
         let guard_hash = result.guard_hash.clone();
         let uid = result.uid;
-        let sample = matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_content.is_some())
-            && self
-                .rsv
-                .should_sample(uid, self.current_block, self.blocks_per_tempo);
+        let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
+        let has_proof =
+            matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_content.is_some());
+        let sample = has_proof
+            && (hotkey.is_empty()
+                || self
+                    .rsv
+                    .should_sample(&hotkey, self.current_block, self.blocks_per_tempo));
         let handle = match result.outcome {
             TaskOutcome::Success(ref mut response) if response.proof_content.is_some() => {
                 let mut response = match std::mem::replace(
@@ -91,7 +95,12 @@ impl ValidatorLoop {
         let result = vr.task_result;
         let verified = vr.verified;
         let uid = result.uid;
-        self.rsv.observe(uid, self.current_block);
+        if let Some(hotkey) = self.uid_hotkeys.get(&uid) {
+            if !hotkey.is_empty() {
+                let hotkey = hotkey.clone();
+                self.rsv.observe(&hotkey, self.current_block);
+            }
+        }
         let was_at_capacity = result.was_at_capacity;
         let request_type = result.request_type;
         let run_uid = result.run_uid.clone();

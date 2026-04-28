@@ -343,11 +343,14 @@ impl ValidatorLoop {
                 RequestType::ProofOfWeights | RequestType::Rwr | RequestType::DSlice
             )
         {
-            let triggered = self
-                .rsv
-                .record_strike(uid, self.current_block, self.blocks_per_tempo);
-            if triggered {
-                info!(uid, "rsv: skiplist triggered via failure path");
+            let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
+            if !hotkey.is_empty() {
+                let triggered =
+                    self.rsv
+                        .record_strike(&hotkey, self.current_block, self.blocks_per_tempo);
+                if triggered {
+                    info!(uid, "rsv: skiplist triggered via failure path");
+                }
             }
         }
 

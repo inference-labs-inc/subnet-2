@@ -10,10 +10,11 @@ use sn2_types::{
 use tracing::{info, warn};
 
 pub struct RsvManager {
-    skiplist: HashMap<u16, u64>,
-    strikes: HashMap<u16, VecDeque<u64>>,
-    coldstart: HashMap<u16, u64>,
-    sample_budget: HashMap<(u16, u64), u32>,
+    skiplist: HashMap<String, u64>,
+    strikes: HashMap<String, VecDeque<u64>>,
+    coldstart: HashMap<String, u64>,
+    last_seen: HashMap<String, u64>,
+    sample_budget: HashMap<(String, u64), u32>,
     persistence_path: Option<PathBuf>,
 }
 
@@ -23,6 +24,7 @@ impl RsvManager {
             skiplist: HashMap::new(),
             strikes: HashMap::new(),
             coldstart: HashMap::new(),
+            last_seen: HashMap::new(),
             sample_budget: HashMap::new(),
             persistence_path: Some(path),
         };
@@ -30,14 +32,14 @@ impl RsvManager {
         mgr
     }
 
-    pub fn is_skiplisted(&self, uid: u16, current_block: u64) -> bool {
+    pub fn is_skiplisted(&self, hotkey: &str, current_block: u64) -> bool {
         self.skiplist
-            .get(&uid)
+            .get(hotkey)
             .is_some_and(|&until| current_block < until)
     }
 
-    pub fn is_in_coldstart(&self, uid: u16, current_block: u64) -> bool {
-        match self.coldstart.get(&uid) {
+    pub fn is_in_coldstart(&self, hotkey: &str, current_block: u64) -> bool {
+        match self.coldstart.get(hotkey) {
             Some(&first_seen) => {
                 current_block.saturating_sub(first_seen) < VERIFICATION_COLDSTART_BLOCKS
             }
@@ -45,13 +47,21 @@ impl RsvManager {
         }
     }
 
-    pub fn observe(&mut self, uid: u16, current_block: u64) {
-        self.coldstart.entry(uid).or_insert(current_block);
+    pub fn observe(&mut self, hotkey: &str, current_block: u64) {
+        self.coldstart
+            .entry(hotkey.to_string())
+            .or_insert(current_block);
+        self.last_seen.insert(hotkey.to_string(), current_block);
     }
 
-    pub fn should_sample(&mut self, uid: u16, current_block: u64, blocks_per_tempo: u64) -> bool {
+    pub fn should_sample(
+        &mut self,
+        hotkey: &str,
+        current_block: u64,
+        blocks_per_tempo: u64,
+    ) -> bool {
         let tempo_idx = current_block.checked_div(blocks_per_tempo).unwrap_or(0);
-        let key = (uid, tempo_idx);
+        let key = (hotkey.to_string(), tempo_idx);
         let budget = self
             .sample_budget
             .entry(key)
@@ -69,8 +79,13 @@ impl RsvManager {
         }
     }
 
-    pub fn record_strike(&mut self, uid: u16, current_block: u64, blocks_per_tempo: u64) -> bool {
-        let entry = self.strikes.entry(uid).or_default();
+    pub fn record_strike(
+        &mut self,
+        hotkey: &str,
+        current_block: u64,
+        blocks_per_tempo: u64,
+    ) -> bool {
+        let entry = self.strikes.entry(hotkey.to_string()).or_default();
         entry.push_back(current_block);
         let cutoff = current_block.saturating_sub(VERIFICATION_STRIKES_WINDOW_BLOCKS);
         while let Some(&front) = entry.front() {
@@ -82,10 +97,10 @@ impl RsvManager {
         }
         if entry.len() as u32 >= VERIFICATION_STRIKES_REQUIRED {
             let until = current_block + VERIFICATION_SKIPLIST_TEMPOS * blocks_per_tempo;
-            self.skiplist.insert(uid, until);
-            self.strikes.remove(&uid);
+            self.skiplist.insert(hotkey.to_string(), until);
+            self.strikes.remove(hotkey);
             warn!(
-                uid,
+                hotkey = %hotkey,
                 until_block = until,
                 "rsv: strike threshold reached, miner skiplisted"
             );
@@ -95,17 +110,23 @@ impl RsvManager {
         }
     }
 
-    pub fn sync_uids(&mut self, active_uids: &[u16]) {
-        let active: std::collections::HashSet<u16> = active_uids.iter().copied().collect();
-        self.skiplist.retain(|uid, _| active.contains(uid));
-        self.strikes.retain(|uid, _| active.contains(uid));
-        self.coldstart.retain(|uid, _| active.contains(uid));
-        self.sample_budget
-            .retain(|(uid, _), _| active.contains(uid));
-    }
-
-    pub fn prune_expired(&mut self, current_block: u64) {
+    pub fn prune_expired(&mut self, current_block: u64, blocks_per_tempo: u64) {
         self.skiplist.retain(|_, until| *until > current_block);
+        let inactivity_cutoff = current_block.saturating_sub(VERIFICATION_STRIKES_WINDOW_BLOCKS);
+        let stale: Vec<String> = self
+            .last_seen
+            .iter()
+            .filter(|(_, &seen)| seen < inactivity_cutoff)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for hotkey in &stale {
+            self.strikes.remove(hotkey);
+            self.coldstart.remove(hotkey);
+            self.last_seen.remove(hotkey);
+        }
+        let current_tempo = current_block.checked_div(blocks_per_tempo).unwrap_or(0);
+        self.sample_budget
+            .retain(|(_, tempo_idx), _| *tempo_idx >= current_tempo);
     }
 
     pub fn save(&self) {
@@ -116,14 +137,14 @@ impl RsvManager {
         let skiplist_json: serde_json::Map<String, serde_json::Value> = self
             .skiplist
             .iter()
-            .map(|(uid, until)| (uid.to_string(), serde_json::json!(*until)))
+            .map(|(hk, until)| (hk.clone(), serde_json::json!(*until)))
             .collect();
         let strikes_json: serde_json::Map<String, serde_json::Value> = self
             .strikes
             .iter()
-            .map(|(uid, deque)| {
+            .map(|(hk, deque)| {
                 (
-                    uid.to_string(),
+                    hk.clone(),
                     serde_json::Value::Array(deque.iter().map(|b| serde_json::json!(*b)).collect()),
                 )
             })
@@ -131,12 +152,19 @@ impl RsvManager {
         let coldstart_json: serde_json::Map<String, serde_json::Value> = self
             .coldstart
             .iter()
-            .map(|(uid, first)| (uid.to_string(), serde_json::json!(*first)))
+            .map(|(hk, first)| (hk.clone(), serde_json::json!(*first)))
+            .collect();
+        let last_seen_json: serde_json::Map<String, serde_json::Value> = self
+            .last_seen
+            .iter()
+            .map(|(hk, seen)| (hk.clone(), serde_json::json!(*seen)))
             .collect();
         let data = serde_json::json!({
+            "version": 2,
             "skiplist": skiplist_json,
             "strikes": strikes_json,
             "coldstart": coldstart_json,
+            "last_seen": last_seen_json,
         });
         match serde_json::to_string(&data) {
             Ok(json) => {
@@ -164,33 +192,41 @@ impl RsvManager {
                 return;
             }
         };
+        let version = parsed.get("version").and_then(|v| v.as_u64()).unwrap_or(1);
+        if version < 2 {
+            info!("rsv load: legacy uid-keyed state detected, discarding and starting fresh");
+            return;
+        }
         if let Some(map) = parsed.get("skiplist").and_then(|v| v.as_object()) {
             for (k, v) in map {
-                if let (Ok(uid), Some(until)) = (k.parse::<u16>(), v.as_u64()) {
-                    self.skiplist.insert(uid, until);
+                if let Some(until) = v.as_u64() {
+                    self.skiplist.insert(k.clone(), until);
                 }
             }
         }
         if let Some(map) = parsed.get("strikes").and_then(|v| v.as_object()) {
             for (k, v) in map {
-                let uid: u16 = match k.parse() {
-                    Ok(u) => u,
-                    Err(_) => continue,
-                };
                 let arr = match v.as_array() {
                     Some(a) => a,
                     None => continue,
                 };
                 let deque: VecDeque<u64> = arr.iter().filter_map(|x| x.as_u64()).collect();
                 if !deque.is_empty() {
-                    self.strikes.insert(uid, deque);
+                    self.strikes.insert(k.clone(), deque);
                 }
             }
         }
         if let Some(map) = parsed.get("coldstart").and_then(|v| v.as_object()) {
             for (k, v) in map {
-                if let (Ok(uid), Some(first)) = (k.parse::<u16>(), v.as_u64()) {
-                    self.coldstart.insert(uid, first);
+                if let Some(first) = v.as_u64() {
+                    self.coldstart.insert(k.clone(), first);
+                }
+            }
+        }
+        if let Some(map) = parsed.get("last_seen").and_then(|v| v.as_object()) {
+            for (k, v) in map {
+                if let Some(seen) = v.as_u64() {
+                    self.last_seen.insert(k.clone(), seen);
                 }
             }
         }
@@ -198,6 +234,7 @@ impl RsvManager {
             skiplisted = self.skiplist.len(),
             tracked_strikes = self.strikes.len(),
             observed = self.coldstart.len(),
+            last_seen = self.last_seen.len(),
             "rsv state loaded"
         );
     }
@@ -226,46 +263,48 @@ mod tests {
             skiplist: HashMap::new(),
             strikes: HashMap::new(),
             coldstart: HashMap::new(),
+            last_seen: HashMap::new(),
             sample_budget: HashMap::new(),
             persistence_path: None,
         }
     }
 
     #[test]
-    fn coldstart_gates_new_uids() {
+    fn coldstart_gates_new_hotkeys() {
         let mut mgr = fresh();
-        mgr.observe(1, 1000);
-        assert!(mgr.is_in_coldstart(1, 2000));
-        assert!(!mgr.is_in_coldstart(1, 3000));
+        mgr.observe("hk1", 1000);
+        assert!(mgr.is_in_coldstart("hk1", 2000));
+        assert!(!mgr.is_in_coldstart("hk1", 3000));
     }
 
     #[test]
-    fn coldstart_unknown_uid_is_in_coldstart() {
+    fn coldstart_unknown_hotkey_is_in_coldstart() {
         let mgr = fresh();
-        assert!(mgr.is_in_coldstart(99, 1_000_000));
+        assert!(mgr.is_in_coldstart("unknown", 1_000_000));
     }
 
     #[test]
     fn observe_does_not_overwrite_first_seen() {
         let mut mgr = fresh();
-        mgr.observe(1, 1000);
-        mgr.observe(1, 2000);
-        assert_eq!(mgr.coldstart.get(&1).copied(), Some(1000));
+        mgr.observe("hk1", 1000);
+        mgr.observe("hk1", 2000);
+        assert_eq!(mgr.coldstart.get("hk1").copied(), Some(1000));
+        assert_eq!(mgr.last_seen.get("hk1").copied(), Some(2000));
     }
 
     #[test]
     fn record_strike_below_threshold_no_skiplist() {
         let mut mgr = fresh();
-        let triggered = mgr.record_strike(1, 100, 360);
+        let triggered = mgr.record_strike("hk1", 100, 360);
         assert!(!triggered);
-        assert!(!mgr.is_skiplisted(1, 100));
+        assert!(!mgr.is_skiplisted("hk1", 100));
     }
 
     #[test]
     fn record_strike_at_threshold_skiplists() {
         let mut mgr = fresh();
         for i in 0..VERIFICATION_STRIKES_REQUIRED {
-            let triggered = mgr.record_strike(1, 100 + i as u64, 360);
+            let triggered = mgr.record_strike("hk1", 100 + i as u64, 360);
             if i + 1 < VERIFICATION_STRIKES_REQUIRED {
                 assert!(!triggered);
             } else {
@@ -273,64 +312,75 @@ mod tests {
             }
         }
         let block = 100 + (VERIFICATION_STRIKES_REQUIRED as u64) - 1;
-        assert!(mgr.is_skiplisted(1, block));
-        assert!(mgr.strikes.get(&1).is_none());
-        let until = mgr.skiplist.get(&1).copied().unwrap();
+        assert!(mgr.is_skiplisted("hk1", block));
+        assert!(mgr.strikes.get("hk1").is_none());
+        let until = mgr.skiplist.get("hk1").copied().unwrap();
         assert_eq!(until, block + VERIFICATION_SKIPLIST_TEMPOS * 360);
     }
 
     #[test]
     fn strike_aging_removes_old_strikes() {
         let mut mgr = fresh();
-        mgr.record_strike(1, 100, 360);
-        mgr.record_strike(1, 200, 360);
+        mgr.record_strike("hk1", 100, 360);
+        mgr.record_strike("hk1", 200, 360);
         let later = 200 + VERIFICATION_STRIKES_WINDOW_BLOCKS + 10;
-        let triggered = mgr.record_strike(1, later, 360);
+        let triggered = mgr.record_strike("hk1", later, 360);
         assert!(!triggered);
-        let strikes = mgr.strikes.get(&1).unwrap();
+        let strikes = mgr.strikes.get("hk1").unwrap();
         assert_eq!(strikes.len(), 1);
         assert_eq!(strikes.front().copied(), Some(later));
     }
 
     #[test]
-    fn sync_uids_drops_deregistered() {
-        let mut mgr = fresh();
-        mgr.observe(1, 100);
-        mgr.observe(2, 100);
-        mgr.skiplist.insert(2, 5000);
-        mgr.strikes.entry(2).or_default().push_back(50);
-        mgr.sample_budget.insert((2, 0), 5);
-        mgr.sync_uids(&[1]);
-        assert!(mgr.coldstart.contains_key(&1));
-        assert!(!mgr.coldstart.contains_key(&2));
-        assert!(!mgr.skiplist.contains_key(&2));
-        assert!(!mgr.strikes.contains_key(&2));
-        assert!(!mgr.sample_budget.contains_key(&(2, 0)));
-    }
-
-    #[test]
     fn prune_expired_drops_past_skiplist() {
         let mut mgr = fresh();
-        mgr.skiplist.insert(1, 200);
-        mgr.skiplist.insert(2, 5000);
-        mgr.prune_expired(300);
-        assert!(!mgr.skiplist.contains_key(&1));
-        assert!(mgr.skiplist.contains_key(&2));
+        mgr.skiplist.insert("hk1".to_string(), 200);
+        mgr.skiplist.insert("hk2".to_string(), 5_000_000);
+        mgr.prune_expired(300, 360);
+        assert!(!mgr.skiplist.contains_key("hk1"));
+        assert!(mgr.skiplist.contains_key("hk2"));
     }
 
     #[test]
     fn save_load_round_trip() {
         let path = temp_path("roundtrip");
         let mut mgr = RsvManager::new_with_persistence(path.clone());
-        mgr.observe(7, 500);
-        mgr.skiplist.insert(8, 9000);
-        mgr.strikes.entry(9).or_default().push_back(123);
+        mgr.observe("hk_a", 500);
+        mgr.skiplist.insert("hk_b".to_string(), 9000);
+        mgr.strikes
+            .entry("hk_c".to_string())
+            .or_default()
+            .push_back(123);
+        mgr.last_seen.insert("hk_c".to_string(), 123);
         mgr.save();
 
         let loaded = RsvManager::new_with_persistence(path.clone());
-        assert_eq!(loaded.coldstart.get(&7).copied(), Some(500));
-        assert_eq!(loaded.skiplist.get(&8).copied(), Some(9000));
-        assert_eq!(loaded.strikes.get(&9).unwrap().front().copied(), Some(123));
+        assert_eq!(loaded.coldstart.get("hk_a").copied(), Some(500));
+        assert_eq!(loaded.skiplist.get("hk_b").copied(), Some(9000));
+        assert_eq!(
+            loaded.strikes.get("hk_c").unwrap().front().copied(),
+            Some(123)
+        );
+        assert_eq!(loaded.last_seen.get("hk_a").copied(), Some(500));
+
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn legacy_state_discarded_on_load() {
+        let path = temp_path("legacy");
+        let legacy = serde_json::json!({
+            "skiplist": { "1": 9000 },
+            "strikes": { "2": [50] },
+            "coldstart": { "3": 100 },
+        });
+        std::fs::write(&path, legacy.to_string()).unwrap();
+        let loaded = RsvManager::new_with_persistence(path.clone());
+        assert!(loaded.skiplist.is_empty());
+        assert!(loaded.strikes.is_empty());
+        assert!(loaded.coldstart.is_empty());
 
         if let Some(parent) = path.parent() {
             let _ = std::fs::remove_dir_all(parent);
@@ -340,7 +390,49 @@ mod tests {
     #[test]
     fn should_sample_respects_budget() {
         let mut mgr = fresh();
-        mgr.sample_budget.insert((1, 0), 0);
-        assert!(!mgr.should_sample(1, 50, 360));
+        mgr.sample_budget.insert(("hk1".to_string(), 0), 0);
+        assert!(!mgr.should_sample("hk1", 50, 360));
+    }
+
+    #[test]
+    fn strikes_persist_across_uid_change_for_same_hotkey() {
+        let mut mgr = fresh();
+        let hotkey = "5HotkeyValueX";
+        for i in 0..(VERIFICATION_STRIKES_REQUIRED - 1) {
+            mgr.record_strike(hotkey, 100 + i as u64, 360);
+        }
+        let strikes_before = mgr.strikes.get(hotkey).unwrap().len();
+        assert_eq!(strikes_before, (VERIFICATION_STRIKES_REQUIRED - 1) as usize);
+
+        let triggered = mgr.record_strike(hotkey, 200, 360);
+        assert!(triggered);
+        assert!(mgr.is_skiplisted(hotkey, 200));
+
+        let other_hotkey = "5OtherHotkey";
+        let triggered_other = mgr.record_strike(other_hotkey, 200, 360);
+        assert!(!triggered_other);
+        assert!(!mgr.is_skiplisted(other_hotkey, 200));
+    }
+
+    #[test]
+    fn inactive_hotkey_pruned_after_window() {
+        let mut mgr = fresh();
+        mgr.observe("hk_active", 1000);
+        mgr.observe("hk_idle", 1000);
+        mgr.strikes
+            .entry("hk_idle".to_string())
+            .or_default()
+            .push_back(1000);
+
+        let later = 1000 + VERIFICATION_STRIKES_WINDOW_BLOCKS + 10;
+        mgr.observe("hk_active", later);
+
+        mgr.prune_expired(later, 360);
+
+        assert!(mgr.coldstart.contains_key("hk_active"));
+        assert!(mgr.last_seen.contains_key("hk_active"));
+        assert!(!mgr.coldstart.contains_key("hk_idle"));
+        assert!(!mgr.last_seen.contains_key("hk_idle"));
+        assert!(!mgr.strikes.contains_key("hk_idle"));
     }
 }

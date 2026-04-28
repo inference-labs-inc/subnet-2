@@ -226,8 +226,8 @@ impl ValidatorLoop {
 
         let uids = self.config.metagraph.uids();
         self.score_manager.sync_uids(&uids);
-        self.rsv.sync_uids(&uids);
-        self.rsv.prune_expired(self.current_block);
+        self.rsv
+            .prune_expired(self.current_block, self.blocks_per_tempo);
 
         let mut axon_count = 0usize;
         for n in &self.config.metagraph.neurons {
@@ -404,12 +404,19 @@ impl ValidatorLoop {
         let skiplisted: HashSet<u16> = uids
             .iter()
             .copied()
-            .filter(|&uid| self.rsv.is_skiplisted(uid, current_block))
+            .filter(|uid| {
+                self.uid_hotkeys
+                    .get(uid)
+                    .is_some_and(|hk| !hk.is_empty() && self.rsv.is_skiplisted(hk, current_block))
+            })
             .collect();
         let coldstart: HashSet<u16> = uids
             .iter()
             .copied()
-            .filter(|&uid| self.rsv.is_in_coldstart(uid, current_block))
+            .filter(|uid| match self.uid_hotkeys.get(uid) {
+                Some(hk) if !hk.is_empty() => self.rsv.is_in_coldstart(hk, current_block),
+                _ => false,
+            })
             .collect();
 
         let (weight_uids, weights) = self.score_manager.compute_throughput_weights(
