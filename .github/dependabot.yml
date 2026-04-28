@@ -5,15 +5,6 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 0
-    ignore:
-      # wasmtime 8.0.1 is pulled transitively via sc-executor-wasmtime
-      # (Substrate runtime host used by subxt). The validator and miner do
-      # not execute untrusted WebAssembly; the only WASM ever loaded is the
-      # bittensor chain runtime fetched from a trusted endpoint. Bumping
-      # wasmtime requires a coordinated Substrate upgrade. Mirrors the
-      # cargo-audit ignore entry in audit.toml.
-      - dependency-name: wasmtime
-      - dependency-name: wasmtime-*
 
   - package-ecosystem: github-actions
     directory: /

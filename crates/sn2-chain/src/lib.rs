@@ -2,6 +2,7 @@ pub mod attestation;
 pub mod auto_update;
 mod metagraph;
 mod registration;
+mod subxt_helpers;
 mod wallet;
 mod weights;
 
@@ -29,7 +30,7 @@ pub fn resolve_endpoint(network: &str, override_endpoint: Option<&str>) -> Strin
 pub fn is_rpc_disconnect(err: &anyhow::Error) -> bool {
     for cause in err.chain() {
         if let Some(subxt_err) = cause.downcast_ref::<subxt::Error>() {
-            return matches!(subxt_err, subxt::Error::Rpc(_));
+            return subxt_err.is_disconnected_will_reconnect();
         }
     }
     false

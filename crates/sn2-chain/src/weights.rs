@@ -7,6 +7,7 @@ use subxt::tx::Signer;
 use subxt::{OnlineClient, PolkadotConfig};
 use tracing::info;
 
+use crate::subxt_helpers::{at_current_block, fetch_typed, fetch_u128_or, netuid_keys, PALLET};
 use crate::wallet::Wallet;
 
 const BLOCK_TIME: f64 = 12.0;
@@ -25,67 +26,33 @@ impl WeightsSetter {
     }
 
     pub async fn query_tempo(&self, client: &OnlineClient<PolkadotConfig>) -> Result<u64> {
-        let query = subxt::dynamic::storage(
-            "SubtensorModule",
-            "Tempo",
-            vec![Value::from(self.netuid as u64)],
-        );
-        let storage = client.storage().at_latest().await?;
-        match storage.fetch(&query).await? {
-            Some(val) => Ok(val.to_value()?.as_u128().unwrap_or(360) as u64),
-            None => Ok(360),
-        }
+        let at_block = at_current_block(client).await?;
+        Ok(fetch_u128_or(&at_block, "Tempo", netuid_keys(self.netuid), 360).await? as u64)
     }
 
     pub async fn query_reveal_period(&self, client: &OnlineClient<PolkadotConfig>) -> Result<u64> {
-        let query = subxt::dynamic::storage(
-            "SubtensorModule",
-            "RevealPeriodEpochs",
-            vec![Value::from(self.netuid as u64)],
-        );
-        let storage = client.storage().at_latest().await?;
-        match storage.fetch(&query).await? {
-            Some(val) => Ok(val.to_value()?.as_u128().unwrap_or(1) as u64),
-            None => Ok(1),
-        }
+        let at_block = at_current_block(client).await?;
+        Ok(
+            fetch_u128_or(&at_block, "RevealPeriodEpochs", netuid_keys(self.netuid), 1).await?
+                as u64,
+        )
     }
 
     pub async fn current_block(&self, client: &OnlineClient<PolkadotConfig>) -> Result<u64> {
-        Ok(client.blocks().at_latest().await?.number() as u64)
+        Ok(at_current_block(client).await?.block_number())
     }
 
     pub async fn query_commit_params(
         &self,
         client: &OnlineClient<PolkadotConfig>,
     ) -> Result<(u64, u64, u64)> {
-        let block = client.blocks().at_latest().await?;
-        let current_block = block.number() as u64;
-        let storage = client.storage().at(block.reference());
-
-        let tempo_query = subxt::dynamic::storage(
-            "SubtensorModule",
-            "Tempo",
-            vec![Value::from(self.netuid as u64)],
-        );
-        let reveal_query = subxt::dynamic::storage(
-            "SubtensorModule",
-            "RevealPeriodEpochs",
-            vec![Value::from(self.netuid as u64)],
-        );
-
-        let (tempo_res, reveal_res) =
-            tokio::join!(storage.fetch(&tempo_query), storage.fetch(&reveal_query));
-
-        let tempo = match tempo_res? {
-            Some(val) => val.to_value()?.as_u128().unwrap_or(360) as u64,
-            None => 360,
-        };
-        let reveal_period = match reveal_res? {
-            Some(val) => val.to_value()?.as_u128().unwrap_or(1) as u64,
-            None => 1,
-        };
-
-        Ok((tempo, reveal_period, current_block))
+        let at_block = at_current_block(client).await?;
+        let keys = netuid_keys(self.netuid);
+        let (tempo, reveal_period) = tokio::try_join!(
+            fetch_u128_or(&at_block, "Tempo", keys.clone(), 360),
+            fetch_u128_or(&at_block, "RevealPeriodEpochs", keys, 1)
+        )?;
+        Ok((tempo as u64, reveal_period as u64, at_block.block_number()))
     }
 
     pub fn generate_timelocked_commit(
@@ -120,7 +87,7 @@ impl WeightsSetter {
         reveal_round: u64,
     ) -> Result<()> {
         let tx = subxt::dynamic::tx(
-            "SubtensorModule",
+            PALLET,
             "commit_timelocked_weights",
             vec![
                 Value::from(self.netuid as u64),
@@ -132,9 +99,10 @@ impl WeightsSetter {
 
         let signer = SubxtSr25519Signer::new(wallet)?;
 
+        let mut tx_client = client.tx().await.context("acquiring transactions client")?;
         let progress = tokio::time::timeout(
             TX_SUBMIT_TIMEOUT,
-            client.tx().sign_and_submit_then_watch_default(&tx, &signer),
+            tx_client.sign_and_submit_then_watch_default(&tx, &signer),
         )
         .await
         .context("commit_timelocked_weights submit timed out")?
@@ -161,25 +129,14 @@ impl WeightsSetter {
         client: &OnlineClient<PolkadotConfig>,
         uid: u16,
     ) -> Result<u64> {
-        let query = subxt::dynamic::storage(
-            "SubtensorModule",
-            "LastUpdate",
-            vec![Value::from(self.netuid as u64)],
-        );
-
-        let storage = client.storage().at_latest().await?;
-        let result = storage.fetch(&query).await?;
-
-        let last_update = match result {
-            Some(val) => {
-                let updates: Vec<u64> = val.as_type().context("decoding LastUpdate vec")?;
-                updates.get(uid as usize).copied().unwrap_or(0)
-            }
-            None => 0,
-        };
-
-        let block = client.blocks().at_latest().await?.number() as u64;
-        Ok(block.saturating_sub(last_update))
+        let at_block = at_current_block(client).await?;
+        let updates: Vec<u64> =
+            fetch_typed::<Vec<u64>>(&at_block, "LastUpdate", netuid_keys(self.netuid))
+                .await
+                .context("decoding LastUpdate vec")?
+                .unwrap_or_default();
+        let last_update = updates.get(uid as usize).copied().unwrap_or(0);
+        Ok(at_block.block_number().saturating_sub(last_update))
     }
 }
 
@@ -208,11 +165,7 @@ impl SubxtSr25519Signer {
 
 impl Signer<PolkadotConfig> for SubxtSr25519Signer {
     fn account_id(&self) -> subxt::utils::AccountId32 {
-        self.account_id.clone()
-    }
-
-    fn address(&self) -> <PolkadotConfig as subxt::Config>::Address {
-        self.account_id.clone().into()
+        self.account_id
     }
 
     fn sign(&self, payload: &[u8]) -> <PolkadotConfig as subxt::Config>::Signature {

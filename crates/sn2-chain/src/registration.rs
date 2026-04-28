@@ -7,6 +7,7 @@ use subxt::ext::scale_value::At;
 use subxt::{OnlineClient, PolkadotConfig};
 use tracing::info;
 
+use crate::subxt_helpers::{at_current_block, fetch_value, netuid_hotkey_keys, PALLET};
 use crate::wallet::Wallet;
 
 pub struct Registration {
@@ -41,17 +42,14 @@ impl Registration {
         };
 
         let hotkey_bytes = wallet.hotkey_public_bytes()?;
-        let storage = client.storage().at_latest().await?;
-        let query = subxt::dynamic::storage(
-            "SubtensorModule",
+        let at_block = at_current_block(client).await?;
+        if let Ok(Some(v)) = fetch_value(
+            &at_block,
             "Axons",
-            vec![
-                Value::from(self.netuid as u64),
-                Value::from_bytes(hotkey_bytes),
-            ],
-        );
-        if let Some(val) = storage.fetch(&query).await? {
-            let v = val.to_value()?;
+            netuid_hotkey_keys(self.netuid, &hotkey_bytes),
+        )
+        .await
+        {
             let chain_ip = v.at("ip").and_then(|v| v.as_u128()).unwrap_or(0) as u64;
             let chain_port = v.at("port").and_then(|v| v.as_u128()).unwrap_or(0) as u16;
             let chain_protocol = v.at("protocol").and_then(|v| v.as_u128()).unwrap_or(0) as u8;
@@ -63,7 +61,7 @@ impl Registration {
         }
 
         let tx = subxt::dynamic::tx(
-            "SubtensorModule",
+            PALLET,
             "serve_axon",
             vec![
                 Value::from(self.netuid as u64),
@@ -79,8 +77,8 @@ impl Registration {
 
         let signer = crate::weights::SubxtSr25519Signer::new(wallet)?;
 
-        let result = client
-            .tx()
+        let mut tx_client = client.tx().await.context("acquiring transactions client")?;
+        let result = tx_client
             .sign_and_submit_then_watch_default(&tx, &signer)
             .await
             .context("submitting serve_axon")?
