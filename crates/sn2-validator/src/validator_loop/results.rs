@@ -337,6 +337,20 @@ impl ValidatorLoop {
     ) {
         warn!(uid = uid, rtype = %request_type, retry = retry_count, error = reason, "miner query failed");
 
+        if reason.starts_with("verification failed")
+            && matches!(
+                request_type,
+                RequestType::ProofOfWeights | RequestType::Rwr | RequestType::DSlice
+            )
+        {
+            let triggered = self
+                .rsv
+                .record_strike(uid, self.current_block, self.blocks_per_tempo);
+            if triggered {
+                info!(uid, "rsv: skiplist triggered via failure path");
+            }
+        }
+
         self.performance_tracker.record_reschedule(uid);
 
         let elapsed = 0.0;

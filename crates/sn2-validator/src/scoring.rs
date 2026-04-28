@@ -128,10 +128,15 @@ impl ScoreManager {
         snap: &HashMap<u16, (f64, usize, usize)>,
         owner_uid: Option<u16>,
         ip_regions: &HashMap<u16, String>,
+        skiplisted: &HashSet<u16>,
+        coldstart: &HashSet<u16>,
     ) -> (Vec<u16>, Vec<u16>) {
         let mut raw_weights: Vec<f64> = uids
             .iter()
             .map(|&uid| {
+                if skiplisted.contains(&uid) || coldstart.contains(&uid) {
+                    return 0.0;
+                }
                 let (rate, cap, count) = snap.get(&uid).copied().unwrap_or((0.0, 1, 0));
                 if count >= PERFORMANCE_MIN_SAMPLES {
                     let throughput = rate * cap as f64;
@@ -303,6 +308,10 @@ mod tests {
         HashMap::new()
     }
 
+    fn empty_set() -> HashSet<u16> {
+        HashSet::new()
+    }
+
     fn regions_from(pairs: &[(u16, &str)]) -> HashMap<u16, String> {
         pairs.iter().map(|&(uid, r)| (uid, r.to_string())).collect()
     }
@@ -313,8 +322,14 @@ mod tests {
         let mut snap = HashMap::new();
         snap.insert(1u16, (10.0, 2, PERFORMANCE_MIN_SAMPLES));
         snap.insert(2u16, (5.0, 2, PERFORMANCE_MIN_SAMPLES));
-        let (uids, weights) =
-            mgr.compute_throughput_weights(&[1, 2], &snap, None, &empty_regions());
+        let (uids, weights) = mgr.compute_throughput_weights(
+            &[1, 2],
+            &snap,
+            None,
+            &empty_regions(),
+            &empty_set(),
+            &empty_set(),
+        );
         assert_eq!(uids, vec![1, 2]);
         let total: u32 = weights.iter().map(|&w| w as u32).sum();
         assert!(total > 0);
@@ -328,10 +343,22 @@ mod tests {
         snap.insert(1u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
         snap.insert(2u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
         snap.insert(3u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
-        let (_, weights_no_owner) =
-            mgr.compute_throughput_weights(&[1, 2, 3], &snap, None, &empty_regions());
-        let (_, weights_with_owner) =
-            mgr.compute_throughput_weights(&[1, 2, 3], &snap, Some(1), &empty_regions());
+        let (_, weights_no_owner) = mgr.compute_throughput_weights(
+            &[1, 2, 3],
+            &snap,
+            None,
+            &empty_regions(),
+            &empty_set(),
+            &empty_set(),
+        );
+        let (_, weights_with_owner) = mgr.compute_throughput_weights(
+            &[1, 2, 3],
+            &snap,
+            Some(1),
+            &empty_regions(),
+            &empty_set(),
+            &empty_set(),
+        );
         assert!(weights_with_owner[0] > weights_no_owner[0]);
         let owner_ratio = weights_with_owner[0] as f64 / u16::MAX as f64;
         assert!((owner_ratio - 0.8).abs() < 0.01);
@@ -343,7 +370,14 @@ mod tests {
         let mut snap = HashMap::new();
         snap.insert(1u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES - 1));
         snap.insert(2u16, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
-        let (_, weights) = mgr.compute_throughput_weights(&[1, 2], &snap, None, &empty_regions());
+        let (_, weights) = mgr.compute_throughput_weights(
+            &[1, 2],
+            &snap,
+            None,
+            &empty_regions(),
+            &empty_set(),
+            &empty_set(),
+        );
         assert_eq!(weights[0], 0);
         assert!(weights[1] > 0);
     }
@@ -366,7 +400,14 @@ mod tests {
             (6, "50.0"),
             (7, "60.0"),
         ]);
-        let (_, weights) = mgr.compute_throughput_weights(&uids, &snap, None, &regions);
+        let (_, weights) = mgr.compute_throughput_weights(
+            &uids,
+            &snap,
+            None,
+            &regions,
+            &empty_set(),
+            &empty_set(),
+        );
         let region_10_weights: Vec<u16> = vec![weights[0], weights[1], weights[2]];
         let nonzero = region_10_weights.iter().filter(|&&w| w > 0).count();
         assert_eq!(nonzero, 2);
@@ -395,7 +436,14 @@ mod tests {
             (6, "40.0"),
             (7, "50.0"),
         ]);
-        let (_, weights) = mgr.compute_throughput_weights(&uids, &snap, None, &regions);
+        let (_, weights) = mgr.compute_throughput_weights(
+            &uids,
+            &snap,
+            None,
+            &regions,
+            &empty_set(),
+            &empty_set(),
+        );
         assert!(weights[0] > 0, "top performer in region should keep weight");
         assert!(
             weights[2] > 0,
@@ -420,9 +468,22 @@ mod tests {
             snap.insert(uid, (10.0, 1, PERFORMANCE_MIN_SAMPLES));
         }
         let regions = regions_from(&[(0, "10.0"), (1, "20.0"), (2, "30.0"), (3, "40.0")]);
-        let (_, weights_capped) = mgr.compute_throughput_weights(&uids, &snap, None, &regions);
-        let (_, weights_uncapped) =
-            mgr.compute_throughput_weights(&uids, &snap, None, &empty_regions());
+        let (_, weights_capped) = mgr.compute_throughput_weights(
+            &uids,
+            &snap,
+            None,
+            &regions,
+            &empty_set(),
+            &empty_set(),
+        );
+        let (_, weights_uncapped) = mgr.compute_throughput_weights(
+            &uids,
+            &snap,
+            None,
+            &empty_regions(),
+            &empty_set(),
+            &empty_set(),
+        );
         assert_eq!(weights_capped, weights_uncapped);
     }
 

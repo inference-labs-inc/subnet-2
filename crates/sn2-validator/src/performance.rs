@@ -1,39 +1,66 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
-    CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP, CAPACITY_RAMP_THRESHOLD, CAPACITY_WINDOW_SIZE,
-    CIRCUIT_TIMEOUT_SECONDS, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY,
-    PERFORMANCE_SCORING_PERCENTILE, PERFORMANCE_WINDOW_SIZE,
+    BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP, CAPACITY_RAMP_THRESHOLD,
+    CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS, PERFORMANCE_MIN_SAMPLES,
+    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_SCORING_PERCENTILE, VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::warn;
 
+type WindowEntry = (Instant, bool, f64);
+
 pub struct PerformanceTracker {
-    windows: HashMap<u16, VecDeque<(bool, f64)>>,
+    windows: HashMap<u16, VecDeque<WindowEntry>>,
     adaptive_caps: HashMap<u16, usize>,
     at_cap_results: HashMap<u16, VecDeque<bool>>,
-    window_size: usize,
     persistence_path: Option<PathBuf>,
+}
+
+fn window_ttl() -> Duration {
+    Duration::from_secs(VERIFICATION_WINDOW_BLOCKS * BLOCK_TIME_SECS)
+}
+
+fn evict_expired(window: &mut VecDeque<WindowEntry>) {
+    let ttl = window_ttl();
+    while let Some((ts, _, _)) = window.front() {
+        if ts.elapsed() > ttl {
+            window.pop_front();
+        } else {
+            break;
+        }
+    }
 }
 
 impl PerformanceTracker {
     pub fn new_with_persistence(path: PathBuf) -> Self {
-        Self {
+        let mut tracker = Self {
             windows: HashMap::new(),
             adaptive_caps: HashMap::new(),
             at_cap_results: HashMap::new(),
-            window_size: PERFORMANCE_WINDOW_SIZE,
             persistence_path: Some(path),
-        }
+        };
+        tracker.load();
+        tracker
     }
 
     pub fn record(&mut self, uid: u16, success: bool, response_time: f64, was_at_capacity: bool) {
+        self.record_with_time(uid, success, response_time, was_at_capacity, Instant::now());
+    }
+
+    pub fn record_with_time(
+        &mut self,
+        uid: u16,
+        success: bool,
+        response_time: f64,
+        was_at_capacity: bool,
+        now: Instant,
+    ) {
         let window = self.windows.entry(uid).or_default();
-        window.push_back((success, response_time));
-        if window.len() > self.window_size {
-            window.pop_front();
-        }
+        window.push_back((now, success, response_time));
+        evict_expired(window);
 
         if was_at_capacity {
             let results = self.at_cap_results.entry(uid).or_default();
@@ -47,17 +74,15 @@ impl PerformanceTracker {
 
     pub fn record_reschedule(&mut self, uid: u16) {
         let window = self.windows.entry(uid).or_default();
-        window.push_back((false, PERFORMANCE_RESCHEDULE_PENALTY));
-        if window.len() > self.window_size {
-            window.pop_front();
-        }
+        window.push_back((Instant::now(), false, PERFORMANCE_RESCHEDULE_PENALTY));
+        evict_expired(window);
     }
 
     pub fn adaptive_timeout(&self) -> f64 {
         let times: Vec<f64> = self
             .windows
             .values()
-            .flat_map(|w| w.iter().filter(|(s, _)| *s).map(|(_, t)| *t))
+            .flat_map(|w| w.iter().filter(|(_, s, _)| *s).map(|(_, _, t)| *t))
             .collect();
 
         if times.len() < ADAPTIVE_TIMEOUT_MIN_SAMPLES {
@@ -93,11 +118,21 @@ impl PerformanceTracker {
             None => return,
         };
 
+        let now_instant = Instant::now();
+        let now_secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(d) => d.as_secs(),
+            Err(_) => 0,
+        };
+
         let mut windows_json = serde_json::Map::new();
         for (uid, window) in &self.windows {
             let entries: Vec<serde_json::Value> = window
                 .iter()
-                .map(|(success, time)| serde_json::json!([*success, *time]))
+                .map(|(ts, success, time)| {
+                    let elapsed = now_instant.saturating_duration_since(*ts).as_secs();
+                    let abs_secs = now_secs.saturating_sub(elapsed);
+                    serde_json::json!([abs_secs, *success, *time])
+                })
                 .collect();
             windows_json.insert(uid.to_string(), serde_json::Value::Array(entries));
         }
@@ -125,6 +160,99 @@ impl PerformanceTracker {
             }
             Err(e) => {
                 warn!(error = %e, "serializing performance tracker");
+            }
+        }
+    }
+
+    fn load(&mut self) {
+        let path = match &self.persistence_path {
+            Some(p) => p,
+            None => return,
+        };
+        let raw = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "performance tracker load: parse failed, starting fresh");
+                return;
+            }
+        };
+
+        let now_instant = Instant::now();
+        let now_secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(d) => d.as_secs(),
+            Err(_) => return,
+        };
+        let ttl_secs = window_ttl().as_secs();
+
+        if let Some(map) = parsed.get("windows").and_then(|v| v.as_object()) {
+            for (uid_str, entries) in map {
+                let uid: u16 = match uid_str.parse() {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                let arr = match entries.as_array() {
+                    Some(a) => a,
+                    None => continue,
+                };
+                let mut deque: VecDeque<WindowEntry> = VecDeque::new();
+                for entry in arr {
+                    let triple = match entry.as_array() {
+                        Some(t) if t.len() == 3 => t,
+                        _ => continue,
+                    };
+                    let abs_secs = match triple[0].as_u64() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let success = match triple[1].as_bool() {
+                        Some(b) => b,
+                        None => continue,
+                    };
+                    let rt = match triple[2].as_f64() {
+                        Some(f) => f,
+                        None => continue,
+                    };
+                    if now_secs.saturating_sub(abs_secs) > ttl_secs {
+                        continue;
+                    }
+                    let elapsed = now_secs.saturating_sub(abs_secs);
+                    let ts = now_instant
+                        .checked_sub(Duration::from_secs(elapsed))
+                        .unwrap_or(now_instant);
+                    deque.push_back((ts, success, rt));
+                }
+                if !deque.is_empty() {
+                    self.windows.insert(uid, deque);
+                }
+            }
+        }
+
+        if let Some(map) = parsed.get("capacities").and_then(|v| v.as_object()) {
+            for (uid_str, entry) in map {
+                let uid: u16 = match uid_str.parse() {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                let arr = match entry.as_array() {
+                    Some(a) if a.len() == 2 => a,
+                    _ => continue,
+                };
+                let cap = match arr[0].as_u64() {
+                    Some(c) => c as usize,
+                    None => continue,
+                };
+                let results: VecDeque<bool> = arr[1]
+                    .as_array()
+                    .map(|v| v.iter().filter_map(|b| b.as_bool()).collect())
+                    .unwrap_or_default();
+                self.adaptive_caps.insert(uid, cap);
+                if !results.is_empty() {
+                    self.at_cap_results.insert(uid, results);
+                }
             }
         }
     }
@@ -157,7 +285,7 @@ impl PerformanceTracker {
         let mut times: Vec<f64> = self
             .windows
             .values()
-            .flat_map(|w| w.iter().filter(|(s, _)| *s).map(|(_, t)| *t))
+            .flat_map(|w| w.iter().filter(|(_, s, _)| *s).map(|(_, _, t)| *t))
             .collect();
 
         if times.len() < PERFORMANCE_MIN_SAMPLES {
@@ -170,16 +298,15 @@ impl PerformanceTracker {
         times[idx].max(1.0)
     }
 
-    fn uid_rate(w: &VecDeque<(bool, f64)>, reference: f64) -> f64 {
+    fn uid_rate(w: &VecDeque<WindowEntry>, reference: f64) -> f64 {
         if w.is_empty() {
             return 0.0;
         }
         let mut total = 0.0;
-        for &(success, rt) in w {
+        for &(_, success, rt) in w {
             if rt == PERFORMANCE_RESCHEDULE_PENALTY {
                 total += PERFORMANCE_RESCHEDULE_PENALTY;
             } else if !success {
-                // score = 0.0 for failures
             } else if rt <= 0.0 {
                 total += 2.0;
             } else {
@@ -228,7 +355,6 @@ mod tests {
             windows: HashMap::new(),
             adaptive_caps: HashMap::new(),
             at_cap_results: HashMap::new(),
-            window_size: PERFORMANCE_WINDOW_SIZE,
             persistence_path: None,
         }
     }
@@ -253,7 +379,7 @@ mod tests {
         tracker.record_reschedule(1);
         let window = tracker.windows.get(&1).unwrap();
         assert_eq!(window.len(), 1);
-        let (success, time) = window[0];
+        let (_, success, time) = window[0];
         assert!(!success);
         assert_eq!(time, PERFORMANCE_RESCHEDULE_PENALTY);
     }
@@ -306,5 +432,19 @@ mod tests {
         tracker.record(1, true, 5.0, false);
         let caps = tracker.miner_capacities();
         assert_eq!(caps.get(&1).copied().unwrap_or(0), 1);
+    }
+
+    #[test]
+    fn record_with_time_evicts_stale_entries() {
+        let mut tracker = test_tracker();
+        let now = Instant::now();
+        let stale = now
+            .checked_sub(window_ttl() + Duration::from_secs(60))
+            .expect("Instant arithmetic");
+        tracker.record_with_time(1, true, 5.0, false, stale);
+        tracker.record_with_time(1, true, 6.0, false, now);
+        let window = tracker.windows.get(&1).unwrap();
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].2, 6.0);
     }
 }

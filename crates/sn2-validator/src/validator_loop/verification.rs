@@ -32,6 +32,11 @@ impl ValidatorLoop {
 
     fn spawn_verification(&mut self, mut result: TaskResult) {
         let guard_hash = result.guard_hash.clone();
+        let uid = result.uid;
+        let sample = matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_content.is_some())
+            && self
+                .rsv
+                .should_sample(uid, self.current_block, self.blocks_per_tempo);
         let handle = match result.outcome {
             TaskOutcome::Success(ref mut response) if response.proof_content.is_some() => {
                 let mut response = match std::mem::replace(
@@ -41,19 +46,31 @@ impl ValidatorLoop {
                     TaskOutcome::Success(r) => r,
                     _ => unreachable!(),
                 };
-                let processor = ResponseProcessor::new();
-                self.verify_tasks.spawn(async move {
-                    let verify_task_id = tokio::task::id();
-                    let verified =
-                        matches!(processor.verify_response(&mut response).await, Ok(true));
-                    response.verification_result = verified;
+                if !sample {
+                    response.verification_result = true;
                     result.outcome = TaskOutcome::Success(response);
-                    VerifyResult {
-                        verify_task_id,
-                        task_result: result,
-                        verified,
-                    }
-                })
+                    self.verify_tasks.spawn(async move {
+                        VerifyResult {
+                            verify_task_id: tokio::task::id(),
+                            task_result: result,
+                            verified: true,
+                        }
+                    })
+                } else {
+                    let processor = ResponseProcessor::new();
+                    self.verify_tasks.spawn(async move {
+                        let verify_task_id = tokio::task::id();
+                        let verified =
+                            matches!(processor.verify_response(&mut response).await, Ok(true));
+                        response.verification_result = verified;
+                        result.outcome = TaskOutcome::Success(response);
+                        VerifyResult {
+                            verify_task_id,
+                            task_result: result,
+                            verified,
+                        }
+                    })
+                }
             }
             _ => self.verify_tasks.spawn(async move {
                 VerifyResult {
@@ -74,6 +91,7 @@ impl ValidatorLoop {
         let result = vr.task_result;
         let verified = vr.verified;
         let uid = result.uid;
+        self.rsv.observe(uid, self.current_block);
         let was_at_capacity = result.was_at_capacity;
         let request_type = result.request_type;
         let run_uid = result.run_uid.clone();

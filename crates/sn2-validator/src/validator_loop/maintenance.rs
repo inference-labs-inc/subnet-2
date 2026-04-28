@@ -80,6 +80,7 @@ impl ValidatorLoop {
 
         if now.duration_since(self.timings.perf_save) > Duration::from_secs(300) {
             self.performance_tracker.save();
+            self.rsv.save();
             self.timings.perf_save = now;
         }
 
@@ -225,6 +226,8 @@ impl ValidatorLoop {
 
         let uids = self.config.metagraph.uids();
         self.score_manager.sync_uids(&uids);
+        self.rsv.sync_uids(&uids);
+        self.rsv.prune_expired(self.current_block);
 
         let mut axon_count = 0usize;
         for n in &self.config.metagraph.neurons {
@@ -388,9 +391,35 @@ impl ValidatorLoop {
             .map(|n| (n.uid, crate::scoring::ip_region(&n.axon_ip)))
             .collect();
 
-        let (weight_uids, weights) =
-            self.score_manager
-                .compute_throughput_weights(&uids, &snap, owner_uid, &ip_regions);
+        let (tempo, reveal_period, current_block) = self
+            .weights_setter
+            .query_commit_params(chain_client)
+            .await?;
+
+        self.current_block = current_block;
+        if tempo > 0 {
+            self.blocks_per_tempo = tempo;
+        }
+
+        let skiplisted: HashSet<u16> = uids
+            .iter()
+            .copied()
+            .filter(|&uid| self.rsv.is_skiplisted(uid, current_block))
+            .collect();
+        let coldstart: HashSet<u16> = uids
+            .iter()
+            .copied()
+            .filter(|&uid| self.rsv.is_in_coldstart(uid, current_block))
+            .collect();
+
+        let (weight_uids, weights) = self.score_manager.compute_throughput_weights(
+            &uids,
+            &snap,
+            owner_uid,
+            &ip_regions,
+            &skiplisted,
+            &coldstart,
+        );
 
         if weights.iter().all(|&w| w == 0) {
             info!("no weights to set, skipping");
@@ -399,11 +428,6 @@ impl ValidatorLoop {
 
         let version_key = WEIGHTS_VERSION as u64;
         let hotkey_bytes = wallet.hotkey_public_bytes()?.to_vec();
-
-        let (tempo, reveal_period, current_block) = self
-            .weights_setter
-            .query_commit_params(chain_client)
-            .await?;
 
         let (ct_bytes, reveal_round) = self.weights_setter.generate_timelocked_commit(
             tempo,

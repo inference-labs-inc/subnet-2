@@ -11,6 +11,7 @@ mod proof_uploader;
 mod relay;
 mod request_pipeline;
 mod response_processor;
+mod rsv;
 mod scoring;
 mod stats_reporter;
 mod tensor;
