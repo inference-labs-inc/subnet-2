@@ -6,6 +6,8 @@ use base64::Engine;
 use sn2_chain::Wallet;
 use sn2_types::{MinerResponse, DEFAULT_API_URL, SOFTWARE_VERSION};
 use tracing::{info, warn};
+
+use crate::performance::{CapDirection, CapEvent};
 pub(crate) const STATS_FLUSH_INTERVAL_SECS: u64 = 60;
 const REQUEST_TIMEOUT_SECS: u64 = 5;
 
@@ -13,6 +15,7 @@ pub(crate) enum FlushOffset {
     ResponseLog = 0,
     Health = 20,
     DsperseEvents = 40,
+    Capacity = 50,
 }
 const MAX_RETRIES: u32 = 3;
 const BACKOFF_BASE_MS: u64 = 500;
@@ -26,6 +29,7 @@ pub struct StatsReporter {
     last_response_log: Instant,
     health_samples: Vec<HealthSample>,
     last_health_flush: Instant,
+    last_capacity_flush: Instant,
     validator_uid: u16,
 }
 
@@ -63,6 +67,8 @@ impl StatsReporter {
             Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::ResponseLog as u64);
         let health_offset =
             Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::Health as u64);
+        let capacity_offset =
+            Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::Capacity as u64);
         Self {
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
@@ -74,6 +80,7 @@ impl StatsReporter {
             last_response_log: now - response_offset,
             health_samples: Vec::new(),
             last_health_flush: now - health_offset,
+            last_capacity_flush: now - capacity_offset,
             validator_uid,
         }
     }
@@ -195,6 +202,78 @@ impl StatsReporter {
         });
 
         self.spawn_post("/statistics/health/log/", body, |_| {});
+    }
+
+    pub fn flush_capacity(
+        &mut self,
+        block: u64,
+        snapshot: HashMap<u16, usize>,
+        events: Vec<CapEvent>,
+        uid_hotkeys: &HashMap<u16, String>,
+    ) {
+        let now = Instant::now();
+        if now.duration_since(self.last_capacity_flush)
+            < Duration::from_secs(STATS_FLUSH_INTERVAL_SECS)
+        {
+            return;
+        }
+        if snapshot.is_empty() && events.is_empty() {
+            self.last_capacity_flush = now;
+            return;
+        }
+        self.last_capacity_flush = now;
+
+        let snapshots_payload: Vec<serde_json::Value> = snapshot
+            .into_iter()
+            .map(|(uid, cap)| {
+                serde_json::json!({
+                    "miner_uid": uid,
+                    "miner_key": uid_hotkeys.get(&uid).cloned().unwrap_or_default(),
+                    "cap": cap,
+                })
+            })
+            .collect();
+
+        let events_payload: Vec<serde_json::Value> = events
+            .into_iter()
+            .map(|e| {
+                let direction = match e.direction {
+                    CapDirection::Ramp => "ramp",
+                    CapDirection::Backoff => "backoff",
+                };
+                let elapsed_ms = now.saturating_duration_since(e.at).as_millis() as u64;
+                serde_json::json!({
+                    "miner_uid": e.uid,
+                    "miner_key": uid_hotkeys.get(&e.uid).cloned().unwrap_or_default(),
+                    "direction": direction,
+                    "cap_from": e.cap_from,
+                    "cap_to": e.cap_to,
+                    "success_rate": e.success_rate,
+                    "elapsed_ms": elapsed_ms,
+                })
+            })
+            .collect();
+
+        let snapshot_count = snapshots_payload.len();
+        let event_count = events_payload.len();
+        let body = serde_json::json!({
+            "validator_key": self.wallet.hotkey_ss58(),
+            "validator_uid": self.validator_uid,
+            "block": block,
+            "snapshots": snapshots_payload,
+            "events": events_payload,
+            "software_version": SOFTWARE_VERSION,
+        });
+
+        self.spawn_post("/statistics/capacity/log/", body, move |ok| {
+            if ok {
+                info!(
+                    snapshots = snapshot_count,
+                    events = event_count,
+                    "submitted capacity stats"
+                );
+            }
+        });
     }
 
     pub fn report_dsperse_run(&self, report: DsperseRunReport) {

@@ -138,6 +138,14 @@ impl ValidatorLoop {
                 self.config.metagraph.n,
                 self.score_manager.scores_snapshot(),
             );
+            let cap_snapshot = self.performance_tracker.cap_snapshot();
+            let cap_events = self.performance_tracker.drain_cap_events();
+            reporter.flush_capacity(
+                self.current_block,
+                cap_snapshot,
+                cap_events,
+                &self.uid_hotkeys,
+            );
         }
 
         Ok(())

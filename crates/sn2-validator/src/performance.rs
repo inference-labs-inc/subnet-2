@@ -12,10 +12,29 @@ use tracing::warn;
 
 type WindowEntry = (Instant, bool, f64);
 
+const MAX_BUFFERED_CAP_EVENTS: usize = 4096;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapDirection {
+    Ramp,
+    Backoff,
+}
+
+#[derive(Clone, Debug)]
+pub struct CapEvent {
+    pub uid: u16,
+    pub direction: CapDirection,
+    pub cap_from: usize,
+    pub cap_to: usize,
+    pub success_rate: f64,
+    pub at: Instant,
+}
+
 pub struct PerformanceTracker {
     windows: HashMap<u16, VecDeque<WindowEntry>>,
     adaptive_caps: HashMap<u16, usize>,
     at_cap_results: HashMap<u16, VecDeque<bool>>,
+    cap_events: Vec<CapEvent>,
     persistence_path: Option<PathBuf>,
 }
 
@@ -40,6 +59,7 @@ impl PerformanceTracker {
             windows: HashMap::new(),
             adaptive_caps: HashMap::new(),
             at_cap_results: HashMap::new(),
+            cap_events: Vec::new(),
             persistence_path: Some(path),
         };
         tracker.load();
@@ -342,18 +362,46 @@ impl PerformanceTracker {
         };
 
         let current = self.adaptive_caps.entry(uid).or_insert(1);
+        let cap_from = *current;
+        let mut direction: Option<CapDirection> = None;
 
         if success_rate >= CAPACITY_RAMP_THRESHOLD {
             *current += 1;
+            direction = Some(CapDirection::Ramp);
             if let Some(r) = self.at_cap_results.get_mut(&uid) {
                 r.clear();
             }
         } else if success_rate < CAPACITY_BACKOFF_THRESHOLD && *current > 1 {
             *current -= 1;
+            direction = Some(CapDirection::Backoff);
             if let Some(r) = self.at_cap_results.get_mut(&uid) {
                 r.clear();
             }
         }
+
+        if let Some(direction) = direction {
+            let cap_to = *current;
+            self.cap_events.push(CapEvent {
+                uid,
+                direction,
+                cap_from,
+                cap_to,
+                success_rate,
+                at: Instant::now(),
+            });
+            if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
+                let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
+                self.cap_events.drain(0..drop);
+            }
+        }
+    }
+
+    pub fn cap_snapshot(&self) -> HashMap<u16, usize> {
+        self.adaptive_caps.clone()
+    }
+
+    pub fn drain_cap_events(&mut self) -> Vec<CapEvent> {
+        std::mem::take(&mut self.cap_events)
     }
 }
 
@@ -366,6 +414,7 @@ mod tests {
             windows: HashMap::new(),
             adaptive_caps: HashMap::new(),
             at_cap_results: HashMap::new(),
+            cap_events: Vec::new(),
             persistence_path: None,
         }
     }
@@ -457,5 +506,57 @@ mod tests {
         let window = tracker.windows.get(&1).unwrap();
         assert_eq!(window.len(), 1);
         assert_eq!(window[0].2, 6.0);
+    }
+
+    #[test]
+    fn cap_ramp_emits_event_with_from_to_and_rate() {
+        let mut tracker = test_tracker();
+        for _ in 0..CAPACITY_MIN_AT_CAP {
+            tracker.record(1, true, 1.0, true);
+        }
+        let events = tracker.drain_cap_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].direction, CapDirection::Ramp);
+        assert_eq!(events[0].cap_from, 1);
+        assert_eq!(events[0].cap_to, 2);
+        assert!((events[0].success_rate - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn cap_backoff_emits_event_when_already_above_one() {
+        let mut tracker = test_tracker();
+        for _ in 0..CAPACITY_MIN_AT_CAP {
+            tracker.record(1, true, 1.0, true);
+        }
+        tracker.cap_events.clear();
+        for _ in 0..CAPACITY_MIN_AT_CAP {
+            tracker.record(1, false, 1.0, true);
+        }
+        let events = tracker.drain_cap_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].direction, CapDirection::Backoff);
+        assert_eq!(events[0].cap_from, 2);
+        assert_eq!(events[0].cap_to, 1);
+    }
+
+    #[test]
+    fn drain_cap_events_clears_buffer() {
+        let mut tracker = test_tracker();
+        for _ in 0..CAPACITY_MIN_AT_CAP {
+            tracker.record(1, true, 1.0, true);
+        }
+        assert_eq!(tracker.drain_cap_events().len(), 1);
+        assert!(tracker.drain_cap_events().is_empty());
+    }
+
+    #[test]
+    fn cap_event_buffer_is_bounded() {
+        let mut tracker = test_tracker();
+        for _ in 0..(MAX_BUFFERED_CAP_EVENTS + 50) {
+            for _ in 0..CAPACITY_MIN_AT_CAP {
+                tracker.record(1, true, 1.0, true);
+            }
+        }
+        assert!(tracker.cap_events.len() <= MAX_BUFFERED_CAP_EVENTS);
     }
 }
