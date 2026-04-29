@@ -69,8 +69,9 @@ impl StatsReporter {
             Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::ResponseLog as u64);
         let health_offset =
             Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::Health as u64);
-        let capacity_offset =
-            Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::Capacity as u64);
+        let capacity_offset = Duration::from_secs(
+            STATS_FLUSH_INTERVAL_SECS.saturating_sub(FlushOffset::Capacity as u64),
+        );
         Self {
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
