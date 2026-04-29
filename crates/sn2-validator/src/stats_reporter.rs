@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use sn2_chain::Wallet;
 use sn2_types::{MinerResponse, DEFAULT_API_URL, SOFTWARE_VERSION};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::performance::{CapDirection, CapEvent};
 pub(crate) const STATS_FLUSH_INTERVAL_SECS: u64 = 60;
@@ -229,7 +229,11 @@ impl StatsReporter {
             // Caller drained the tracker but the rate-limit window has not
             // elapsed; persist the events so the next flush picks them up
             // instead of dropping a discrete state transition on the floor.
-            requeue_cap_events(&self.pending_cap_events, new_events);
+            requeue_cap_events(
+                &self.pending_cap_events,
+                new_events,
+                RequeueReason::RateLimited,
+            );
             return;
         }
 
@@ -304,7 +308,7 @@ impl StatsReporter {
                     "submitted capacity stats"
                 );
             } else {
-                requeue_cap_events(&pending, inflight);
+                requeue_cap_events(&pending, inflight, RequeueReason::PostFailure);
             }
         });
     }
@@ -375,7 +379,17 @@ impl StatsReporter {
     }
 }
 
-fn requeue_cap_events(pending: &Mutex<VecDeque<CapEvent>>, events: Vec<CapEvent>) {
+#[derive(Clone, Copy, Debug)]
+enum RequeueReason {
+    PostFailure,
+    RateLimited,
+}
+
+fn requeue_cap_events(
+    pending: &Mutex<VecDeque<CapEvent>>,
+    events: Vec<CapEvent>,
+    reason: RequeueReason,
+) {
     if events.is_empty() {
         return;
     }
@@ -393,11 +407,19 @@ fn requeue_cap_events(pending: &Mutex<VecDeque<CapEvent>>, events: Vec<CapEvent>
     while p.len() > PENDING_CAP_EVENTS_MAX {
         p.pop_front();
     }
-    warn!(
-        count,
-        pending = p.len(),
-        "cap event POST failed, re-queued for next flush"
-    );
+    let pending_len = p.len();
+    match reason {
+        RequeueReason::PostFailure => warn!(
+            count,
+            pending = pending_len,
+            "cap event POST failed, re-queued for next flush"
+        ),
+        RequeueReason::RateLimited => debug!(
+            count,
+            pending = pending_len,
+            "cap event flush deferred by rate limit, re-queued"
+        ),
+    }
 }
 
 pub(crate) async fn sign_and_post(
@@ -638,7 +660,7 @@ mod tests {
     fn requeue_preserves_order() {
         let pending = Mutex::new(VecDeque::new());
         let batch = vec![ev(1, "a"), ev(2, "b"), ev(3, "c")];
-        requeue_cap_events(&pending, batch);
+        requeue_cap_events(&pending, batch, RequeueReason::PostFailure);
         let p = pending.lock().unwrap();
         assert_eq!(p.len(), 3);
         assert_eq!(p[0].uid, 1);
@@ -649,8 +671,8 @@ mod tests {
     #[test]
     fn requeue_appends_so_older_failures_drain_first() {
         let pending = Mutex::new(VecDeque::new());
-        requeue_cap_events(&pending, vec![ev(10, "a")]);
-        requeue_cap_events(&pending, vec![ev(11, "b")]);
+        requeue_cap_events(&pending, vec![ev(10, "a")], RequeueReason::PostFailure);
+        requeue_cap_events(&pending, vec![ev(11, "b")], RequeueReason::PostFailure);
         let p = pending.lock().unwrap();
         assert_eq!(p[0].uid, 10, "earlier failure stays at the front");
         assert_eq!(p[1].uid, 11);
@@ -661,7 +683,7 @@ mod tests {
         let pending = Mutex::new(VecDeque::new());
         let total = PENDING_CAP_EVENTS_MAX + 50;
         let big: Vec<CapEvent> = (0..total).map(|i| ev(i as u16, "a")).collect();
-        requeue_cap_events(&pending, big);
+        requeue_cap_events(&pending, big, RequeueReason::PostFailure);
         let p = pending.lock().unwrap();
         assert_eq!(p.len(), PENDING_CAP_EVENTS_MAX);
         let actual: Vec<u16> = p.iter().map(|e| e.uid).collect();
@@ -677,7 +699,7 @@ mod tests {
     #[test]
     fn requeue_no_op_on_empty_input() {
         let pending = Mutex::new(VecDeque::new());
-        requeue_cap_events(&pending, Vec::new());
+        requeue_cap_events(&pending, Vec::new(), RequeueReason::PostFailure);
         assert!(pending.lock().unwrap().is_empty());
     }
 }
