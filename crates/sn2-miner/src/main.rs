@@ -3,6 +3,7 @@ mod dsperse;
 mod handlers;
 mod lightning_server;
 mod permit_resolver;
+mod self_probe;
 
 use std::sync::Arc;
 
@@ -22,6 +23,14 @@ async fn main() -> Result<()> {
     sn2_types::init_tracing(&cli.log_level);
 
     info!(version = sn2_types::SOFTWARE_VERSION, "sn2-miner");
+
+    if cli.self_probe && cli.loopback {
+        anyhow::bail!("--self-probe and --loopback are mutually exclusive");
+    }
+
+    if cli.self_probe {
+        return self_probe::run_self_probe(cli).await;
+    }
 
     if cli.loopback {
         return run_loopback(cli).await;

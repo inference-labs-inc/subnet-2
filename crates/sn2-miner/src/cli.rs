@@ -53,6 +53,39 @@ pub struct Cli {
     )]
     pub loopback: bool,
 
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Probe an axon (your own by default) using the same QUIC + sr25519 handshake the validator performs. Run from a host outside your miner's NAT for the most accurate result."
+    )]
+    pub self_probe: bool,
+
+    #[arg(
+        long,
+        help = "Probe target as <ip:port>. Defaults to --external-ip:--axon-port if set, otherwise required."
+    )]
+    pub probe_target: Option<String>,
+
+    #[arg(
+        long,
+        help = "ss58 hotkey of the probe target. Defaults to the wallet's own hotkey when probing your own axon."
+    )]
+    pub probe_target_hotkey: Option<String>,
+
+    #[arg(
+        long,
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u64).range(1..=120),
+        help = "Per-phase timeout in seconds for the self-probe."
+    )]
+    pub probe_timeout: u64,
+
+    #[arg(
+        long,
+        help = "Optional synapse name to exercise end-to-end. When omitted, the probe stops after the QUIC + handshake phase."
+    )]
+    pub probe_synapse: Option<String>,
+
     #[arg(long, value_delimiter = ',')]
     pub additional_circuits: Vec<String>,
 
