@@ -65,10 +65,12 @@ pub struct DsperseSliceReport {
 impl StatsReporter {
     pub fn new(wallet: Arc<Wallet>, api_base_url: Option<String>, validator_uid: u16) -> Self {
         let now = Instant::now();
-        let response_offset =
-            Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::ResponseLog as u64);
-        let health_offset =
-            Duration::from_secs(STATS_FLUSH_INTERVAL_SECS - FlushOffset::Health as u64);
+        let response_offset = Duration::from_secs(
+            STATS_FLUSH_INTERVAL_SECS.saturating_sub(FlushOffset::ResponseLog as u64),
+        );
+        let health_offset = Duration::from_secs(
+            STATS_FLUSH_INTERVAL_SECS.saturating_sub(FlushOffset::Health as u64),
+        );
         let capacity_offset = Duration::from_secs(
             STATS_FLUSH_INTERVAL_SECS.saturating_sub(FlushOffset::Capacity as u64),
         );
@@ -224,6 +226,10 @@ impl StatsReporter {
         if now.duration_since(self.last_capacity_flush)
             < Duration::from_secs(STATS_FLUSH_INTERVAL_SECS)
         {
+            // Caller drained the tracker but the rate-limit window has not
+            // elapsed; persist the events so the next flush picks them up
+            // instead of dropping a discrete state transition on the floor.
+            requeue_cap_events(&self.pending_cap_events, new_events);
             return;
         }
 
