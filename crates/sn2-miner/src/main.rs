@@ -1,5 +1,6 @@
 mod cli;
 mod dsperse;
+mod firewall;
 mod handlers;
 mod lightning_server;
 mod permit_resolver;
@@ -14,7 +15,7 @@ use tokio::sync::watch;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::cli::Cli;
+use crate::cli::{Cli, Command};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,6 +24,17 @@ async fn main() -> Result<()> {
     sn2_types::init_tracing(&cli.log_level);
 
     info!(version = sn2_types::SOFTWARE_VERSION, "sn2-miner");
+
+    if let Some(Command::Firewall { out }) = cli.command.clone() {
+        return firewall::emit_nftables(
+            cli.netuid,
+            &cli.network,
+            cli.subtensor_chain_endpoint.as_deref(),
+            cli.axon_port,
+            out,
+        )
+        .await;
+    }
 
     if cli.loopback {
         return run_loopback(cli).await;

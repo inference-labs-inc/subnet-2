@@ -1,8 +1,23 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Emit an nftables ruleset that drops UDP traffic to the QUIC port from any
+    /// source IP not currently registered as a validator in the cached metagraph.
+    /// Pipe stdout to `sudo nft -f -` to apply atomically.
+    Firewall {
+        /// Optional path to write the ruleset to instead of stdout.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "sn2-miner", about = "Subnet-2 Miner")]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     #[arg(long, default_value_t = sn2_types::DEFAULT_NETUID)]
     pub netuid: u16,
 
