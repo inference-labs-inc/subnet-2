@@ -886,7 +886,7 @@ dependencies = [
 [[package]]
 name = "btlightning"
 version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/btlightning.git?branch=introduce/metagraph-source-filter#3bbda2a578c79fae7d09e13c5f1d70f02c098ded"
+source = "git+https://github.com/inference-labs-inc/btlightning.git?rev=09b97120daacd7aecc4dc43089dd1ca8cb188f5e#09b97120daacd7aecc4dc43089dd1ca8cb188f5e"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
