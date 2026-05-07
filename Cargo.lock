@@ -885,9 +885,8 @@ dependencies = [
 
 [[package]]
 name = "btlightning"
-version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00ac1aa9bdefe28d67c4fed945f0ecd326660a22c1269f011f9cd5a616af9d41"
+version = "0.1.0"
+source = "git+https://github.com/inference-labs-inc/btlightning.git?branch=introduce/metagraph-source-filter#3bbda2a578c79fae7d09e13c5f1d70f02c098ded"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

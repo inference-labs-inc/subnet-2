@@ -3,6 +3,7 @@ mod dsperse;
 mod handlers;
 mod lightning_server;
 mod permit_resolver;
+mod source_resolver;
 
 use std::sync::Arc;
 
@@ -111,6 +112,14 @@ async fn main() -> Result<()> {
             metagraph.clone(),
         )))
     };
+    let source_resolver: Option<Box<dyn btlightning::SourceAddressResolver>> =
+        if cli.disable_blacklist {
+            None
+        } else {
+            Some(Box::new(source_resolver::MetagraphSourceResolver::new(
+                metagraph.clone(),
+            )))
+        };
     let quic_handle = {
         let handlers = handlers.clone();
         let hotkey = wallet.hotkey_ss58().to_string();
@@ -128,6 +137,7 @@ async fn main() -> Result<()> {
                 handler_timeout,
                 handlers,
                 permit_resolver,
+                source_resolver,
             )
             .await
         })
@@ -235,6 +245,7 @@ async fn run_loopback(cli: Cli) -> Result<()> {
                 port,
                 handler_timeout,
                 handlers,
+                None,
                 None,
             )
             .await
