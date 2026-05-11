@@ -163,7 +163,10 @@ pub struct ValidatorLoop {
     pub(super) rsv: RsvManager,
     pub(super) current_block: u64,
     pub(super) blocks_per_tempo: u64,
+    pub(super) consecutive_metagraph_failures: u32,
 }
+
+pub(super) const METAGRAPH_FAILURE_RECONNECT_THRESHOLD: u32 = 3;
 
 impl ValidatorLoop {
     pub async fn new(config: ValidatorConfig) -> Result<Self> {
@@ -363,6 +366,7 @@ impl ValidatorLoop {
             rsv,
             current_block: 0,
             blocks_per_tempo: 360,
+            consecutive_metagraph_failures: 0,
         })
     }
 
@@ -415,7 +419,7 @@ impl ValidatorLoop {
             tokio::select! {
                 _ = tick.tick() => {
                     if let Err(e) = self.step().await {
-                        error!(error = %e, "validator step error");
+                        error!(error = ?e, "validator step error");
                         tick.reset_after(Duration::from_secs(EXCEPTION_DELAY_SECONDS));
                     }
                 }
