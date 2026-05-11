@@ -42,7 +42,7 @@ runs:
 
     - name: Upload SARIF to GitHub Security tab
       if: steps.trivy.conclusion == 'success'
-      uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4.34.1
+      uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v4.35.4
       with:
         sarif_file: trivy-results.sarif
         category: ${{ inputs.category }}

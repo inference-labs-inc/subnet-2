@@ -1,5 +1,5 @@
 ARG SN2_PLATFORM=linux/amd64
-FROM --platform=$SN2_PLATFORM rust:1.91.0-bookworm@sha256:e187887ec511b3d93e45c0231d2f0fd59f1347526c58aa86343aa83c74f3e1a9 AS chef
+FROM --platform=$SN2_PLATFORM rust:1.95.0-bookworm@sha256:503651ea31e66ecb74623beabde781059a5978df1595a9e8ed03974d5fec1bf0 AS chef
 
 RUN cargo install cargo-chef --locked
 RUN apt-get update && apt-get install -y \
@@ -38,7 +38,7 @@ RUN CARGO_VERSION="${SN2_VERSION#v}" && \
     cargo build --release --locked --bin sn2-validator --bin sn2-miner
 
 ARG SN2_PLATFORM=linux/amd64
-FROM --platform=$SN2_PLATFORM debian:bookworm-20260223-slim@sha256:74d56e3931e0d5a1dd51f8c8a2466d21de84a271cd3b5a733b803aa91abf4421 AS runtime
+FROM --platform=$SN2_PLATFORM debian:bookworm-20260421-slim@sha256:f9c6a2fd2ddbc23e336b6257a5245e31f996953ef06cd13a59fa0a1df2d5c252 AS runtime
 
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     jq \
