@@ -51,29 +51,6 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
 
 RUN useradd -m -s /bin/bash subnet2
 
-ENV NVM_DIR=/opt/.nvm
-RUN mkdir -p /opt/.nvm /opt/.snarkjs && \
-    chown -R subnet2:subnet2 /opt/.nvm /opt/.snarkjs
-
-USER subnet2
-COPY --chown=subnet2:subnet2 docker/snarkjs/package.json /opt/.snarkjs/package.json
-COPY --chown=subnet2:subnet2 docker/snarkjs/package-lock.json /opt/.snarkjs/package-lock.json
-RUN curl -o /tmp/install_nvm.sh https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh && \
-    echo 'bdea8c52186c4dd12657e77e7515509cda5bf9fa5a2f0046bce749e62645076d /tmp/install_nvm.sh' | sha256sum --check && \
-    bash /tmp/install_nvm.sh && \
-    rm /tmp/install_nvm.sh && \
-    export NVM_DIR="$NVM_DIR" && \
-    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && \
-    nvm install 22 && \
-    nvm use 22 && \
-    npm install -g npm@11.6.2 && \
-    npm ci --prefix /opt/.snarkjs && \
-    mkdir -p ~/.local/bin && \
-    ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/node" /home/subnet2/.local/bin/node && \
-    ln -s "$NVM_DIR/versions/node/$(nvm version)/bin/npm" /home/subnet2/.local/bin/npm && \
-    ln -s /opt/.snarkjs/node_modules/.bin/snarkjs /home/subnet2/.local/bin/snarkjs
-ENV PATH="/home/subnet2/.local/bin:${PATH}"
-
 # Entrypoint elevates briefly to apply PUID remap, then execs `gosu subnet2`.
 # Override the entrypoint at your own risk; default invocation drops privileges.
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root

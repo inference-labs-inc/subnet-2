@@ -17,9 +17,3 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-
-  - package-ecosystem: npm
-    directory: /docker/snarkjs
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
