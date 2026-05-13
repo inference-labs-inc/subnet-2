@@ -306,15 +306,19 @@ impl ValidatorLoop {
             )
         };
 
-        let verification_concurrency = match std::thread::available_parallelism() {
-            Ok(n) => n.get(),
-            Err(e) => {
-                warn!(error = %e, fallback = 8, "CPU detection failed, using fallback verification concurrency");
-                8
-            }
-        };
+        let verification_concurrency = config.verification_concurrency.unwrap_or_else(|| {
+            let cores = match std::thread::available_parallelism() {
+                Ok(n) => n.get(),
+                Err(e) => {
+                    warn!(error = %e, fallback = 8, "CPU detection failed, using fallback core count");
+                    8
+                }
+            };
+            cores.saturating_mul(2)
+        });
         info!(
             verification_concurrency,
+            override_set = config.verification_concurrency.is_some(),
             "initialized verification concurrency"
         );
 
