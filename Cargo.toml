@@ -35,6 +35,8 @@ clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "json", "stream"], default-features = false }
 axum = "0.7"
 rmp-serde = "1"
+rmpv = "1"
+bytes = "1"
 hex = "0.4"
 sp-core = "34"
 bittensor_wallet = { version = "4.0.1", package = "btwallet", default-features = false }

@@ -1,24 +1,18 @@
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use bytes::Bytes;
 
 use crate::{Circuit, ProofSystem, RequestType, RunSource};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Request {
-    pub circuit: Circuit,
-    pub inputs: serde_json::Value,
-    pub request_type: RequestType,
-    pub retry_count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DSliceRequest {
-    pub circuit: Circuit,
-    pub inputs: serde_json::Value,
+    pub circuit: Arc<Circuit>,
+    pub inputs: Bytes,
     pub request_type: RequestType,
     pub proof_system: ProofSystem,
     pub slice_num: String,
     pub run_uid: String,
-    pub outputs: Option<serde_json::Value>,
+    pub outputs: Option<Bytes>,
     pub is_tile: bool,
     pub tile_idx: Option<u32>,
     pub task_id: Option<String>,

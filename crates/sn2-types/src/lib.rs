@@ -17,6 +17,9 @@ pub use miner_response::*;
 pub use persistence::*;
 pub use protocol::*;
 pub use request::*;
+pub use tensor_codec::{
+    decode_msgpack_to_json, decode_msgpack_value, encode_msgpack_value, input_data_payload,
+};
 
 pub fn init_tracing(log_level: &str) {
     tracing_subscriber::fmt()

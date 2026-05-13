@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -97,7 +98,7 @@ impl ValidatorLoop {
             .ensure_circuit(&submission.circuit_id)
             .await
         {
-            Ok(c) => c,
+            Ok(c) => std::sync::Arc::new(c),
             Err(e) => {
                 warn!(circuit = %submission.circuit_id, error = %e, "unknown circuit in dsperse submission");
                 self.send_submit_error(submission.request_id, &format!("unknown circuit: {e}"))
@@ -420,7 +421,7 @@ impl ValidatorLoop {
     pub(super) async fn enqueue_all_dslices(
         &mut self,
         run_uid: &str,
-        circuit: &Circuit,
+        circuit: &Arc<Circuit>,
         run_source: RunSource,
         prove_pct: f64,
     ) {
@@ -546,12 +547,10 @@ impl ValidatorLoop {
                     }
                 }
             } else {
-                let inputs_json = serde_json::json!({
-                    "input_data": crate::tensor::arrayd_to_json(&input_tensor)
-                });
+                let inputs_bytes = crate::tensor::input_data_payload(&input_tensor);
                 staged.stage_request(DSliceRequest {
-                    circuit: circuit.clone(),
-                    inputs: inputs_json,
+                    circuit: Arc::clone(circuit),
+                    inputs: inputs_bytes,
                     request_type: RequestType::DSlice,
                     proof_system: circuit.proof_system,
                     slice_num: work.slice_id.clone(),
@@ -588,7 +587,7 @@ impl ValidatorLoop {
         staged: &mut StagedWork,
         run_manager: &mut crate::incremental_runner::IncrementalRunManager,
         run_uid: &str,
-        circuit: &Circuit,
+        circuit: &Arc<Circuit>,
         slice_id: &str,
         circuit_path: Option<&str>,
         component_sha: Option<&str>,
@@ -645,18 +644,15 @@ impl ValidatorLoop {
             return None;
         }
 
-        let mut prepared: Vec<(usize, serde_json::Value)> =
-            Vec::with_capacity(sampled_indices.len());
+        let mut prepared: Vec<(usize, bytes::Bytes)> = Vec::with_capacity(sampled_indices.len());
         match tiles_payload {
             TiledPayload::SingleInput(tiles) => {
                 for (idx, tile) in tiles.into_iter().enumerate() {
                     if !sampled_indices.contains(&idx) {
                         continue;
                     }
-                    let tile_json = serde_json::json!({
-                        "input_data": crate::tensor::arrayd_to_json(&tile.into_dyn())
-                    });
-                    prepared.push((idx, tile_json));
+                    let tile_bytes = crate::tensor::input_data_payload(&tile.into_dyn());
+                    prepared.push((idx, tile_bytes));
                 }
             }
             TiledPayload::MultiInput(per_tile) => {
@@ -679,10 +675,8 @@ impl ValidatorLoop {
                                 continue;
                             }
                         };
-                    let tile_json = serde_json::json!({
-                        "input_data": crate::tensor::arrayd_to_json(&tile_arr)
-                    });
-                    prepared.push((idx, tile_json));
+                    let tile_bytes = crate::tensor::input_data_payload(&tile_arr);
+                    prepared.push((idx, tile_bytes));
                 }
             }
         }
@@ -704,12 +698,12 @@ impl ValidatorLoop {
         }
 
         let staged_count = prepared.len();
-        for (idx, tile_json) in prepared {
+        for (idx, tile_bytes) in prepared {
             staged.stage_request(Self::build_tile_request(
                 circuit,
                 slice_id,
                 run_uid,
-                tile_json,
+                tile_bytes,
                 idx as u32,
                 run_source,
                 circuit_path,
@@ -722,18 +716,18 @@ impl ValidatorLoop {
 
     #[allow(clippy::too_many_arguments)]
     fn build_tile_request(
-        circuit: &Circuit,
+        circuit: &Arc<Circuit>,
         slice_id: &str,
         run_uid: &str,
-        tile_json: serde_json::Value,
+        tile_bytes: bytes::Bytes,
         tile_idx: u32,
         run_source: RunSource,
         circuit_path: Option<&str>,
         component_sha: Option<&str>,
     ) -> DSliceRequest {
         DSliceRequest {
-            circuit: circuit.clone(),
-            inputs: tile_json,
+            circuit: Arc::clone(circuit),
+            inputs: tile_bytes,
             request_type: RequestType::DSlice,
             proof_system: circuit.proof_system,
             slice_num: slice_id.to_string(),
@@ -947,7 +941,7 @@ impl ValidatorLoop {
             });
         }
 
-        let circuit = circuit.clone();
+        let circuit = Arc::new(circuit.clone());
         self.enqueue_all_dslices(&run_uid, &circuit, RunSource::Benchmark, 1.0)
             .await;
     }

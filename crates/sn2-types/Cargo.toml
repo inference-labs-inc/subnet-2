@@ -12,3 +12,6 @@ serde_json = { workspace = true }
 tracing-subscriber = { workspace = true }
 flate2 = { workspace = true }
 ndarray = { workspace = true }
+rmp-serde = { workspace = true }
+rmpv = { workspace = true }
+bytes = { workspace = true }

@@ -6352,8 +6352,11 @@ name = "sn2-types"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "flate2",
  "ndarray 0.17.2",
+ "rmp-serde",
+ "rmpv",
  "serde",
  "serde_json",
  "tracing-subscriber",
@@ -6366,6 +6369,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "btlightning",
+ "bytes",
  "clap",
  "dirs-next",
  "dsperse",

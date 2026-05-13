@@ -36,6 +36,7 @@ futures-util = { workspace = true }
 dsperse = { workspace = true }
 ndarray = { workspace = true }
 flate2 = { workspace = true }
+bytes = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

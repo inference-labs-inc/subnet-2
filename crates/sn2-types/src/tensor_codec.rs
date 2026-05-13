@@ -288,3 +288,48 @@ fn build_nested(data: &[f64], shape: &[usize], dim: usize) -> serde_json::Value 
             .collect(),
     )
 }
+
+pub fn arrayd_to_msgpack_value(arr: &ArrayD<f64>) -> rmpv::Value {
+    if arr.ndim() == 0 {
+        return rmpv::Value::F64(arr.first().copied().unwrap_or(0.0));
+    }
+    let data: Vec<f64> = match arr.as_slice() {
+        Some(s) => s.to_vec(),
+        None => arr.iter().copied().collect(),
+    };
+    build_nested_rmpv(&data, arr.shape(), 0)
+}
+
+fn build_nested_rmpv(data: &[f64], shape: &[usize], dim: usize) -> rmpv::Value {
+    if dim == shape.len() - 1 {
+        return rmpv::Value::Array(data.iter().map(|&v| rmpv::Value::F64(v)).collect());
+    }
+    let stride: usize = shape[dim + 1..].iter().product();
+    rmpv::Value::Array(
+        (0..shape[dim])
+            .map(|i| build_nested_rmpv(&data[i * stride..(i + 1) * stride], shape, dim + 1))
+            .collect(),
+    )
+}
+
+pub fn encode_msgpack_value(value: &rmpv::Value) -> bytes::Bytes {
+    let mut buf = Vec::new();
+    rmpv::encode::write_value(&mut buf, value).expect("writing to Vec<u8> is infallible");
+    bytes::Bytes::from(buf)
+}
+
+pub fn input_data_payload(arr: &ArrayD<f64>) -> bytes::Bytes {
+    let map = rmpv::Value::Map(vec![(
+        rmpv::Value::String("input_data".into()),
+        arrayd_to_msgpack_value(arr),
+    )]);
+    encode_msgpack_value(&map)
+}
+
+pub fn decode_msgpack_value(bytes: &[u8]) -> anyhow::Result<rmpv::Value> {
+    rmpv::decode::read_value(&mut &bytes[..]).context("decoding msgpack value")
+}
+
+pub fn decode_msgpack_to_json(bytes: &[u8]) -> anyhow::Result<serde_json::Value> {
+    rmp_serde::from_slice::<serde_json::Value>(bytes).context("decoding msgpack to json")
+}

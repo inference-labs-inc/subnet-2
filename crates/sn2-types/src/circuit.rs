@@ -69,4 +69,30 @@ impl Circuit {
 
         Ok(())
     }
+
+    pub fn validate_inputs_msgpack(&self, inputs: &[u8]) -> Result<(), String> {
+        let schema = match &self.metadata.input_schema {
+            Some(s) if !s.is_empty() => s,
+            _ => return Ok(()),
+        };
+
+        let value = rmpv::decode::read_value(&mut &inputs[..])
+            .map_err(|e| format!("decoding msgpack inputs: {e}"))?;
+
+        let entries = match &value {
+            rmpv::Value::Map(entries) => entries,
+            _ => return Err("inputs must be a msgpack map".to_string()),
+        };
+
+        for key in schema.keys() {
+            let present = entries
+                .iter()
+                .any(|(k, _)| k.as_str().map(|s| s == key).unwrap_or(false));
+            if !present {
+                return Err(format!("missing required input: {key}"));
+            }
+        }
+
+        Ok(())
+    }
 }

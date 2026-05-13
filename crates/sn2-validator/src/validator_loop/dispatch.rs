@@ -1,23 +1,46 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use rand::seq::SliceRandom;
 use sn2_types::*;
 
 use super::{is_valid_ip, DispatchedRequest, RetryPayload, TaskOutcome, TaskResult, ValidatorLoop};
 use crate::metrics_server as metrics;
 use crate::relay::FRAME_PROOF_RESULT;
 
+const DISPATCH_CACHE_TTL: Duration = Duration::from_millis(2000);
+
+pub(crate) struct DispatchCache {
+    pub capacities: HashMap<u16, usize>,
+    pub adaptive_timeout: f64,
+    pub api_eligible: HashSet<u16>,
+    pub refreshed_at: Option<Instant>,
+}
+
+impl DispatchCache {
+    pub fn new() -> Self {
+        Self {
+            capacities: HashMap::new(),
+            adaptive_timeout: CIRCUIT_TIMEOUT_SECONDS as f64,
+            api_eligible: HashSet::new(),
+            refreshed_at: None,
+        }
+    }
+}
+
 impl ValidatorLoop {
     pub(super) async fn dispatch_requests(&mut self) -> Result<()> {
-        let verification_backlog = self.verify_tasks.len() + self.pending_verifications.len();
-        if verification_backlog >= self.verification_concurrency {
+        let pending_cap = self.verification_concurrency.saturating_mul(4);
+        if self.pending_verifications.len() >= pending_cap {
             return Ok(());
         }
 
         let active_count = self.tasks.len();
-        let total_pipeline = active_count + verification_backlog;
-        let dispatch_ceiling = self.verification_concurrency.saturating_mul(2);
+        let total_pipeline =
+            active_count + self.verify_tasks.len() + self.pending_verifications.len();
+        let dispatch_ceiling = self.verification_concurrency.saturating_mul(8);
         if total_pipeline >= dispatch_ceiling {
             return Ok(());
         }
@@ -25,22 +48,40 @@ impl ValidatorLoop {
 
         metrics::set_active_tasks(active_count);
 
-        let capacities = self.performance_tracker.miner_capacities();
-        let adaptive_timeout = self.performance_tracker.adaptive_timeout();
+        let mut queryable_uids: Vec<u16> = self
+            .config
+            .metagraph
+            .neurons
+            .iter()
+            .filter(|n| {
+                if let Some(targets) = &self.config.target_uids {
+                    return targets.contains(&n.uid);
+                }
+                if n.validator_permit {
+                    return false;
+                }
+                if n.axon_ip.is_empty() || n.axon_port == 0 {
+                    return false;
+                }
+                is_valid_ip(&n.axon_ip)
+            })
+            .map(|n| n.uid)
+            .collect();
+        queryable_uids.shuffle(&mut rand::rng());
 
-        let queryable = self.get_queryable_neurons();
-        let mut neurons: Vec<sn2_chain::NeuronInfo> = queryable.into_iter().cloned().collect();
-        rand::seq::SliceRandom::shuffle(neurons.as_mut_slice(), &mut rand::rng());
+        self.refresh_dispatch_cache_if_stale(&queryable_uids);
+        let adaptive_timeout = self.dispatch_cache.adaptive_timeout;
 
-        let neuron_refs: Vec<&sn2_chain::NeuronInfo> = neurons.iter().collect();
-        let api_eligible = self.compute_api_eligible(&neuron_refs);
-
-        for neuron in &neurons {
+        for uid in queryable_uids {
             if dispatch_budget == 0 {
                 break;
             }
-            let uid = neuron.uid;
-            let cap = capacities.get(&uid).copied().unwrap_or(1);
+            let cap = self
+                .dispatch_cache
+                .capacities
+                .get(&uid)
+                .copied()
+                .unwrap_or(1);
             let active_now = self.miner_active_count.get(&uid).copied().unwrap_or(0);
             if active_now >= cap {
                 continue;
@@ -56,18 +97,62 @@ impl ValidatorLoop {
                     None => break,
                 };
 
-                let timeout = if api_eligible.contains(&uid) {
+                let timeout = if self.dispatch_cache.api_eligible.contains(&uid) {
                     API_TIMEOUT_SECONDS
                 } else {
                     adaptive_timeout
                 };
 
-                self.spawn_miner_task(uid, neuron, was_at_capacity, timeout, dispatched);
+                let (ip, port, hotkey) = match self.config.metagraph.get_neuron(uid) {
+                    Some(n) => (n.axon_ip.clone(), n.axon_port, n.hotkey.clone()),
+                    None => break,
+                };
+                self.spawn_miner_task(uid, ip, port, hotkey, was_at_capacity, timeout, dispatched);
                 dispatch_budget = dispatch_budget.saturating_sub(1);
             }
         }
 
         Ok(())
+    }
+
+    fn refresh_dispatch_cache_if_stale(&mut self, queryable_uids: &[u16]) {
+        let fresh = self
+            .dispatch_cache
+            .refreshed_at
+            .map(|t| t.elapsed() < DISPATCH_CACHE_TTL)
+            .unwrap_or(false);
+        if fresh {
+            return;
+        }
+        self.dispatch_cache.capacities = self.performance_tracker.miner_capacities();
+        self.dispatch_cache.adaptive_timeout = self.performance_tracker.adaptive_timeout();
+        self.dispatch_cache.api_eligible = self.compute_api_eligible_from_uids(queryable_uids);
+        self.dispatch_cache.refreshed_at = Some(Instant::now());
+    }
+
+    fn compute_api_eligible_from_uids(&self, queryable_uids: &[u16]) -> HashSet<u16> {
+        if queryable_uids.is_empty() || self.config.api_miners_pct == 0 {
+            return HashSet::new();
+        }
+        let snap = self.performance_tracker.snapshot();
+        let queryable: HashSet<u16> = queryable_uids.iter().copied().collect();
+
+        let mut ranked: Vec<(u16, f64)> = snap
+            .iter()
+            .filter(|(uid, (_, count))| {
+                *count >= PERFORMANCE_MIN_SAMPLES && queryable.contains(uid)
+            })
+            .map(|(&uid, &(rate, _))| (uid, rate))
+            .collect();
+
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let top_count = (ranked.len() as u32 * self.config.api_miners_pct / 100).max(1) as usize;
+        ranked
+            .into_iter()
+            .take(top_count)
+            .map(|(uid, _)| uid)
+            .collect()
     }
 
     async fn select_request(&mut self, uid: u16) -> Option<DispatchedRequest> {
@@ -138,10 +223,11 @@ impl ValidatorLoop {
                     .map(|d| (d, RunSource::Benchmark))
             })
         {
+            let inputs_json = sn2_types::decode_msgpack_to_json(&dslice.inputs).unwrap_or_default();
             let dslice_model = self.pipeline.prepare_dslice_request(
                 uid,
                 &dslice.circuit,
-                dslice.inputs.clone(),
+                inputs_json.clone(),
                 None,
                 &dslice.slice_num,
                 &dslice.run_uid,
@@ -176,8 +262,8 @@ impl ValidatorLoop {
                 is_tile: dslice.is_tile,
                 task_id: dslice.task_id.clone(),
                 tile_idx: dslice.tile_idx,
-                task_circuit: Some(dslice.circuit.clone()),
-                task_inputs: Some(dslice.inputs.clone()),
+                task_circuit: Some((*dslice.circuit).clone()),
+                task_inputs: Some(inputs_json),
                 task_proof_system: Some(dslice.proof_system),
                 retry_payload: RetryPayload::DSlice(Box::new(dslice)),
                 dsperse_circuit_path: circuit_path,
@@ -188,17 +274,17 @@ impl ValidatorLoop {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_miner_task(
         &mut self,
         uid: u16,
-        neuron: &sn2_chain::NeuronInfo,
+        ip: String,
+        port: u16,
+        hotkey: String,
         was_at_capacity: bool,
         timeout: f64,
         d: DispatchedRequest,
     ) {
-        let ip = neuron.axon_ip.clone();
-        let port = neuron.axon_port;
-        let hotkey = neuron.hotkey.clone();
         let client = Arc::clone(&self.miner_client);
 
         let request_type = d.request_type;
@@ -329,32 +415,6 @@ impl ValidatorLoop {
                 }
                 is_valid_ip(&n.axon_ip)
             })
-            .collect()
-    }
-
-    pub(super) fn compute_api_eligible(&self, neurons: &[&sn2_chain::NeuronInfo]) -> HashSet<u16> {
-        if neurons.is_empty() || self.config.api_miners_pct == 0 {
-            return HashSet::new();
-        }
-
-        let snap = self.performance_tracker.snapshot();
-        let queryable: HashSet<u16> = neurons.iter().map(|n| n.uid).collect();
-
-        let mut ranked: Vec<(u16, f64)> = snap
-            .iter()
-            .filter(|(uid, (_, count))| {
-                *count >= PERFORMANCE_MIN_SAMPLES && queryable.contains(uid)
-            })
-            .map(|(&uid, &(rate, _))| (uid, rate))
-            .collect();
-
-        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        let top_count = (ranked.len() as u32 * self.config.api_miners_pct / 100).max(1) as usize;
-        ranked
-            .into_iter()
-            .take(top_count)
-            .map(|(uid, _)| uid)
             .collect()
     }
 }
