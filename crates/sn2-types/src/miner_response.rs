@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{Circuit, ProofSystem, RequestType};
@@ -10,7 +12,7 @@ pub struct MinerResponse {
     pub response_time: f64,
     pub proof_size: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub circuit: Option<Circuit>,
+    pub circuit: Option<Arc<Circuit>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proof_system: Option<ProofSystem>,
     #[serde(skip_serializing_if = "Option::is_none")]

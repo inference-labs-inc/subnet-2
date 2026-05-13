@@ -204,7 +204,7 @@ impl ValidatorLoop {
                 is_tile: false,
                 task_id: None,
                 tile_idx: None,
-                task_circuit: Some(circuit.clone()),
+                task_circuit: Some(Arc::new(circuit.clone())),
                 task_inputs: Some(rwr.inputs.clone()),
                 task_proof_system: Some(circuit.proof_system),
                 retry_payload: RetryPayload::Rwr(rwr),
@@ -223,7 +223,20 @@ impl ValidatorLoop {
                     .map(|d| (d, RunSource::Benchmark))
             })
         {
-            let inputs_json = sn2_types::decode_msgpack_to_json(&dslice.inputs).unwrap_or_default();
+            let inputs_json = match sn2_types::decode_msgpack_to_json(&dslice.inputs) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        uid,
+                        run_uid = %dslice.run_uid,
+                        slice_num = %dslice.slice_num,
+                        tile_idx = ?dslice.tile_idx,
+                        error = %e,
+                        "dropping dslice: failed to decode queued msgpack inputs"
+                    );
+                    return None;
+                }
+            };
             let dslice_model = self.pipeline.prepare_dslice_request(
                 uid,
                 &dslice.circuit,
@@ -262,7 +275,7 @@ impl ValidatorLoop {
                 is_tile: dslice.is_tile,
                 task_id: dslice.task_id.clone(),
                 tile_idx: dslice.tile_idx,
-                task_circuit: Some((*dslice.circuit).clone()),
+                task_circuit: Some(Arc::clone(&dslice.circuit)),
                 task_inputs: Some(inputs_json),
                 task_proof_system: Some(dslice.proof_system),
                 retry_payload: RetryPayload::DSlice(Box::new(dslice)),

@@ -26,7 +26,7 @@ sn2-verify = { path = "crates/sn2-verify" }
 sn2-circuit-store = { path = "crates/sn2-circuit-store" }
 
 tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 anyhow = "1"
 tracing = "0.1"

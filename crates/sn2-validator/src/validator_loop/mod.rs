@@ -117,7 +117,7 @@ pub(super) struct DispatchedRequest {
     pub(super) is_tile: bool,
     pub(super) task_id: Option<String>,
     pub(super) tile_idx: Option<u32>,
-    pub(super) task_circuit: Option<Circuit>,
+    pub(super) task_circuit: Option<std::sync::Arc<Circuit>>,
     pub(super) task_inputs: Option<serde_json::Value>,
     pub(super) task_proof_system: Option<ProofSystem>,
     pub(super) retry_payload: RetryPayload,
