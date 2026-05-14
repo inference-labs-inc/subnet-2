@@ -113,6 +113,16 @@ impl ValidatorLoop {
                 + self.stacked_dslice_queue.len();
             let queryable_count = self.get_queryable_neurons().len();
             let dsperse_count = self.circuit_store.get_dsperse_circuits().len();
+            let pressure_backoffs = self
+                .performance_tracker
+                .backoff_all_caps_under_pressure(CAPACITY_PRESSURE_BACKOFF_FACTOR);
+            if pressure_backoffs > 0 {
+                warn!(
+                    decremented = pressure_backoffs,
+                    factor = CAPACITY_PRESSURE_BACKOFF_FACTOR,
+                    "host memory pressure: trimming adaptive caps across all miners"
+                );
+            }
             info!(
                 active_tasks = active_tasks,
                 rwr_queue = self.rwr_queue.len(),
@@ -124,6 +134,7 @@ impl ValidatorLoop {
                 verification_concurrency = self.verification_concurrency,
                 verify_tasks = self.verify_tasks.len(),
                 pending_verifications = self.pending_verifications.len(),
+                pressure_backoffs = pressure_backoffs,
                 "health"
             );
             if let Some(reporter) = &mut self.stats_reporter {

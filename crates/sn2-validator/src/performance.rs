@@ -189,6 +189,46 @@ impl PerformanceTracker {
         self.windows.retain(|_, w| !w.is_empty());
     }
 
+    /// Globally trim every adaptive cap by `factor` (rounded to at least 1
+    /// decrement) when the validator host is under memory pressure. Returns
+    /// the number of caps that actually decreased, for monitoring.
+    pub fn backoff_all_caps_under_pressure(&mut self, factor: f64) -> usize {
+        if !cap_ramp_blocked_by_memory_pressure() {
+            return 0;
+        }
+        let factor = factor.clamp(0.0, 1.0);
+        let mut changed = 0usize;
+        for (uid, cap) in self.adaptive_caps.iter_mut() {
+            if *cap <= 1 {
+                continue;
+            }
+            let decrement = ((*cap as f64) * factor).round() as usize;
+            let decrement = decrement.max(1);
+            let new_cap = cap.saturating_sub(decrement).max(1);
+            if new_cap < *cap {
+                self.cap_events.push(CapEvent {
+                    uid: *uid,
+                    hotkey: String::new(),
+                    direction: CapDirection::Backoff,
+                    cap_from: *cap,
+                    cap_to: new_cap,
+                    success_rate: 0.0,
+                    at: Instant::now(),
+                });
+                *cap = new_cap;
+                if let Some(r) = self.at_cap_results.get_mut(uid) {
+                    r.clear();
+                }
+                changed += 1;
+            }
+        }
+        if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
+            let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
+            self.cap_events.drain(0..drop);
+        }
+        changed
+    }
+
     pub fn save(&self) {
         let path = match &self.persistence_path {
             Some(p) => p,
