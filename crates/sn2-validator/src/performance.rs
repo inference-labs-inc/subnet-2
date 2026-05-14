@@ -4,11 +4,45 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
-    BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP, CAPACITY_RAMP_THRESHOLD,
-    CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS, PERFORMANCE_MIN_SAMPLES,
-    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_SCORING_PERCENTILE, VERIFICATION_WINDOW_BLOCKS,
+    BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
+    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD, CAPACITY_WINDOW_SIZE,
+    CIRCUIT_TIMEOUT_SECONDS, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY,
+    PERFORMANCE_SCORING_PERCENTILE, VERIFICATION_WINDOW_BLOCKS,
 };
-use tracing::warn;
+use tracing::{debug, warn};
+
+#[cfg(target_os = "linux")]
+fn host_memory_available_ratio() -> Option<f64> {
+    let raw = std::fs::read_to_string("/proc/meminfo").ok()?;
+    parse_meminfo_avail_ratio(&raw)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn host_memory_available_ratio() -> Option<f64> {
+    None
+}
+
+fn parse_meminfo_avail_ratio(raw: &str) -> Option<f64> {
+    let mut total_kib: Option<u64> = None;
+    let mut avail_kib: Option<u64> = None;
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            total_kib = rest.split_whitespace().next().and_then(|n| n.parse().ok());
+        } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            avail_kib = rest.split_whitespace().next().and_then(|n| n.parse().ok());
+        }
+    }
+    match (total_kib, avail_kib) {
+        (Some(t), Some(a)) if t > 0 => Some(a as f64 / t as f64),
+        _ => None,
+    }
+}
+
+fn cap_ramp_blocked_by_memory_pressure() -> bool {
+    host_memory_available_ratio()
+        .map(|r| r < CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO)
+        .unwrap_or(false)
+}
 
 type WindowEntry = (Instant, bool, f64);
 
@@ -383,6 +417,18 @@ impl PerformanceTracker {
         let mut direction: Option<CapDirection> = None;
 
         if success_rate >= CAPACITY_RAMP_THRESHOLD {
+            if cap_ramp_blocked_by_memory_pressure() {
+                debug!(
+                    uid,
+                    cap = *current,
+                    success_rate,
+                    "cap ramp held back by validator memory pressure"
+                );
+                if let Some(r) = self.at_cap_results.get_mut(&uid) {
+                    r.clear();
+                }
+                return;
+            }
             *current += 1;
             direction = Some(CapDirection::Ramp);
             if let Some(r) = self.at_cap_results.get_mut(&uid) {
@@ -441,6 +487,26 @@ mod tests {
     fn adaptive_timeout_returns_default_with_few_samples() {
         let tracker = test_tracker();
         assert_eq!(tracker.adaptive_timeout(), CIRCUIT_TIMEOUT_SECONDS as f64);
+    }
+
+    #[test]
+    fn parse_meminfo_extracts_avail_ratio() {
+        let sample = "MemTotal:       32096780 kB\n\
+                      MemFree:         1234567 kB\n\
+                      MemAvailable:    8024195 kB\n\
+                      Buffers:           12345 kB\n";
+        let ratio = parse_meminfo_avail_ratio(sample).expect("ratio");
+        assert!(
+            (ratio - 0.25).abs() < 0.005,
+            "ratio {ratio} should be ~0.25"
+        );
+    }
+
+    #[test]
+    fn parse_meminfo_returns_none_on_missing_fields() {
+        assert!(parse_meminfo_avail_ratio("MemTotal: 1 kB\n").is_none());
+        assert!(parse_meminfo_avail_ratio("MemAvailable: 1 kB\n").is_none());
+        assert!(parse_meminfo_avail_ratio("").is_none());
     }
 
     #[test]
