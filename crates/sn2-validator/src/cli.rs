@@ -54,6 +54,9 @@ pub struct Cli {
     #[arg(long)]
     pub verification_concurrency: Option<usize>,
 
+    #[arg(long)]
+    pub dispatch_ceiling: Option<usize>,
+
     #[arg(long, default_value_t = false)]
     pub disable_metric_logging: bool,
 

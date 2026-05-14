@@ -29,6 +29,7 @@ pub struct ValidatorConfig {
     pub loopback: bool,
     pub additional_circuits: Vec<String>,
     pub verification_concurrency: Option<usize>,
+    pub dispatch_ceiling: Option<usize>,
 }
 
 impl ValidatorConfig {
@@ -97,6 +98,7 @@ impl ValidatorConfig {
             loopback: false,
             additional_circuits: cli.additional_circuits.clone(),
             verification_concurrency: cli.verification_concurrency,
+            dispatch_ceiling: cli.dispatch_ceiling,
         })
     }
 
@@ -159,6 +161,7 @@ impl ValidatorConfig {
             loopback: true,
             additional_circuits: cli.additional_circuits.clone(),
             verification_concurrency: cli.verification_concurrency,
+            dispatch_ceiling: cli.dispatch_ceiling,
         })
     }
 

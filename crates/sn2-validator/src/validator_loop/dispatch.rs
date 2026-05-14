@@ -40,7 +40,7 @@ impl ValidatorLoop {
         let active_count = self.tasks.len();
         let total_pipeline =
             active_count + self.verify_tasks.len() + self.pending_verifications.len();
-        let dispatch_ceiling = self.verification_concurrency.saturating_mul(8);
+        let dispatch_ceiling = self.config.dispatch_ceiling.unwrap_or(usize::MAX);
         if total_pipeline >= dispatch_ceiling {
             return Ok(());
         }
