@@ -192,7 +192,11 @@ impl PerformanceTracker {
     /// Globally trim every adaptive cap by `factor` (rounded to at least 1
     /// decrement) when the validator host is under memory pressure. Returns
     /// the number of caps that actually decreased, for monitoring.
-    pub fn backoff_all_caps_under_pressure(&mut self, factor: f64) -> usize {
+    pub fn backoff_all_caps_under_pressure(
+        &mut self,
+        factor: f64,
+        uid_hotkeys: &HashMap<u16, String>,
+    ) -> usize {
         if !cap_ramp_blocked_by_memory_pressure() {
             return 0;
         }
@@ -206,9 +210,10 @@ impl PerformanceTracker {
             let decrement = decrement.max(1);
             let new_cap = cap.saturating_sub(decrement).max(1);
             if new_cap < *cap {
+                let hotkey = uid_hotkeys.get(uid).cloned().unwrap_or_default();
                 self.cap_events.push(CapEvent {
                     uid: *uid,
-                    hotkey: String::new(),
+                    hotkey,
                     direction: CapDirection::Backoff,
                     cap_from: *cap,
                     cap_to: new_cap,

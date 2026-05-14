@@ -113,9 +113,10 @@ impl ValidatorLoop {
                 + self.stacked_dslice_queue.len();
             let queryable_count = self.get_queryable_neurons().len();
             let dsperse_count = self.circuit_store.get_dsperse_circuits().len();
-            let pressure_backoffs = self
-                .performance_tracker
-                .backoff_all_caps_under_pressure(CAPACITY_PRESSURE_BACKOFF_FACTOR);
+            let pressure_backoffs = self.performance_tracker.backoff_all_caps_under_pressure(
+                CAPACITY_PRESSURE_BACKOFF_FACTOR,
+                &self.uid_hotkeys,
+            );
             if pressure_backoffs > 0 {
                 warn!(
                     decremented = pressure_backoffs,
