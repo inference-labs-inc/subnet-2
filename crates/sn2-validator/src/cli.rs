@@ -54,7 +54,14 @@ pub struct Cli {
     #[arg(long)]
     pub verification_concurrency: Option<usize>,
 
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Maximum number of concurrent in-flight miner queries. \
+                Unset (default) is uncapped — adaptive per-miner caps and \
+                pending_verifications buffer provide the backpressure. \
+                Set to a positive integer to apply a hard system-wide cap, \
+                useful for constrained hosts or controlled rollout."
+    )]
     pub dispatch_ceiling: Option<usize>,
 
     #[arg(long, default_value_t = false)]

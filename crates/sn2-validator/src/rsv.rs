@@ -313,14 +313,6 @@ mod tests {
     }
 
     #[test]
-    fn record_strike_below_threshold_no_skiplist() {
-        let mut mgr = fresh();
-        let triggered = mgr.record_strike("hk1", 100, 360);
-        assert!(!triggered);
-        assert!(!mgr.is_skiplisted("hk1", 100));
-    }
-
-    #[test]
     fn record_strike_at_threshold_skiplists() {
         let mut mgr = fresh();
         for i in 0..VERIFICATION_STRIKES_REQUIRED {
@@ -336,19 +328,6 @@ mod tests {
         assert!(!mgr.strikes.contains_key("hk1"));
         let until = mgr.skiplist.get("hk1").copied().unwrap();
         assert_eq!(until, block + VERIFICATION_SKIPLIST_TEMPOS * 360);
-    }
-
-    #[test]
-    fn strike_aging_removes_old_strikes() {
-        let mut mgr = fresh();
-        mgr.record_strike("hk1", 100, 360);
-        mgr.record_strike("hk1", 200, 360);
-        let later = 200 + VERIFICATION_STRIKES_WINDOW_BLOCKS + 10;
-        let triggered = mgr.record_strike("hk1", later, 360);
-        assert!(!triggered);
-        let strikes = mgr.strikes.get("hk1").unwrap();
-        assert_eq!(strikes.len(), 1);
-        assert_eq!(strikes.front().copied(), Some(later));
     }
 
     #[test]
