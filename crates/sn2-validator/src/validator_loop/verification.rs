@@ -255,7 +255,7 @@ fn decide_sample(
     rsv: &mut crate::rsv::RsvManager,
 ) -> bool {
     let has_proof =
-        matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_content.is_some());
+        matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
     if !has_proof {
         return false;
     }
