@@ -374,7 +374,7 @@ impl ValidatorLoop {
                         .map(|s| s.len())
                         .unwrap_or(0);
 
-                    if let Some(raw) = &response.raw {
+                    if let Some(raw) = response.raw.take() {
                         response.witness = raw
                             .get("witness")
                             .and_then(|v| v.as_str())

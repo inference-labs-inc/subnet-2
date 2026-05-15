@@ -156,7 +156,7 @@ pub struct ValidatorLoop {
     pub(super) dsperse_emit_tasks: JoinSet<()>,
     pub(super) verify_tasks: JoinSet<VerifyResult>,
     pub(super) verify_guard_hashes: HashMap<tokio::task::Id, Option<String>>,
-    pub(super) pending_verifications: VecDeque<TaskResult>,
+    pub(super) pending_verifications: VecDeque<(TaskResult, bool)>,
     pub(super) verification_concurrency: usize,
     pub(super) dslice_input_scales: HashMap<(String, String), f64>,
     pub(super) disabled_slices: HashMap<String, HashSet<String>>,
