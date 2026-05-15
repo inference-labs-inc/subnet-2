@@ -254,8 +254,7 @@ fn decide_sample(
     blocks_per_tempo: u64,
     rsv: &mut crate::rsv::RsvManager,
 ) -> bool {
-    let has_proof =
-        matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
+    let has_proof = matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
     if !has_proof {
         return false;
     }
