@@ -22,6 +22,7 @@ fn host_memory_available_ratio() -> Option<f64> {
     None
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn parse_meminfo_avail_ratio(raw: &str) -> Option<f64> {
     let mut total_kib: Option<u64> = None;
     let mut avail_kib: Option<u64> = None;

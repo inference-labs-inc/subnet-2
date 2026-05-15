@@ -1,5 +1,9 @@
 #![feature(ip)]
 
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod cli;
 mod config;
 mod dsperse_events;

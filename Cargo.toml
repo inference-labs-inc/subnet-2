@@ -37,6 +37,7 @@ axum = "0.7"
 rmp-serde = "1"
 rmpv = "1"
 bytes = "1"
+mimalloc = { version = "0.1", default-features = false }
 hex = "0.4"
 sp-core = "34"
 bittensor_wallet = { version = "4.0.1", package = "btwallet", default-features = false }

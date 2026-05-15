@@ -41,3 +41,4 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+mimalloc = { workspace = true }
