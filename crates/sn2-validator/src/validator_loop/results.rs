@@ -339,6 +339,18 @@ impl ValidatorLoop {
     ) {
         warn!(uid = uid, rtype = %request_type, retry = retry_count, error = reason, "miner query failed");
 
+        if !hotkey.is_empty()
+            && (reason.contains("already in progress") || reason.contains("in backoff"))
+        {
+            let bpt = if self.blocks_per_tempo == 0 {
+                360
+            } else {
+                self.blocks_per_tempo
+            };
+            let until = self.current_block + bpt;
+            self.reconnect_blacklist.insert(hotkey.to_string(), until);
+        }
+
         let is_verification_failure = reason.starts_with("verification failed")
             && matches!(
                 request_type,

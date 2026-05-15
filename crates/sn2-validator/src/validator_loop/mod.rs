@@ -165,6 +165,7 @@ pub struct ValidatorLoop {
     pub(super) blocks_per_tempo: u64,
     pub(super) consecutive_metagraph_failures: u32,
     pub(super) dispatch_cache: dispatch::DispatchCache,
+    pub(super) reconnect_blacklist: HashMap<String, u64>,
 }
 
 pub(super) const METAGRAPH_FAILURE_RECONNECT_THRESHOLD: u32 = 3;
@@ -373,6 +374,7 @@ impl ValidatorLoop {
             blocks_per_tempo: 360,
             consecutive_metagraph_failures: 0,
             dispatch_cache: dispatch::DispatchCache::new(),
+            reconnect_blacklist: HashMap::new(),
         })
     }
 

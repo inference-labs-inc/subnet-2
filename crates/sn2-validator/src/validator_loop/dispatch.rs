@@ -48,12 +48,18 @@ impl ValidatorLoop {
 
         metrics::set_active_tasks(active_count);
 
+        let current_block = self.current_block;
         let mut queryable_uids: Vec<u16> = self
             .config
             .metagraph
             .neurons
             .iter()
             .filter(|n| {
+                if let Some(&until) = self.reconnect_blacklist.get(&n.hotkey) {
+                    if current_block < until {
+                        return false;
+                    }
+                }
                 if let Some(targets) = &self.config.target_uids {
                     return targets.contains(&n.uid);
                 }

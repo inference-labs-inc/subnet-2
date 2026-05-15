@@ -261,6 +261,17 @@ impl ValidatorLoop {
         self.score_manager.sync_uids(&uids);
         self.rsv
             .prune_expired(self.current_block, self.blocks_per_tempo);
+        let blacklist_before = self.reconnect_blacklist.len();
+        self.reconnect_blacklist
+            .retain(|_, until| self.current_block < *until);
+        let blacklist_after = self.reconnect_blacklist.len();
+        if blacklist_before != blacklist_after {
+            info!(
+                expired = blacklist_before - blacklist_after,
+                remaining = blacklist_after,
+                "reconnect_blacklist pruned"
+            );
+        }
 
         let mut axon_count = 0usize;
         for n in &self.config.metagraph.neurons {
