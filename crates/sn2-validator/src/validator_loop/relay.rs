@@ -87,6 +87,16 @@ impl ValidatorLoop {
         let Some(uploader) = &self.proof_uploader else {
             return;
         };
+        // Benchmark runs are validator-generated load for scoring; their proof
+        // bytes have no API consumer (customers only retrieve proofs by
+        // run_uids they themselves submitted, all of which are RunSource::Api).
+        // Skipping the upload here eliminates the GCS PUT firehose that drove
+        // the 429 SlowDown storm without changing any externally visible API
+        // surface — dsperse_events still carry run_source for stats.
+        let source = active_run.as_ref().map(|r| r.run_source);
+        if !matches!(source, Some(sn2_types::RunSource::Api)) {
+            return;
+        }
         if self.upload_tasks.len() >= sn2_types::MAX_CONCURRENT_UPLOADS {
             warn!(
                 run_uid = %run_uid,
