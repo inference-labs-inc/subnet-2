@@ -5,16 +5,19 @@ use crate::stats_reporter::{
 };
 use sn2_chain::Wallet;
 use sn2_types::DEFAULT_API_URL;
+use tokio::sync::Notify;
 use tracing::{debug, warn};
 
-const MAX_BUFFERED_EVENTS: usize = 10_000;
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const MAX_BUFFERED_EVENTS: usize = 100_000;
+const HIGH_WATER_MARK: usize = MAX_BUFFERED_EVENTS / 2;
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub struct DsperseEventClient {
     http: reqwest::Client,
     wallet: Arc<Wallet>,
     api_url: String,
     buffer: tokio::sync::Mutex<Vec<serde_json::Value>>,
+    flush_signal: Notify,
 }
 
 impl DsperseEventClient {
@@ -27,6 +30,7 @@ impl DsperseEventClient {
             wallet,
             api_url: api_url.unwrap_or_else(|| DEFAULT_API_URL.to_string()),
             buffer: tokio::sync::Mutex::new(Vec::new()),
+            flush_signal: Notify::new(),
         }
     }
 
@@ -52,16 +56,24 @@ impl DsperseEventClient {
         }
         event["validator_key"] = serde_json::Value::String(self.wallet.hotkey_ss58().to_string());
 
-        let mut buf = self.buffer.lock().await;
-        if buf.len() >= MAX_BUFFERED_EVENTS {
-            let drop_n = (buf.len() + 1).saturating_sub(MAX_BUFFERED_EVENTS);
-            buf.drain(0..drop_n);
-            warn!(
-                dropped = drop_n,
-                "dsperse event buffer full, dropping oldest events"
-            );
+        let should_signal = {
+            let mut buf = self.buffer.lock().await;
+            if buf.len() >= MAX_BUFFERED_EVENTS {
+                let drop_n = (buf.len() + 1).saturating_sub(MAX_BUFFERED_EVENTS);
+                buf.drain(0..drop_n);
+                warn!(
+                    dropped = drop_n,
+                    capacity = MAX_BUFFERED_EVENTS,
+                    "dsperse event buffer full, dropping oldest events"
+                );
+            }
+            buf.push(event);
+            buf.len() >= HIGH_WATER_MARK
+        };
+
+        if should_signal {
+            self.flush_signal.notify_one();
         }
-        buf.push(event);
     }
 
     pub async fn flush(&self) {
@@ -73,13 +85,13 @@ impl DsperseEventClient {
             std::mem::take(&mut *buf)
         };
 
+        let count = events.len();
         let batch = serde_json::json!({
             "validator_key": self.wallet.hotkey_ss58(),
-            "events": events,
+            "events": &events,
         });
 
         let url = format!("{}/statistics/dsperse/events/", self.api_url);
-        let count = events.len();
 
         if sign_and_post(&self.http, &self.wallet, &url, &batch, "dsperse/events").await {
             debug!(count, "flushed dsperse events");
@@ -98,7 +110,10 @@ impl DsperseEventClient {
             let mut interval =
                 tokio::time::interval(std::time::Duration::from_secs(STATS_FLUSH_INTERVAL_SECS));
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = client.flush_signal.notified() => {}
+                }
                 client.flush().await;
             }
         })
