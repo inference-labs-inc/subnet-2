@@ -65,6 +65,10 @@ pub(super) struct TaskResult {
     pub(super) tile_idx: Option<u32>,
     pub(super) outcome: TaskOutcome,
     pub(super) retry_payload: RetryPayload,
+    // Pre-decided RSV sample disposition. When false, validator never
+    // intended to deep-verify this request, so input/proof bytes may have
+    // been dropped before the response was received.
+    pub(super) pre_sampled: bool,
 }
 
 pub(super) enum TaskOutcome {
@@ -123,6 +127,10 @@ pub(super) struct DispatchedRequest {
     pub(super) retry_payload: RetryPayload,
     pub(super) dsperse_circuit_path: Option<String>,
     pub(super) component_sha: Option<String>,
+    // Pre-rolled RSV sample decision attached at dispatch time. When false,
+    // task_inputs is cleared before the miner task is spawned to avoid
+    // retaining the validator's local input copy across the in-flight window.
+    pub(super) pre_sampled: bool,
 }
 
 pub struct ValidatorLoop {

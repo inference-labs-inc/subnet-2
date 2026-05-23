@@ -6,6 +6,7 @@ use anyhow::Result;
 use rand::seq::SliceRandom;
 use sn2_types::*;
 
+use super::verification::pre_decide_sample;
 use super::{is_valid_ip, DispatchedRequest, RetryPayload, TaskOutcome, TaskResult, ValidatorLoop};
 use crate::metrics_server as metrics;
 use crate::relay::FRAME_PROOF_RESULT;
@@ -98,7 +99,7 @@ impl ValidatorLoop {
                 let active = self.miner_active_count.get(&uid).copied().unwrap_or(0);
                 let was_at_capacity = active + 1 >= cap;
 
-                let dispatched = match self.select_request(uid).await {
+                let mut dispatched = match self.select_request(uid).await {
                     Some(d) => d,
                     None => break,
                 };
@@ -113,6 +114,24 @@ impl ValidatorLoop {
                     Some(n) => (n.axon_ip.clone(), n.axon_port, n.hotkey.clone()),
                     None => break,
                 };
+
+                // Pre-decide the RSV sample before the miner task is spawned.
+                // Force-verify paths (PoW, customer RWR, external-hash, API
+                // dslice) bypass the roll; benchmark dslices take the random
+                // 4% sample. For non-sampled benchmark dispatches we drop
+                // task_inputs immediately so the validator's local input copy
+                // is not retained for the full request lifetime.
+                dispatched.pre_sampled = pre_decide_sample(
+                    &dispatched,
+                    &hotkey,
+                    self.current_block,
+                    self.blocks_per_tempo,
+                    &mut self.rsv,
+                );
+                if !dispatched.pre_sampled {
+                    dispatched.task_inputs = None;
+                }
+
                 self.spawn_miner_task(uid, ip, port, hotkey, was_at_capacity, timeout, dispatched);
                 dispatch_budget = dispatch_budget.saturating_sub(1);
             }
@@ -216,6 +235,7 @@ impl ValidatorLoop {
                 retry_payload: RetryPayload::Rwr(rwr),
                 dsperse_circuit_path: None,
                 component_sha: None,
+                pre_sampled: false,
             });
         }
 
@@ -287,6 +307,7 @@ impl ValidatorLoop {
                 retry_payload: RetryPayload::DSlice(Box::new(dslice)),
                 dsperse_circuit_path: circuit_path,
                 component_sha,
+                pre_sampled: false,
             });
         }
 
@@ -323,6 +344,7 @@ impl ValidatorLoop {
         let retry_payload = d.retry_payload;
         let dsperse_circuit_path = d.dsperse_circuit_path;
         let dsperse_component_sha = d.component_sha;
+        let pre_sampled = d.pre_sampled;
         let task_guard_hash = guard_hash.clone();
 
         let abort_handle = self.tasks.spawn(async move {
@@ -408,6 +430,7 @@ impl ValidatorLoop {
                 tile_idx,
                 outcome,
                 retry_payload,
+                pre_sampled,
             }
         });
         self.task_meta
