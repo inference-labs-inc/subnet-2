@@ -93,6 +93,11 @@ pub struct IncrementalRunManager {
     evicted: BoundedFifoSet<String>,
     tile_counters: HashMap<(String, String), TileCounter>,
     verified_tile_counts: HashMap<(String, String), usize>,
+    // Slices marked failed without ever being dispatched (e.g. previously
+    // disabled, or rejected by preflight). Tracked per run so the run-wide
+    // failure guard in finalize_combined_run can distinguish "no slice was
+    // attempted" from "every attempted slice failed".
+    skipped_slices: HashMap<String, HashSet<String>>,
 }
 
 impl Default for IncrementalRunManager {
@@ -102,6 +107,7 @@ impl Default for IncrementalRunManager {
             evicted: BoundedFifoSet::new(EVICTED_CAP),
             tile_counters: HashMap::new(),
             verified_tile_counts: HashMap::new(),
+            skipped_slices: HashMap::new(),
         }
     }
 }
@@ -390,6 +396,25 @@ impl IncrementalRunManager {
             .unwrap_or(0)
     }
 
+    /// Record that a slice was marked failed without ever being dispatched.
+    /// Used by the run-wide failure guard in finalize_combined_run to avoid
+    /// conflating deterministic skips (already-disabled slices, preflight
+    /// rejections) with the "every attempted slice failed" signal that
+    /// triggers the disable-list write-suppression.
+    pub fn note_slice_skipped(&mut self, run_uid: &str, slice_id: &str) {
+        self.skipped_slices
+            .entry(run_uid.to_string())
+            .or_default()
+            .insert(slice_id.to_string());
+    }
+
+    pub fn skipped_slice_count(&self, run_uid: &str) -> usize {
+        self.skipped_slices
+            .get(run_uid)
+            .map(HashSet::len)
+            .unwrap_or(0)
+    }
+
     pub fn is_run_complete(&self, run_uid: &str) -> bool {
         self.runs
             .get(run_uid)
@@ -414,6 +439,7 @@ impl IncrementalRunManager {
         self.tile_counters.retain(|(uid, _), _| uid != run_uid);
         self.verified_tile_counts
             .retain(|(uid, _), _| uid != run_uid);
+        self.skipped_slices.remove(run_uid);
         self.runs.remove(run_uid)
     }
 
@@ -447,6 +473,8 @@ impl IncrementalRunManager {
             .retain(|(run_uid, _), _| !evict_set.contains(run_uid.as_str()));
         self.verified_tile_counts
             .retain(|(run_uid, _), _| !evict_set.contains(run_uid.as_str()));
+        self.skipped_slices
+            .retain(|run_uid, _| !evict_set.contains(run_uid.as_str()));
         for uid in to_remove.iter() {
             self.runs.remove(uid);
             self.evicted.insert(uid.clone());

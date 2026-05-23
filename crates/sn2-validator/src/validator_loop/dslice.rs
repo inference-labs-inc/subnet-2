@@ -464,6 +464,7 @@ impl ValidatorLoop {
                         .partition(|w| !disabled.contains(&w.slice_id));
                     for work in &skipped {
                         self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
+                        self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
                     }
                     if !skipped.is_empty() {
                         info!(
@@ -503,6 +504,7 @@ impl ValidatorLoop {
         };
         for slice_id in &preflight_failed {
             self.run_manager.mark_slice_failed(run_uid, slice_id);
+            self.run_manager.note_slice_skipped(run_uid, slice_id);
         }
         if unsatisfiable > 0 {
             info!(
@@ -814,21 +816,29 @@ impl ValidatorLoop {
                         && self.run_manager.verified_tile_count(run_uid, slice_id) == 0
                 })
                 .collect();
-            // A run that lost every slice with zero verified tiles is much
-            // more likely to be a validator-side network or chain event
-            // (mass QUIC reconnect, RPC stall) than evidence that each slice
-            // is independently unprovable. Refuse to write the disable list
-            // in that case so the validator can self-heal on the next run
-            // instead of trapping itself into a no-dispatch loop. Per-slice
-            // disables still fire when at least one slice in the run made
-            // progress, which is the signal the mechanism was designed for.
-            let all_slices_failed = total_slices > 0 && candidates.len() == total_slices;
-            if all_slices_failed {
+            // The disable-list write is suppressed only when at least one
+            // slice was actually attempted and every attempted slice failed
+            // with zero verified tiles. That signal is characteristic of a
+            // validator-side network or chain event (mass QUIC reconnect,
+            // RPC stall) and would otherwise trap the validator into a
+            // permanent no-dispatch loop. Slices that never reached the
+            // miner — already-disabled entries or preflight rejections —
+            // are tracked via note_slice_skipped at the call sites so they
+            // are excluded from the "attempted" count here. Without that
+            // exclusion, a run where every slice was deterministically
+            // skipped would look identical to a network outage.
+            let skipped = self.run_manager.skipped_slice_count(run_uid);
+            let attempted = total_slices.saturating_sub(skipped);
+            let attempted_failed = candidates.len().saturating_sub(skipped);
+            let run_wide_failure = attempted > 0 && attempted_failed == attempted;
+            if run_wide_failure {
                 warn!(
                     run_uid = %run_uid,
                     circuit_id = %circuit_id,
                     total_slices,
-                    "every slice failed with zero verified tiles, treating as run-wide failure and skipping disable-list write"
+                    skipped,
+                    attempted,
+                    "every attempted slice failed with zero verified tiles, treating as run-wide failure and skipping disable-list write"
                 );
             } else if !candidates.is_empty() {
                 let block = self.current_block;
