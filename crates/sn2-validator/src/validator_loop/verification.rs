@@ -18,8 +18,7 @@ impl ValidatorLoop {
         // until spawn_verification means pending_verifications buffers the
         // full proof payload across the verify-CPU bottleneck for ~95% of
         // responses that take the RSV fast path without needing them.
-        let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
-        let sample = decide_sample(&result, &hotkey);
+        let sample = decide_sample(&result);
         if !sample && !response_needs_proof_bytes_for_downstream(&result) {
             if let TaskOutcome::Success(ref mut response) = result.outcome {
                 response.proof_content = None;
@@ -247,20 +246,19 @@ impl ValidatorLoop {
     }
 }
 
-fn decide_sample(result: &TaskResult, hotkey: &str) -> bool {
+fn decide_sample(result: &TaskResult) -> bool {
     let has_proof = matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
     if !has_proof {
         return false;
     }
-    // Honor the pre-decided RSV disposition attached at dispatch. Empty
-    // hotkey is treated as force-sample to match historical post-response
-    // behavior when the metagraph was mid-sync at dispatch time. Force-verify
-    // paths (PoW, customer RWR, external-hash, API dslice) already set
-    // pre_sampled=true at dispatch, so a single boolean covers the decision
-    // once we know proof bytes exist.
-    if hotkey.is_empty() {
-        return true;
-    }
+    // The pre-decision attached at dispatch is authoritative. The historical
+    // empty-hotkey force-sample branch was a safety net for the RSV roll
+    // that used to run here, but it has migrated to pre_decide_sample at
+    // dispatch time. Re-checking hotkey state at verify time would let a
+    // post-dispatch metagraph reshuffle (uid deregistered between dispatch
+    // and response) revive sampling on a request whose task_inputs were
+    // already released, leading to a verification attempt against a missing
+    // input tensor. pre_sampled alone is the correct signal here.
     result.pre_sampled
 }
 
