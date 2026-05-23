@@ -91,9 +91,22 @@ pub struct Metagraph {
     pub neurons: Vec<NeuronInfo>,
     pub n: u16,
     pub block: u64,
+    /// Per-subnet consensus stake-coverage threshold, encoded as `numerator / u16::MAX`.
+    /// Populated by [`sync`](Self::sync); 0 until the first successful sync.
+    pub kappa: u16,
+    /// Per-subnet epoch length in blocks. Populated by [`sync`](Self::sync); 0 until the
+    /// first successful sync.
+    pub tempo: u16,
     uid_to_idx: HashMap<u16, usize>,
     hotkey_to_uid: HashMap<String, u16>,
     coldkey_to_uids: HashMap<String, Vec<u16>>,
+}
+
+impl Metagraph {
+    /// Returns `kappa` as a fraction in `[0.0, 1.0]`.
+    pub fn kappa_fraction(&self) -> f64 {
+        self.kappa as f64 / u16::MAX as f64
+    }
 }
 
 impl Metagraph {
@@ -103,6 +116,8 @@ impl Metagraph {
             neurons: Vec::new(),
             n: 0,
             block: 0,
+            kappa: 0,
+            tempo: 0,
             uid_to_idx: HashMap::new(),
             hotkey_to_uid: HashMap::new(),
             coldkey_to_uids: HashMap::new(),
@@ -132,6 +147,8 @@ impl Metagraph {
             neurons,
             n,
             block: 0,
+            kappa: 0,
+            tempo: 0,
             uid_to_idx,
             hotkey_to_uid,
             coldkey_to_uids,
@@ -145,10 +162,19 @@ impl Metagraph {
         let n = query_subnet_n(&at_block, self.netuid).await?;
         self.n = n;
 
+        self.kappa = fetch_typed::<u16>(&at_block, "Kappa", netuid_keys(self.netuid))
+            .await?
+            .unwrap_or(0);
+        self.tempo = fetch_typed::<u16>(&at_block, "Tempo", netuid_keys(self.netuid))
+            .await?
+            .unwrap_or(0);
+
         info!(
             netuid = self.netuid,
             n = n,
             block = self.block,
+            kappa = self.kappa,
+            tempo = self.tempo,
             "syncing metagraph"
         );
 

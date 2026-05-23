@@ -1,10 +1,11 @@
+mod allowlist;
 mod cli;
 mod dsperse;
 mod firewall;
 mod handlers;
 mod lightning_server;
-mod permit_resolver;
-mod source_resolver;
+mod nftables;
+mod roster;
 
 use std::sync::Arc;
 
@@ -114,30 +115,39 @@ async fn main() -> Result<()> {
     let handlers = std::sync::Arc::new(handlers);
 
     let handler_timeout = cli.handler_timeout;
-    let permit_resolver: Option<Box<dyn btlightning::ValidatorPermitResolver>> = if cli
-        .disable_blacklist
-    {
-        warn!("--disable-blacklist set; validator permit enforcement is bypassed (TESTING ONLY)");
+    let allowlist: Option<Arc<allowlist::ValidatorAllowlist>> = if cli.disable_blacklist {
+        warn!("--disable-blacklist set; validator allowlist is bypassed (TESTING ONLY)");
         None
     } else {
-        Some(Box::new(permit_resolver::MetagraphPermitResolver::new(
-            metagraph.clone(),
-        )))
-    };
-    let source_resolver: Option<Box<dyn btlightning::SourceAddressResolver>> =
-        if cli.disable_blacklist {
-            None
+        let cache_policy = if cli.no_validator_ip_cache {
+            allowlist::CachePolicy::InMemoryOnly
         } else {
-            Some(Box::new(source_resolver::MetagraphSourceResolver::new(
-                metagraph.clone(),
-            )))
+            allowlist::CachePolicy::PersistToDisk
         };
+        Some(Arc::new(
+            allowlist::ValidatorAllowlist::new(
+                metagraph.clone(),
+                cli.netuid,
+                std::path::PathBuf::from(wallet.wallet_path.as_str()),
+                cache_policy,
+            )
+            .context("initializing validator allowlist")?,
+        ))
+    };
+
+    let nftables_manager = if cli.no_nftables || allowlist.is_none() {
+        None
+    } else {
+        Some(Arc::new(nftables::NftablesManager::new(quic_port)))
+    };
+
     let quic_handle = {
         let handlers = handlers.clone();
         let hotkey = wallet.hotkey_ss58().to_string();
         let w_name = wallet.name.clone();
         let w_path = wallet.wallet_path.clone();
         let w_hotkey = wallet.hotkey_name.clone();
+        let allowlist = allowlist.clone();
         tokio::spawn(async move {
             lightning_server::run_lightning_server(
                 &hotkey,
@@ -148,8 +158,7 @@ async fn main() -> Result<()> {
                 quic_port,
                 handler_timeout,
                 handlers,
-                permit_resolver,
-                source_resolver,
+                allowlist,
             )
             .await
         })
@@ -176,6 +185,8 @@ async fn main() -> Result<()> {
         let client = chain_client.clone();
         let netuid = cli.netuid;
         let sync_interval = cli.metagraph_sync_interval;
+        let allowlist = allowlist.clone();
+        let nftables_manager = nftables_manager.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(sync_interval)).await;
@@ -183,6 +194,20 @@ async fn main() -> Result<()> {
                 match fresh.sync(&client).await {
                     Ok(()) => {
                         *meta.write().await = fresh;
+                        if let Some(al) = allowlist.as_ref() {
+                            let cov = al.evaluate().await;
+                            if let Some(nft) = nftables_manager.as_ref() {
+                                nft.apply(cov.enforcing, &cov.allowed_ips).await;
+                            }
+                            info!(
+                                enforcing = cov.enforcing,
+                                coverage_pct = cov.fraction() * 100.0,
+                                kappa_pct = cov.kappa_fraction() * 100.0,
+                                blocks_since_start = cov.blocks_since_start,
+                                tempo = cov.tempo,
+                                "validator allowlist evaluated"
+                            );
+                        }
                     }
                     Err(e) => {
                         warn!(error = %e, "metagraph sync failed, retaining previous state");
@@ -257,7 +282,6 @@ async fn run_loopback(cli: Cli) -> Result<()> {
                 port,
                 handler_timeout,
                 handlers,
-                None,
                 None,
             )
             .await

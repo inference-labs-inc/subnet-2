@@ -26,3 +26,8 @@ hex = { workspace = true }
 subxt = { workspace = true }
 shellexpand = { workspace = true }
 rmp-serde = { workspace = true }
+parity-scale-codec = { version = "3", features = ["derive"] }
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

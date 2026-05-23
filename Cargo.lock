@@ -885,9 +885,8 @@ dependencies = [
 
 [[package]]
 name = "btlightning"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdd378909cf81403b5bbd255a148b7745653d49df302bc58e4631c11fdbf42a3"
+version = "0.1.0"
+source = "git+https://github.com/inference-labs-inc/btlightning.git?branch=introduce/source-allowlist-bypass-mode#501cd6ede4b62235314735bf1922279c717305cc"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6327,6 +6326,7 @@ dependencies = [
  "subxt",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -6358,10 +6358,12 @@ name = "sn2-miner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "btlightning",
  "clap",
  "dsperse",
  "hex",
+ "parity-scale-codec",
  "reqwest 0.12.28",
  "rmp-serde",
  "serde_json",
@@ -6370,6 +6372,7 @@ dependencies = [
  "sn2-circuit-store",
  "sn2-types",
  "subxt",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

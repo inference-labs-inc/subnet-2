@@ -43,7 +43,7 @@ hex = "0.4"
 sp-core = "34"
 bittensor_wallet = { version = "4.0.1", package = "btwallet", default-features = false }
 subxt = "0.50"
-btlightning = { version = "0.2.9", features = ["btwallet", "subtensor"] }
+btlightning = { git = "https://github.com/inference-labs-inc/btlightning.git", branch = "introduce/source-allowlist-bypass-mode", features = ["btwallet", "subtensor"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
@@ -61,3 +61,4 @@ dsperse = { git = "https://github.com/inference-labs-inc/dsperse", rev = "6af459
 ndarray = { version = "0.17", features = ["serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 bittensor-drand = { git = "https://github.com/inference-labs-inc/bittensor-drand.git", rev = "e55ed98", default-features = false }
+

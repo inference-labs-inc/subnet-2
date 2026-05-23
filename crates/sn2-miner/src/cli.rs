@@ -58,6 +58,20 @@ pub struct Cli {
     )]
     pub disable_blacklist: bool,
 
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Do not load the persisted validator roster on startup. New observations still persist unless --no-validator-ip-cache is combined with a read-only wallet path."
+    )]
+    pub no_validator_ip_cache: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Disable nftables ruleset emission. The userspace source-IP check at the QUIC listener remains in effect."
+    )]
+    pub no_nftables: bool,
+
     #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(30..), help = "Metagraph sync interval in seconds")]
     pub metagraph_sync_interval: u64,
 
