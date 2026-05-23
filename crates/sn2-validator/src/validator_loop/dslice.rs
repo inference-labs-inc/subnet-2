@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,6 +9,13 @@ use tracing::{info, warn};
 
 use super::ValidatorLoop;
 use crate::relay::DsperseSubmission;
+
+/// Number of blocks before a slice in `disabled_slices` is reconsidered for
+/// dispatch. Roughly one tempo on subtensor (~12s blocks). Picked so that a
+/// transient network or chain event that synchronously fails every slice
+/// (e.g. a chain RPC reconnect storm) self-heals within the next epoch
+/// rather than persisting until the validator is restarted.
+const DISABLED_SLICE_REHAB_BLOCKS: u64 = 360;
 
 enum ExpectedInputs {
     NoMetadata,
@@ -440,7 +447,16 @@ impl ValidatorLoop {
         };
 
         let work_items: Vec<_> = {
-            let disabled = self.disabled_slices.get(&circuit.id).cloned();
+            let disabled: Option<HashSet<String>> =
+                self.disabled_slices.get(&circuit.id).map(|m| {
+                    m.iter()
+                        .filter(|(_, &disabled_at)| {
+                            self.current_block.saturating_sub(disabled_at)
+                                < DISABLED_SLICE_REHAB_BLOCKS
+                        })
+                        .map(|(slice_id, _)| slice_id.clone())
+                        .collect()
+                });
             match disabled {
                 Some(disabled) if !disabled.is_empty() => {
                     let (kept, skipped): (Vec<_>, Vec<_>) = work_items
@@ -790,6 +806,7 @@ impl ValidatorLoop {
             .map(str::to_string)
         {
             let (_, _, slice_tiles) = self.run_manager.slice_tile_counts(run_uid);
+            let total_slices = slice_tiles.len();
             let candidates: Vec<String> = slice_tiles
                 .into_keys()
                 .filter(|slice_id| {
@@ -797,11 +814,28 @@ impl ValidatorLoop {
                         && self.run_manager.verified_tile_count(run_uid, slice_id) == 0
                 })
                 .collect();
-            if !candidates.is_empty() {
+            // A run that lost every slice with zero verified tiles is much
+            // more likely to be a validator-side network or chain event
+            // (mass QUIC reconnect, RPC stall) than evidence that each slice
+            // is independently unprovable. Refuse to write the disable list
+            // in that case so the validator can self-heal on the next run
+            // instead of trapping itself into a no-dispatch loop. Per-slice
+            // disables still fire when at least one slice in the run made
+            // progress, which is the signal the mechanism was designed for.
+            let all_slices_failed = total_slices > 0 && candidates.len() == total_slices;
+            if all_slices_failed {
+                warn!(
+                    run_uid = %run_uid,
+                    circuit_id = %circuit_id,
+                    total_slices,
+                    "every slice failed with zero verified tiles, treating as run-wide failure and skipping disable-list write"
+                );
+            } else if !candidates.is_empty() {
+                let block = self.current_block;
                 let entry = self.disabled_slices.entry(circuit_id.clone()).or_default();
                 let mut inserted = 0usize;
                 for slice_id in &candidates {
-                    if entry.insert(slice_id.clone()) {
+                    if entry.insert(slice_id.clone(), block).is_none() {
                         inserted += 1;
                     }
                 }
@@ -810,6 +844,7 @@ impl ValidatorLoop {
                         circuit_id = %circuit_id,
                         newly_disabled = inserted,
                         total_disabled_for_circuit = entry.len(),
+                        rehab_blocks = DISABLED_SLICE_REHAB_BLOCKS,
                         "disabled slices with zero verified tiles"
                     );
                 }
