@@ -51,13 +51,15 @@ impl NftablesManager {
             v4: v4.clone(),
             v6: v6.clone(),
         };
+        if self
+            .last
+            .lock()
+            .expect("nftables state lock poisoned")
+            .as_ref()
+            == Some(&next)
         {
-            let mut guard = self.last.lock().expect("nftables state lock poisoned");
-            if guard.as_ref() == Some(&next) {
-                debug!("nftables ruleset unchanged; skipping nft invocation");
-                return;
-            }
-            *guard = Some(next.clone());
+            debug!("nftables ruleset unchanged; skipping nft invocation");
+            return;
         }
         let axon_port = self.axon_port;
         let result = tokio::task::spawn_blocking(move || {
@@ -79,6 +81,7 @@ impl NftablesManager {
                 } else {
                     info!("nftables table removed (Learning mode)");
                 }
+                *self.last.lock().expect("nftables state lock poisoned") = Some(next);
             }
             Ok(Err(e)) => {
                 warn!(error = %e, "nftables update failed; userspace source-IP check remains in effect")

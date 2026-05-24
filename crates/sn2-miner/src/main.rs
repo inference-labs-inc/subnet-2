@@ -240,6 +240,10 @@ async fn main() -> Result<()> {
         }
     }
 
+    if let Some(nft) = nftables_manager.as_ref() {
+        nft.apply(false, &std::collections::HashSet::new()).await;
+    }
+
     Ok(())
 }
 
