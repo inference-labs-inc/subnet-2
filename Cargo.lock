@@ -885,8 +885,9 @@ dependencies = [
 
 [[package]]
 name = "btlightning"
-version = "0.1.0"
-source = "git+https://github.com/inference-labs-inc/btlightning.git?branch=introduce/source-allowlist-bypass-mode#501cd6ede4b62235314735bf1922279c717305cc"
+version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2de8cc34e93bb7bd1815d2fdfcc0c8dc85167063f68f97eb89db42b48f73aa5"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6326,7 +6327,6 @@ dependencies = [
  "subxt",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
