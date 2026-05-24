@@ -498,6 +498,8 @@ impl IncrementalRunManager {
             .retain(|(run_uid, _), _| !stale_set.contains(run_uid.as_str()));
         self.verified_tile_counts
             .retain(|(run_uid, _), _| !stale_set.contains(run_uid.as_str()));
+        self.skipped_slices
+            .retain(|run_uid, _| !stale_set.contains(run_uid.as_str()));
         for uid in stale.iter() {
             self.runs.remove(uid);
             self.evicted.insert(uid.clone());
