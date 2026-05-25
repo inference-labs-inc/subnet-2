@@ -124,6 +124,12 @@ impl ValidatorLoop {
                     "host memory pressure: trimming adaptive caps across all miners"
                 );
             }
+            let idle_decayed = self
+                .performance_tracker
+                .decay_idle_caps(&self.uid_hotkeys);
+            if idle_decayed > 0 {
+                info!(decremented = idle_decayed, "decayed idle adaptive caps");
+            }
             info!(
                 active_tasks = active_tasks,
                 rwr_queue = self.rwr_queue.len(),

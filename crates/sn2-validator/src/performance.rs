@@ -53,13 +53,7 @@ const MAX_BUFFERED_CAP_EVENTS: usize = 4096;
 pub enum CapDirection {
     Ramp,
     Backoff,
-    /// Cap ratcheted from 1 down to 0 — miner is excluded from dispatch
-    /// until a `REHAB_BLOCKS`-bounded cooldown elapses. Emitted only at the
-    /// 1->0 boundary, not on every sustained-failure window.
     Evict,
-    /// Cap restored from 0 back to 1 after the cooldown elapsed. The miner
-    /// gets a single probe slot; the existing ramp-up logic decides whether
-    /// they climb back or land in another Evict.
     Rehab,
 }
 
@@ -79,12 +73,12 @@ pub struct PerformanceTracker {
     adaptive_caps: HashMap<u16, usize>,
     at_cap_results: HashMap<u16, VecDeque<bool>>,
     cap_events: Vec<CapEvent>,
-    /// Uids whose cap just dropped to 0. Drained by the validator loop
-    /// to populate `dispatch_cooldowns` so the queryable filter excludes
-    /// them for `REHAB_BLOCKS`.
     pending_evictions: Vec<(u16, String)>,
+    at_cap_last_touched: HashMap<u16, Instant>,
     persistence_path: Option<PathBuf>,
 }
+
+const CAP_DECAY_IDLE_SECS: u64 = 600;
 
 fn window_ttl() -> Duration {
     Duration::from_secs(VERIFICATION_WINDOW_BLOCKS * BLOCK_TIME_SECS)
@@ -109,6 +103,7 @@ impl PerformanceTracker {
             at_cap_results: HashMap::new(),
             cap_events: Vec::new(),
             pending_evictions: Vec::new(),
+            at_cap_last_touched: HashMap::new(),
             persistence_path: Some(path),
         };
         tracker.load();
@@ -152,6 +147,7 @@ impl PerformanceTracker {
             if results.len() > CAPACITY_WINDOW_SIZE {
                 results.pop_front();
             }
+            self.at_cap_last_touched.insert(uid, now);
             self.update_adaptive_cap(uid, hotkey);
         }
     }
@@ -495,10 +491,6 @@ impl PerformanceTracker {
             }
         } else if success_rate < CAPACITY_BACKOFF_THRESHOLD && *current > 0 {
             *current -= 1;
-            // 1 -> 0 is a terminal eviction; the caller will add the hotkey
-            // to dispatch_cooldowns so the queryable filter excludes it for
-            // REHAB_BLOCKS. Sustained-failure decrements above 1 still emit
-            // the normal Backoff direction.
             direction = if *current == 0 {
                 self.pending_evictions.push((uid, hotkey.to_string()));
                 Some(CapDirection::Evict)
@@ -536,17 +528,53 @@ impl PerformanceTracker {
         std::mem::take(&mut self.cap_events)
     }
 
-    /// Drain the set of (uid, hotkey) pairs whose adaptive cap just hit zero.
-    /// The validator loop consumes this on every dispatch tick and inserts
-    /// the hotkeys into `dispatch_cooldowns` with a `REHAB_BLOCKS` expiry.
     pub fn drain_pending_evictions(&mut self) -> Vec<(u16, String)> {
         std::mem::take(&mut self.pending_evictions)
     }
 
-    /// Restore an evicted miner's cap from 0 back to 1, clearing the at-cap
-    /// result window so the next probe response starts a fresh ramp-up
-    /// evaluation. No-op for miners that are not currently at 0. Emits a
-    /// `CapDirection::Rehab` event for telemetry.
+    pub fn decay_idle_caps(&mut self, uid_hotkeys: &HashMap<u16, String>) -> usize {
+        let now = Instant::now();
+        let idle = Duration::from_secs(CAP_DECAY_IDLE_SECS);
+        let mut decayed = 0usize;
+        let uids: Vec<u16> = self
+            .adaptive_caps
+            .iter()
+            .filter(|(_, &cap)| cap > 1)
+            .filter(|(uid, _)| {
+                self.at_cap_last_touched
+                    .get(uid)
+                    .map(|t| now.duration_since(*t) > idle)
+                    .unwrap_or(true)
+            })
+            .map(|(uid, _)| *uid)
+            .collect();
+        for uid in uids {
+            let current = self.adaptive_caps.entry(uid).or_insert(1);
+            if *current <= 1 {
+                continue;
+            }
+            let cap_from = *current;
+            *current -= 1;
+            let cap_to = *current;
+            decayed += 1;
+            let hotkey = uid_hotkeys.get(&uid).cloned().unwrap_or_default();
+            self.cap_events.push(CapEvent {
+                uid,
+                hotkey,
+                direction: CapDirection::Backoff,
+                cap_from,
+                cap_to,
+                success_rate: 0.0,
+                at: now,
+            });
+            if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
+                let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
+                self.cap_events.drain(0..drop);
+            }
+        }
+        decayed
+    }
+
     pub fn rehabilitate(&mut self, uid: u16, hotkey: &str) {
         let current = match self.adaptive_caps.get_mut(&uid) {
             Some(c) if *c == 0 => c,
@@ -558,6 +586,7 @@ impl PerformanceTracker {
         if let Some(r) = self.at_cap_results.get_mut(&uid) {
             r.clear();
         }
+        self.at_cap_last_touched.insert(uid, Instant::now());
         self.cap_events.push(CapEvent {
             uid,
             hotkey: hotkey.to_string(),
@@ -585,6 +614,7 @@ mod tests {
             at_cap_results: HashMap::new(),
             cap_events: Vec::new(),
             pending_evictions: Vec::new(),
+            at_cap_last_touched: HashMap::new(),
             persistence_path: None,
         }
     }
