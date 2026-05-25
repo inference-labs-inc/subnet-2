@@ -46,7 +46,7 @@ impl ValidatorLoop {
                 }
             }
             let vr = VerifyResult {
-                verify_task_id: tokio::task::id(),
+                verify_task_id: None,
                 task_result: result,
                 verified,
                 hotkey,
@@ -95,7 +95,7 @@ impl ValidatorLoop {
                     let captured_hotkey = hotkey.clone();
                     self.verify_tasks.spawn(async move {
                         VerifyResult {
-                            verify_task_id: tokio::task::id(),
+                            verify_task_id: Some(tokio::task::id()),
                             task_result: result,
                             verified: true,
                             hotkey: captured_hotkey,
@@ -105,7 +105,7 @@ impl ValidatorLoop {
                     let processor = ResponseProcessor::new();
                     let captured_hotkey = hotkey.clone();
                     self.verify_tasks.spawn(async move {
-                        let verify_task_id = tokio::task::id();
+                        let verify_task_id = Some(tokio::task::id());
                         let verified =
                             matches!(processor.verify_response(&mut response).await, Ok(true));
                         response.verification_result = verified;
@@ -123,7 +123,7 @@ impl ValidatorLoop {
                 let captured_hotkey = hotkey.clone();
                 self.verify_tasks.spawn(async move {
                     VerifyResult {
-                        verify_task_id: tokio::task::id(),
+                        verify_task_id: Some(tokio::task::id()),
                         task_result: result,
                         verified: false,
                         hotkey: captured_hotkey,
