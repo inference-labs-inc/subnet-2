@@ -464,7 +464,7 @@ impl ValidatorLoop {
                     match result {
                         Ok(task_result) => {
                             self.task_meta.remove(&task_result.tokio_task_id);
-                            self.start_verification(task_result);
+                            self.start_verification(task_result).await;
                         }
                         Err(e) => {
                             if let Some((uid, guard_hash)) = self.task_meta.remove(&e.id()) {

@@ -6,18 +6,13 @@ use crate::relay::FRAME_PROOF_RESULT;
 use crate::response_processor::ResponseProcessor;
 
 impl ValidatorLoop {
-    pub(super) fn start_verification(&mut self, mut result: TaskResult) {
+    pub(super) async fn start_verification(&mut self, mut result: TaskResult) {
         let uid = result.uid;
 
         if let Some(count) = self.miner_active_count.get_mut(&uid) {
             *count = count.saturating_sub(1);
         }
 
-        // Decide sampling now so we can free proof bytes from responses
-        // that will be no-op verified and never relayed. Holding the bytes
-        // until spawn_verification means pending_verifications buffers the
-        // full proof payload across the verify-CPU bottleneck for ~95% of
-        // responses that take the RSV fast path without needing them.
         let sample = decide_sample(&result);
         if !sample && !response_needs_proof_bytes_for_downstream(&result) {
             if let TaskOutcome::Success(ref mut response) = result.outcome {
@@ -26,13 +21,38 @@ impl ValidatorLoop {
                 response.witness = None;
                 response.raw = None;
                 response.public_json = None;
-                // Also release the validator's local input copy. Pre-sampling
-                // at dispatch already drops most of these before the task is
-                // spawned, but the audit-eligible path still allocates inputs
-                // and this branch lets force-verify-then-no-verify edge cases
-                // (e.g. empty proof on a force_verify request) reclaim them.
                 response.inputs = None;
             }
+        }
+
+        // Fast path: when no real ZK verification is needed (96% of cases on
+        // mainnet — `sample=false` non-audit traffic and `proof_size=0`
+        // failures), bypass the verify_tasks JoinSet entirely and call
+        // finish_verification inline. The current path through `spawn` ->
+        // `verify_tasks.join_next()` -> `finish_verification` adds a spawn +
+        // JoinSet round-trip per result for what is effectively a no-op verify,
+        // which is the dominant scheduling cost at high throughput. Real ZK
+        // verifies still go through verify_tasks below so they can run
+        // concurrent on the runtime worker pool.
+        let needs_real_verify =
+            sample && matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
+        if !needs_real_verify {
+            let guard_hash = result.guard_hash.clone();
+            let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
+            let verified = matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
+            if verified {
+                if let TaskOutcome::Success(ref mut response) = result.outcome {
+                    response.verification_result = true;
+                }
+            }
+            let vr = VerifyResult {
+                verify_task_id: tokio::task::id(),
+                task_result: result,
+                verified,
+                hotkey,
+            };
+            self.finish_verification(vr, guard_hash).await;
+            return;
         }
 
         if self.verify_tasks.len() >= self.verification_concurrency {
