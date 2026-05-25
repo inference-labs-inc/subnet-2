@@ -261,15 +261,29 @@ impl ValidatorLoop {
         self.score_manager.sync_uids(&uids);
         self.rsv
             .prune_expired(self.current_block, self.blocks_per_tempo);
-        let blacklist_before = self.reconnect_blacklist.len();
-        self.reconnect_blacklist
-            .retain(|_, until| self.current_block < *until);
-        let blacklist_after = self.reconnect_blacklist.len();
-        if blacklist_before != blacklist_after {
+        let cooldowns_before = self.dispatch_cooldowns.len();
+        let expired_hotkeys: Vec<String> = self
+            .dispatch_cooldowns
+            .iter()
+            .filter(|(_, &until)| self.current_block >= until)
+            .map(|(hk, _)| hk.clone())
+            .collect();
+        for hk in &expired_hotkeys {
+            self.dispatch_cooldowns.remove(hk);
+            // Re-arm the miner with one probe slot. If the probe fails,
+            // the at-cap window will refill with mostly-zero successes
+            // and the next `update_adaptive_cap` will Evict them again.
+            if let Some(uid) = self.config.metagraph.get_uid_by_hotkey(hk) {
+                self.performance_tracker.rehabilitate(uid, hk);
+            }
+        }
+        let cooldowns_after = self.dispatch_cooldowns.len();
+        if cooldowns_before != cooldowns_after {
             info!(
-                expired = blacklist_before - blacklist_after,
-                remaining = blacklist_after,
-                "reconnect_blacklist pruned"
+                expired = cooldowns_before - cooldowns_after,
+                remaining = cooldowns_after,
+                rehab_blocks = sn2_types::REHAB_BLOCKS,
+                "dispatch_cooldowns pruned"
             );
         }
 
@@ -456,7 +470,7 @@ impl ValidatorLoop {
                     if self.rsv.is_skiplisted(hk, current_block) {
                         return true;
                     }
-                    self.reconnect_blacklist
+                    self.dispatch_cooldowns
                         .get(hk)
                         .is_some_and(|&until| current_block < until)
                 })

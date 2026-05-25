@@ -348,7 +348,7 @@ impl ValidatorLoop {
                 self.blocks_per_tempo
             };
             let until = self.current_block + bpt;
-            self.reconnect_blacklist.insert(hotkey.to_string(), until);
+            self.dispatch_cooldowns.insert(hotkey.to_string(), until);
         }
 
         let is_verification_failure = reason.starts_with("verification failed")
