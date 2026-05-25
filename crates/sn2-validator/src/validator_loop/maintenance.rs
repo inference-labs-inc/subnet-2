@@ -128,15 +128,18 @@ impl ValidatorLoop {
                 let mut samples: Vec<u64> =
                     self.finish_verify_samples.iter().copied().collect();
                 self.finish_verify_samples.clear();
+                let count = self.finish_verify_count;
+                let max = self.finish_verify_max;
+                self.finish_verify_count = 0;
+                self.finish_verify_max = 0;
                 let n = samples.len();
                 if n == 0 {
-                    (0u64, 0u64, 0u64, 0u64)
+                    (count, 0u64, 0u64, max)
                 } else {
                     samples.sort_unstable();
                     let p50 = samples[n / 2];
                     let p99 = samples[(n * 99 / 100).min(n - 1)];
-                    let max = *samples.last().unwrap();
-                    (n as u64, p50, p99, max)
+                    (count, p50, p99, max)
                 }
             };
             info!(

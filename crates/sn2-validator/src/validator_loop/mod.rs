@@ -180,13 +180,19 @@ pub struct ValidatorLoop {
     pub(super) consecutive_metagraph_failures: u32,
     pub(super) dispatch_cache: dispatch::DispatchCache,
     pub(super) reconnect_blacklist: HashMap<String, u64>,
-    /// Rolling buffer of recent finish_verification durations in microseconds.
-    /// Capped at FINISH_VERIFY_SAMPLE_BUFFER entries; oldest evicted first.
-    /// Drained on every health-line emit, so percentiles reflect the prior
-    /// ~15-second window. Pure observability — feature-flagged behind the
-    /// benchmark build; no impact on hot path beyond a single Instant::now()
-    /// + push and 4 percentile calculations every 15 seconds.
+    /// Reservoir of recent finish_verification durations in microseconds,
+    /// kept bounded for percentile estimation. Reservoir sampling is biased
+    /// toward early entries with simple LRU eviction, which is fine for
+    /// rough p50/p99 over the 15s window. The true call count is tracked
+    /// separately in `finish_verify_count` so it does not saturate.
     pub(super) finish_verify_samples: VecDeque<u64>,
+    /// Number of finish_verification calls since the last health emit.
+    /// Drained to 0 on each emit so the reported count is a per-interval rate
+    /// rather than a cumulative sum.
+    pub(super) finish_verify_count: u64,
+    /// Tracks the maximum sample seen since the last health emit, in case
+    /// the reservoir evicts the outlier.
+    pub(super) finish_verify_max: u64,
     /// Counter for the number of times the dispatch loop hit the back-pressure
     /// halt (`pending_verifications >= pending_cap`). Cumulative since process
     /// start. Reported in the health line so we can rate-derive halt events.
@@ -403,6 +409,8 @@ impl ValidatorLoop {
             dispatch_cache: dispatch::DispatchCache::new(),
             reconnect_blacklist: HashMap::new(),
             finish_verify_samples: VecDeque::with_capacity(FINISH_VERIFY_SAMPLE_BUFFER),
+            finish_verify_count: 0,
+            finish_verify_max: 0,
             dispatch_halt_count: 0,
         })
     }

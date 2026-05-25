@@ -266,6 +266,10 @@ impl ValidatorLoop {
         }
 
         let elapsed = _bench_start.elapsed().as_micros() as u64;
+        self.finish_verify_count = self.finish_verify_count.saturating_add(1);
+        if elapsed > self.finish_verify_max {
+            self.finish_verify_max = elapsed;
+        }
         if self.finish_verify_samples.len() >= super::FINISH_VERIFY_SAMPLE_BUFFER {
             self.finish_verify_samples.pop_front();
         }
