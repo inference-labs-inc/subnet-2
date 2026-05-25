@@ -272,6 +272,8 @@ impl StatsReporter {
                 let direction = match e.direction {
                     CapDirection::Ramp => "ramp",
                     CapDirection::Backoff => "backoff",
+                    CapDirection::Evict => "evict",
+                    CapDirection::Rehab => "rehab",
                 };
                 let elapsed_ms = now.saturating_duration_since(e.at).as_millis() as u64;
                 serde_json::json!({

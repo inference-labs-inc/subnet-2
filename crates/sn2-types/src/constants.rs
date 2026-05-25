@@ -40,6 +40,13 @@ pub const CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO: f64 = 0.20;
 pub const CAPACITY_PRESSURE_BACKOFF_FACTOR: f64 = 0.10;
 pub const IP_REGION_CAP_FRACTION: f64 = 0.25;
 
+/// Block-height cooldown applied to disabled slices and to miners whose
+/// adaptive capacity ratchets below 1. Approximately one mainnet epoch
+/// (~72 minutes at 12s blocks) — long enough for transient miner faults
+/// or chain-side reconnect storms to self-heal, short enough that a
+/// recovered miner re-enters dispatch within the same scoring window.
+pub const REHAB_BLOCKS: u64 = 360;
+
 pub const MAX_POW_QUEUE_SIZE: usize = 1024;
 pub const POW_OUTPUT_STRIDE: usize = MAX_POW_QUEUE_SIZE;
 pub const POW_SCORES_OFFSET: usize = 0;

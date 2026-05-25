@@ -56,7 +56,7 @@ impl ValidatorLoop {
             .neurons
             .iter()
             .filter(|n| {
-                if let Some(&until) = self.reconnect_blacklist.get(&n.hotkey) {
+                if let Some(&until) = self.dispatch_cooldowns.get(&n.hotkey) {
                     if current_block < until {
                         return false;
                     }
@@ -141,6 +141,28 @@ impl ValidatorLoop {
     }
 
     fn refresh_dispatch_cache_if_stale(&mut self, queryable_uids: &[u16]) {
+        // Always drain pending evictions even when the cache is fresh, so a
+        // 1->0 cap transition that happens between cache refreshes still
+        // lands in dispatch_cooldowns and excludes the miner on the next
+        // queryable filter pass.
+        let evicted = self.performance_tracker.drain_pending_evictions();
+        if !evicted.is_empty() {
+            let until = self.current_block.saturating_add(sn2_types::REHAB_BLOCKS);
+            for (uid, hotkey) in &evicted {
+                self.dispatch_cooldowns
+                    .insert(hotkey.clone(), until)
+                    .is_none()
+                    .then(|| {
+                        tracing::info!(
+                            uid = *uid,
+                            until_block = until,
+                            rehab_blocks = sn2_types::REHAB_BLOCKS,
+                            "miner evicted from dispatch — capacity ratcheted to 0, cooldown until block"
+                        );
+                    });
+            }
+        }
+
         let fresh = self
             .dispatch_cache
             .refreshed_at
