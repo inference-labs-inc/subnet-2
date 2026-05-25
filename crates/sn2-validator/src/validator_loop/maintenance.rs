@@ -124,6 +124,21 @@ impl ValidatorLoop {
                     "host memory pressure: trimming adaptive caps across all miners"
                 );
             }
+            let (fv_count, fv_p50, fv_p99, fv_max) = {
+                let mut samples: Vec<u64> =
+                    self.finish_verify_samples.iter().copied().collect();
+                self.finish_verify_samples.clear();
+                let n = samples.len();
+                if n == 0 {
+                    (0u64, 0u64, 0u64, 0u64)
+                } else {
+                    samples.sort_unstable();
+                    let p50 = samples[n / 2];
+                    let p99 = samples[(n * 99 / 100).min(n - 1)];
+                    let max = *samples.last().unwrap();
+                    (n as u64, p50, p99, max)
+                }
+            };
             info!(
                 active_tasks = active_tasks,
                 rwr_queue = self.rwr_queue.len(),
@@ -136,6 +151,11 @@ impl ValidatorLoop {
                 verify_tasks = self.verify_tasks.len(),
                 pending_verifications = self.pending_verifications.len(),
                 pressure_backoffs = pressure_backoffs,
+                dispatch_halt_count = self.dispatch_halt_count,
+                fv_count = fv_count,
+                fv_p50_us = fv_p50,
+                fv_p99_us = fv_p99,
+                fv_max_us = fv_max,
                 "health"
             );
             if let Some(reporter) = &mut self.stats_reporter {

@@ -119,6 +119,7 @@ impl ValidatorLoop {
         vr: VerifyResult,
         guard_hash: Option<String>,
     ) {
+        let _bench_start = std::time::Instant::now();
         let result = vr.task_result;
         let verified = vr.verified;
         let uid = result.uid;
@@ -243,6 +244,12 @@ impl ValidatorLoop {
                 self.pipeline.release_hash(hash);
             }
         }
+
+        let elapsed = _bench_start.elapsed().as_micros() as u64;
+        if self.finish_verify_samples.len() >= super::FINISH_VERIFY_SAMPLE_BUFFER {
+            self.finish_verify_samples.pop_front();
+        }
+        self.finish_verify_samples.push_back(elapsed);
     }
 }
 

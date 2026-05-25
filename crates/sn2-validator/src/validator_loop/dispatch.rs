@@ -35,6 +35,7 @@ impl ValidatorLoop {
     pub(super) async fn dispatch_requests(&mut self) -> Result<()> {
         let pending_cap = self.verification_concurrency.saturating_mul(4);
         if self.pending_verifications.len() >= pending_cap {
+            self.dispatch_halt_count = self.dispatch_halt_count.saturating_add(1);
             return Ok(());
         }
 
