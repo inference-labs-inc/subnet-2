@@ -415,6 +415,17 @@ impl IncrementalRunManager {
             .unwrap_or(0)
     }
 
+    /// Returns true when the slice was marked failed without ever being
+    /// dispatched in this run (already-disabled, preflight rejection, etc.).
+    /// finalize_combined_run uses this to keep skipped slices out of the
+    /// disable-list write — they were never attempted, so resetting their
+    /// disabled_at block would defeat the rehab cooldown.
+    pub fn is_slice_skipped(&self, run_uid: &str, slice_id: &str) -> bool {
+        self.skipped_slices
+            .get(run_uid)
+            .is_some_and(|s| s.contains(slice_id))
+    }
+
     pub fn is_run_complete(&self, run_uid: &str) -> bool {
         self.runs
             .get(run_uid)
@@ -601,6 +612,45 @@ mod tests {
             matches!(result, OutputConsistency::Consistent { .. }),
             "near-zero values should not trigger false positives, got {result:?}"
         );
+    }
+
+    #[test]
+    fn is_slice_skipped_false_before_noting() {
+        let mgr = make_manager_with_run("run-1");
+        assert!(!mgr.is_slice_skipped("run-1", "slice_a"));
+    }
+
+    #[test]
+    fn is_slice_skipped_true_after_noting() {
+        let mut mgr = make_manager_with_run("run-1");
+        mgr.note_slice_skipped("run-1", "slice_a");
+        assert!(mgr.is_slice_skipped("run-1", "slice_a"));
+        assert!(!mgr.is_slice_skipped("run-1", "slice_b"));
+    }
+
+    #[test]
+    fn is_slice_skipped_scoped_to_run_uid() {
+        let mut mgr = make_manager_with_run("run-1");
+        mgr.start_run(
+            "run-2".to_string(),
+            "test-circuit".to_string(),
+            "test".to_string(),
+            RunSource::Benchmark,
+            None,
+            None,
+        );
+        mgr.note_slice_skipped("run-1", "slice_a");
+        assert!(mgr.is_slice_skipped("run-1", "slice_a"));
+        assert!(!mgr.is_slice_skipped("run-2", "slice_a"));
+    }
+
+    #[test]
+    fn skipped_slices_cleared_on_run_removal() {
+        let mut mgr = make_manager_with_run("run-1");
+        mgr.note_slice_skipped("run-1", "slice_a");
+        mgr.remove_run("run-1");
+        assert!(!mgr.is_slice_skipped("run-1", "slice_a"));
+        assert_eq!(mgr.skipped_slice_count("run-1"), 0);
     }
 
     #[test]
