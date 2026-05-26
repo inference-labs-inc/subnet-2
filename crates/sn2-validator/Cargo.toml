@@ -38,6 +38,8 @@ ndarray = { workspace = true }
 flate2 = { workspace = true }
 bytes = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rmp-serde = { workspace = true }
+serde = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

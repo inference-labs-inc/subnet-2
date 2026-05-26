@@ -96,6 +96,18 @@ fn evict_expired(window: &mut VecDeque<WindowEntry>) {
 }
 
 impl PerformanceTracker {
+    pub fn new() -> Self {
+        Self {
+            windows: HashMap::new(),
+            adaptive_caps: HashMap::new(),
+            at_cap_results: HashMap::new(),
+            cap_events: Vec::new(),
+            pending_evictions: Vec::new(),
+            at_cap_last_touched: HashMap::new(),
+            persistence_path: None,
+        }
+    }
+
     pub fn new_with_persistence(path: PathBuf) -> Self {
         let mut tracker = Self {
             windows: HashMap::new(),

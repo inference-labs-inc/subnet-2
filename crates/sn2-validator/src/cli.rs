@@ -83,4 +83,7 @@ pub struct Cli {
 
     #[arg(long, value_delimiter = ',')]
     pub additional_circuits: Vec<String>,
+
+    #[arg(long, help = "Run the deterministic simulator. Accepts a built-in scenario name (new-miner, old-miner-decay, overload) or a path to a msgpack-encoded scenario file.")]
+    pub simulate: Option<String>,
 }

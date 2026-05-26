@@ -39,6 +39,7 @@ mod rsv;
 mod scoring;
 mod stats_reporter;
 mod tensor;
+mod simulator;
 mod validator_loop;
 
 use anyhow::{Context, Result};
@@ -59,6 +60,10 @@ async fn main() -> Result<()> {
     sn2_types::init_tracing(&cli.log_level);
 
     info!(version = sn2_types::SOFTWARE_VERSION, "sn2-validator");
+
+    if let Some(scenario) = cli.simulate.clone() {
+        return simulator::run(&scenario).await;
+    }
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
