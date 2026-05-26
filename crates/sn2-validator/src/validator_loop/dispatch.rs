@@ -145,19 +145,19 @@ impl ValidatorLoop {
         if !evicted.is_empty() {
             let until = self.current_block.saturating_add(sn2_types::REHAB_BLOCKS);
             for (uid, hotkey) in &evicted {
-                if self
-                    .dispatch_cooldowns
-                    .insert(hotkey.clone(), until)
-                    .is_none()
-                {
+                let prev = self.dispatch_cooldowns.get(hotkey).copied().unwrap_or(0);
+                let new_until = std::cmp::max(prev, until);
+                self.dispatch_cooldowns.insert(hotkey.clone(), new_until);
+                if prev == 0 {
                     tracing::info!(
                         uid = *uid,
-                        until_block = until,
+                        until_block = new_until,
                         rehab_blocks = sn2_types::REHAB_BLOCKS,
                         "miner evicted from dispatch"
                     );
                 }
             }
+            self.dispatch_cache.refreshed_at = None;
         }
 
         let fresh = self

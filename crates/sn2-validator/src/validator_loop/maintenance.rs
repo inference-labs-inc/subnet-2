@@ -39,6 +39,11 @@ impl ValidatorLoop {
                 self.timings.metagraph_sync = now;
             }
 
+            if now.duration_since(self.timings.cooldown_prune) > Duration::from_secs(60) {
+                self.prune_expired_cooldowns();
+                self.timings.cooldown_prune = now;
+            }
+
             if now.duration_since(self.timings.weight_update)
                 > Duration::from_secs(WEIGHT_UPDATE_POLL_SECS)
             {
@@ -225,6 +230,31 @@ impl ValidatorLoop {
         }
     }
 
+    pub(super) fn prune_expired_cooldowns(&mut self) {
+        let cooldowns_before = self.dispatch_cooldowns.len();
+        let expired_hotkeys: Vec<String> = self
+            .dispatch_cooldowns
+            .iter()
+            .filter(|(_, &until)| self.current_block >= until)
+            .map(|(hk, _)| hk.clone())
+            .collect();
+        for hk in &expired_hotkeys {
+            self.dispatch_cooldowns.remove(hk);
+            if let Some(uid) = self.config.metagraph.get_uid_by_hotkey(hk) {
+                self.performance_tracker.rehabilitate(uid, hk);
+            }
+        }
+        let cooldowns_after = self.dispatch_cooldowns.len();
+        if cooldowns_before != cooldowns_after {
+            info!(
+                expired = cooldowns_before - cooldowns_after,
+                remaining = cooldowns_after,
+                rehab_blocks = sn2_types::REHAB_BLOCKS,
+                "dispatch_cooldowns pruned"
+            );
+        }
+    }
+
     pub(super) async fn sync_metagraph(&mut self) -> Result<()> {
         let chain_client = self
             .config
@@ -265,31 +295,7 @@ impl ValidatorLoop {
         self.score_manager.sync_uids(&uids);
         self.rsv
             .prune_expired(self.current_block, self.blocks_per_tempo);
-        let cooldowns_before = self.dispatch_cooldowns.len();
-        let expired_hotkeys: Vec<String> = self
-            .dispatch_cooldowns
-            .iter()
-            .filter(|(_, &until)| self.current_block >= until)
-            .map(|(hk, _)| hk.clone())
-            .collect();
-        for hk in &expired_hotkeys {
-            self.dispatch_cooldowns.remove(hk);
-            // Re-arm the miner with one probe slot. If the probe fails,
-            // the at-cap window will refill with mostly-zero successes
-            // and the next `update_adaptive_cap` will Evict them again.
-            if let Some(uid) = self.config.metagraph.get_uid_by_hotkey(hk) {
-                self.performance_tracker.rehabilitate(uid, hk);
-            }
-        }
-        let cooldowns_after = self.dispatch_cooldowns.len();
-        if cooldowns_before != cooldowns_after {
-            info!(
-                expired = cooldowns_before - cooldowns_after,
-                remaining = cooldowns_after,
-                rehab_blocks = sn2_types::REHAB_BLOCKS,
-                "dispatch_cooldowns pruned"
-            );
-        }
+        self.prune_expired_cooldowns();
 
         let mut axon_count = 0usize;
         for n in &self.config.metagraph.neurons {

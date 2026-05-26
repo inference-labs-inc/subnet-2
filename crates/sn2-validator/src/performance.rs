@@ -386,6 +386,7 @@ impl PerformanceTracker {
                     .map(|v| v.iter().filter_map(|b| b.as_bool()).collect())
                     .unwrap_or_default();
                 self.adaptive_caps.insert(uid, cap);
+                self.at_cap_last_touched.insert(uid, Instant::now());
                 if !results.is_empty() {
                     self.at_cap_results.insert(uid, results);
                 }
@@ -557,6 +558,9 @@ impl PerformanceTracker {
             *current -= 1;
             let cap_to = *current;
             decayed += 1;
+            if let Some(r) = self.at_cap_results.get_mut(&uid) {
+                r.clear();
+            }
             let hotkey = uid_hotkeys.get(&uid).cloned().unwrap_or_default();
             let direction = if cap_to == 0 {
                 self.pending_evictions.push((uid, hotkey.clone()));

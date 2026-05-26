@@ -92,6 +92,7 @@ pub(super) struct PeriodicTimings {
     pub(super) health_log: Instant,
     pub(super) replenish: Instant,
     pub(super) gc: Instant,
+    pub(super) cooldown_prune: Instant,
 }
 
 impl PeriodicTimings {
@@ -105,6 +106,7 @@ impl PeriodicTimings {
             health_log: now,
             replenish: now,
             gc: now,
+            cooldown_prune: now,
         }
     }
 }
