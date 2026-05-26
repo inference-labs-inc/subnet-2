@@ -142,6 +142,7 @@ impl ValidatorLoop {
 
     fn refresh_dispatch_cache_if_stale(&mut self, queryable_uids: &[u16]) {
         let evicted = self.performance_tracker.drain_pending_evictions();
+        let evicted_uids: HashSet<u16> = evicted.iter().map(|(uid, _)| *uid).collect();
         if !evicted.is_empty() {
             let until = self.current_block.saturating_add(sn2_types::REHAB_BLOCKS);
             for (uid, hotkey) in &evicted {
@@ -168,9 +169,14 @@ impl ValidatorLoop {
         if fresh {
             return;
         }
+        let filtered_queryable: Vec<u16> = queryable_uids
+            .iter()
+            .copied()
+            .filter(|uid| !evicted_uids.contains(uid))
+            .collect();
         self.dispatch_cache.capacities = self.performance_tracker.miner_capacities();
         self.dispatch_cache.adaptive_timeout = self.performance_tracker.adaptive_timeout();
-        self.dispatch_cache.api_eligible = self.compute_api_eligible_from_uids(queryable_uids);
+        self.dispatch_cache.api_eligible = self.compute_api_eligible_from_uids(&filtered_queryable);
         self.dispatch_cache.refreshed_at = Some(Instant::now());
     }
 

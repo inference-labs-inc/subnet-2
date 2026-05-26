@@ -238,11 +238,16 @@ impl ValidatorLoop {
             .filter(|(_, &until)| self.current_block >= until)
             .map(|(hk, _)| hk.clone())
             .collect();
+        let mut rehabilitated = false;
         for hk in &expired_hotkeys {
             self.dispatch_cooldowns.remove(hk);
             if let Some(uid) = self.config.metagraph.get_uid_by_hotkey(hk) {
                 self.performance_tracker.rehabilitate(uid, hk);
+                rehabilitated = true;
             }
+        }
+        if rehabilitated {
+            self.dispatch_cache.refreshed_at = None;
         }
         let cooldowns_after = self.dispatch_cooldowns.len();
         if cooldowns_before != cooldowns_after {

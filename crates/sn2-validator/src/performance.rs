@@ -457,6 +457,8 @@ impl PerformanceTracker {
         self.windows.remove(&uid);
         self.adaptive_caps.remove(&uid);
         self.at_cap_results.remove(&uid);
+        self.at_cap_last_touched.remove(&uid);
+        self.pending_evictions.retain(|(u, _)| *u != uid);
         self.cap_events.retain(|e| e.hotkey != hotkey);
     }
 
