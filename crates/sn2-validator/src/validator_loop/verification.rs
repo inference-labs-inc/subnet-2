@@ -30,7 +30,8 @@ impl ValidatorLoop {
         if !needs_real_verify {
             let guard_hash = result.guard_hash.clone();
             let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
-            let verified = matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
+            let verified =
+                matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
             if verified {
                 if let TaskOutcome::Success(ref mut response) = result.outcome {
                     response.verification_result = true;

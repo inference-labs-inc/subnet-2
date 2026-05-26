@@ -539,7 +539,7 @@ impl PerformanceTracker {
         let uids: Vec<u16> = self
             .adaptive_caps
             .iter()
-            .filter(|(_, &cap)| cap > 1)
+            .filter(|(_, &cap)| cap > 0)
             .filter(|(uid, _)| {
                 self.at_cap_last_touched
                     .get(uid)
@@ -550,7 +550,7 @@ impl PerformanceTracker {
             .collect();
         for uid in uids {
             let current = self.adaptive_caps.entry(uid).or_insert(1);
-            if *current <= 1 {
+            if *current == 0 {
                 continue;
             }
             let cap_from = *current;
@@ -558,10 +558,16 @@ impl PerformanceTracker {
             let cap_to = *current;
             decayed += 1;
             let hotkey = uid_hotkeys.get(&uid).cloned().unwrap_or_default();
+            let direction = if cap_to == 0 {
+                self.pending_evictions.push((uid, hotkey.clone()));
+                CapDirection::Evict
+            } else {
+                CapDirection::Backoff
+            };
             self.cap_events.push(CapEvent {
                 uid,
                 hotkey,
-                direction: CapDirection::Backoff,
+                direction,
                 cap_from,
                 cap_to,
                 success_rate: 0.0,
