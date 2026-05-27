@@ -66,9 +66,7 @@ async fn main() -> Result<()> {
     let endpoint =
         sn2_chain::resolve_endpoint(&cli.network, cli.subtensor_chain_endpoint.as_deref());
 
-    let chain_client = subxt::OnlineClient::<subxt::PolkadotConfig>::from_url(&endpoint)
-        .await
-        .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
+    let chain_client = sn2_chain::connect_chain(&endpoint).await?;
 
     let registration = sn2_chain::Registration::new(cli.netuid);
 

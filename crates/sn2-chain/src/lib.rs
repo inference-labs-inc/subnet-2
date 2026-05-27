@@ -6,6 +6,9 @@ mod subxt_helpers;
 mod wallet;
 mod weights;
 
+use anyhow::{Context, Result};
+use subxt::{OnlineClient, PolkadotConfig};
+
 pub use metagraph::{Metagraph, NeuronInfo};
 pub use registration::Registration;
 pub use wallet::Wallet;
@@ -25,6 +28,19 @@ pub fn resolve_endpoint(network: &str, override_endpoint: Option<&str>) -> Strin
             other => other.to_string(),
         },
     }
+}
+
+/// Open a subxt `OnlineClient` against `endpoint`. `wss://` URLs use the
+/// TLS-validating `from_url`; `ws://` URLs use `from_insecure_url`, which
+/// subxt requires for non-TLS sockets even when reaching localhost or a
+/// private substrate node.
+pub async fn connect_chain(endpoint: &str) -> Result<OnlineClient<PolkadotConfig>> {
+    let result = if endpoint.starts_with("ws://") {
+        OnlineClient::<PolkadotConfig>::from_insecure_url(endpoint).await
+    } else {
+        OnlineClient::<PolkadotConfig>::from_url(endpoint).await
+    };
+    result.with_context(|| format!("connecting to subtensor at {endpoint}"))
 }
 
 pub fn is_rpc_disconnect(err: &anyhow::Error) -> bool {

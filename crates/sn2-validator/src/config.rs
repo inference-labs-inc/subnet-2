@@ -37,9 +37,7 @@ impl ValidatorConfig {
         let endpoint =
             sn2_chain::resolve_endpoint(&cli.network, cli.subtensor_chain_endpoint.as_deref());
 
-        let chain_client = OnlineClient::<PolkadotConfig>::from_url(&endpoint)
-            .await
-            .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
+        let chain_client = sn2_chain::connect_chain(&endpoint).await?;
 
         let wallet = Arc::new(
             Wallet::from_paths(
@@ -167,9 +165,7 @@ impl ValidatorConfig {
 
     pub async fn reconnect_chain_client(&mut self) -> Result<()> {
         info!(endpoint = %self.chain_endpoint, "reconnecting to subtensor");
-        let client = OnlineClient::<PolkadotConfig>::from_url(&self.chain_endpoint)
-            .await
-            .with_context(|| format!("reconnecting to subtensor at {}", self.chain_endpoint))?;
+        let client = sn2_chain::connect_chain(&self.chain_endpoint).await?;
         self.chain_client = Some(client);
         info!("subtensor reconnection successful");
         Ok(())

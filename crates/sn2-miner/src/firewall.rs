@@ -18,9 +18,7 @@ pub async fn emit_nftables(
 ) -> Result<()> {
     let endpoint = sn2_chain::resolve_endpoint(network, chain_endpoint);
     info!(netuid, %endpoint, "syncing metagraph for firewall ruleset");
-    let chain_client = subxt::OnlineClient::<subxt::PolkadotConfig>::from_url(&endpoint)
-        .await
-        .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
+    let chain_client = sn2_chain::connect_chain(&endpoint).await?;
     let mut metagraph = Metagraph::new(netuid);
     metagraph
         .sync(&chain_client)
