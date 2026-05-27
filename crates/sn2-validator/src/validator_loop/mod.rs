@@ -610,17 +610,37 @@ impl ValidatorLoop {
 
 async fn resolve_external_ip(override_ip: Option<&str>) -> Result<IpAddr> {
     if let Some(ip) = override_ip {
-        return ip.parse().context("parsing --external-ip");
+        let parsed: IpAddr = ip.parse().context("parsing --external-ip")?;
+        return require_ipv4(parsed);
     }
-    let resp = reqwest::get("https://api.ipify.org")
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("building HTTP client for external-IP detection")?;
+    let resp = client
+        .get("https://api4.ipify.org")
+        .send()
         .await
-        .context("detecting external IP via api.ipify.org")?
+        .context("detecting external IP via api4.ipify.org")?
         .text()
         .await
         .context("reading external IP response body")?;
-    resp.trim()
+    let parsed: IpAddr = resp
+        .trim()
         .parse()
-        .with_context(|| format!("parsing detected IP: {resp}"))
+        .with_context(|| format!("parsing detected IP: {resp}"))?;
+    require_ipv4(parsed)
+}
+
+fn require_ipv4(ip: IpAddr) -> Result<IpAddr> {
+    match ip {
+        IpAddr::V4(_) => Ok(ip),
+        IpAddr::V6(_) => {
+            anyhow::bail!(
+                "external IP must be IPv4 (axon registration does not support IPv6): {ip}"
+            )
+        }
+    }
 }
 
 pub(super) fn is_valid_ip(ip_str: &str) -> bool {
