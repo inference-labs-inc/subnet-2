@@ -91,7 +91,17 @@ async fn main() -> Result<()> {
 
     let metagraph = Arc::new(RwLock::new(metagraph));
 
-    let external_ip = resolve_external_ip(cli.external_ip.as_deref()).await?;
+    let external_ip = match resolve_external_ip(cli.external_ip.as_deref()).await {
+        Ok(ip) => Some(ip),
+        Err(e) if cli.external_ip.is_none() => {
+            warn!(
+                error = ?e,
+                "external IP autodetection failed; skipping serve_axon for this boot"
+            );
+            None
+        }
+        Err(e) => return Err(e),
+    };
 
     let quic_port = cli.axon_port;
     anyhow::ensure!(quic_port != 0, "QUIC port must be non-zero");
@@ -153,13 +163,15 @@ async fn main() -> Result<()> {
         })
     };
 
-    match registration
-        .serve_axon(&chain_client, &wallet, external_ip, quic_port, 4)
-        .await
-    {
-        Ok(()) => {}
-        Err(e) => {
-            warn!(error = %e, "serve_axon failed (rate-limited or transient); miner will continue");
+    if let Some(external_ip) = external_ip {
+        match registration
+            .serve_axon(&chain_client, &wallet, external_ip, quic_port, 4)
+            .await
+        {
+            Ok(()) => {}
+            Err(e) => {
+                warn!(error = %e, "serve_axon failed (rate-limited or transient); miner will continue");
+            }
         }
     }
 

@@ -634,12 +634,16 @@ async fn resolve_external_ip(override_ip: Option<&str>) -> Result<IpAddr> {
 
 fn require_ipv4(ip: IpAddr) -> Result<IpAddr> {
     match ip {
-        IpAddr::V4(_) => Ok(ip),
-        IpAddr::V6(_) => {
-            anyhow::bail!(
-                "external IP must be IPv4 (axon registration does not support IPv6): {ip}"
-            )
-        }
+        IpAddr::V4(v4) if is_valid_ip(&v4.to_string()) => Ok(IpAddr::V4(v4)),
+        IpAddr::V4(v4) => anyhow::bail!(
+            "external IP must be a publicly routable IPv4 (loopback, RFC1918, \
+             CGNAT, link-local, multicast, and unspecified addresses are \
+             rejected so a misconfigured override does not count toward miner \
+             allowlist coverage without admitting the real public source): {v4}"
+        ),
+        IpAddr::V6(_) => anyhow::bail!(
+            "external IP must be IPv4 (axon registration does not support IPv6): {ip}"
+        ),
     }
 }
 
