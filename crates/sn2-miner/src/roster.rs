@@ -74,10 +74,6 @@ impl Roster {
         self.entries.get(hotkey).map(|e| e.ip.clone().into())
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = &RosterEntry> {
-        self.entries.values()
-    }
-
     /// Inserts or replaces a roster entry. Returns true when this is a new hotkey or
     /// the IP changed for an existing one (caller can use this to gate writeback).
     pub fn upsert(

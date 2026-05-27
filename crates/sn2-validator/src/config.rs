@@ -30,6 +30,9 @@ pub struct ValidatorConfig {
     pub additional_circuits: Vec<String>,
     pub verification_concurrency: Option<usize>,
     pub dispatch_ceiling: Option<usize>,
+    pub external_ip: Option<String>,
+    pub axon_port: u16,
+    pub disable_axon_publish: bool,
 }
 
 impl ValidatorConfig {
@@ -99,6 +102,9 @@ impl ValidatorConfig {
             additional_circuits: cli.additional_circuits.clone(),
             verification_concurrency: cli.verification_concurrency,
             dispatch_ceiling: cli.dispatch_ceiling,
+            external_ip: cli.external_ip.clone(),
+            axon_port: cli.axon_port,
+            disable_axon_publish: cli.disable_axon_publish,
         })
     }
 
@@ -162,6 +168,9 @@ impl ValidatorConfig {
             additional_circuits: cli.additional_circuits.clone(),
             verification_concurrency: cli.verification_concurrency,
             dispatch_ceiling: cli.dispatch_ceiling,
+            external_ip: None,
+            axon_port: cli.axon_port,
+            disable_axon_publish: true,
         })
     }
 

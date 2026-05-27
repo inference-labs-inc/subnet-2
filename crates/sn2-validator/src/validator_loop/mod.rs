@@ -6,12 +6,12 @@ mod results;
 mod verification;
 
 use std::collections::{HashMap, VecDeque};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use sn2_chain::WeightsSetter;
+use sn2_chain::{Registration, WeightsSetter};
 use sn2_types::*;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{watch, Notify, RwLock};
@@ -400,6 +400,8 @@ impl ValidatorLoop {
             relay.start().await?;
         }
 
+        self.publish_axon_if_configured().await;
+
         {
             let initial_miners = if self.config.loopback {
                 self.config
@@ -529,6 +531,44 @@ impl ValidatorLoop {
         Ok(())
     }
 
+    /// Publish the validator's external IP + axon port to the on-chain Axons
+    /// map. Miners running source-IP allowlists rely on this entry to identify
+    /// the validator's hotkey by source address; without it they cannot
+    /// distinguish a permitted validator from an unknown peer and must fall
+    /// back to handshake-only TOFU. `Registration::serve_axon` is idempotent
+    /// (chain state is checked first and the extrinsic is skipped if the
+    /// existing entry already matches), so callers may invoke this on every
+    /// metagraph sync without producing spurious extrinsics.
+    async fn publish_axon_if_configured(&self) {
+        if self.config.disable_axon_publish || self.config.loopback {
+            return;
+        }
+        let chain_client = match &self.config.chain_client {
+            Some(c) => c,
+            None => return,
+        };
+        let wallet = match &self.config.wallet {
+            Some(w) => w,
+            None => return,
+        };
+        let external_ip = match resolve_external_ip(self.config.external_ip.as_deref()).await {
+            Ok(ip) => ip,
+            Err(e) => {
+                warn!(error = ?e, "could not resolve external IP for axon publish; \
+                    miners with source-IP allowlists may reject this validator");
+                return;
+            }
+        };
+        let registration = Registration::new(self.config.netuid);
+        if let Err(e) = registration
+            .serve_axon(chain_client, wallet, external_ip, self.config.axon_port, 4)
+            .await
+        {
+            warn!(error = ?e, ip = %external_ip, port = self.config.axon_port,
+                "axon publish to chain failed; will retry on next metagraph sync");
+        }
+    }
+
     async fn shutdown(&mut self) {
         while self.dsperse_emit_tasks.join_next().await.is_some() {}
         if let Some(ev) = &self.dsperse_events {
@@ -566,6 +606,21 @@ impl ValidatorLoop {
         self.performance_tracker.save();
         self.rsv.save();
     }
+}
+
+async fn resolve_external_ip(override_ip: Option<&str>) -> Result<IpAddr> {
+    if let Some(ip) = override_ip {
+        return ip.parse().context("parsing --external-ip");
+    }
+    let resp = reqwest::get("https://api.ipify.org")
+        .await
+        .context("detecting external IP via api.ipify.org")?
+        .text()
+        .await
+        .context("reading external IP response body")?;
+    resp.trim()
+        .parse()
+        .with_context(|| format!("parsing detected IP: {resp}"))
 }
 
 pub(super) fn is_valid_ip(ip_str: &str) -> bool {

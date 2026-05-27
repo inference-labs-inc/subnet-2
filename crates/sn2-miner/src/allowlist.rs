@@ -34,7 +34,7 @@ use btlightning::{
     HandshakeObserver, LightningError, Result as LightningResult, SourceAddressResolver,
     SourceAllowlist, ValidatorPermitResolver,
 };
-use sn2_chain::Metagraph;
+use sn2_chain::{Metagraph, NeuronInfo};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -151,9 +151,17 @@ impl ValidatorAllowlist {
         let roster = self.roster.read().await;
         for n in permit_iter {
             total_permit_stake = total_permit_stake.saturating_add(n.stake as u128);
-            if let Some(ip) = roster.ip_for(&n.hotkey) {
+            let mut covered = false;
+            if let Some(chain_ip) = chain_axon_ip(n) {
+                allowed_ips.insert(chain_ip);
+                covered = true;
+            }
+            if let Some(roster_ip) = roster.ip_for(&n.hotkey) {
+                allowed_ips.insert(roster_ip);
+                covered = true;
+            }
+            if covered {
                 observed_permit_stake = observed_permit_stake.saturating_add(n.stake as u128);
-                allowed_ips.insert(ip);
             }
         }
         drop(roster);
@@ -233,21 +241,34 @@ impl SourceAddressResolver for ValidatorAllowlist {
             State::Enforcing => {
                 let roster = self.roster.blocking_read();
                 let meta = self.metagraph.blocking_read();
-                let permitted: HashSet<&str> = meta
-                    .neurons
-                    .iter()
-                    .filter(|n| n.validator_permit)
-                    .map(|n| n.hotkey.as_str())
-                    .collect();
-                let ips: HashSet<IpAddr> = roster
-                    .entries()
-                    .filter(|e| permitted.contains(e.hotkey.as_str()))
-                    .map(|e| e.ip.clone().into())
-                    .collect();
+                let mut ips: HashSet<IpAddr> = HashSet::new();
+                for n in meta.neurons.iter().filter(|n| n.validator_permit) {
+                    if let Some(chain_ip) = chain_axon_ip(n) {
+                        ips.insert(chain_ip);
+                    }
+                    if let Some(roster_ip) = roster.ip_for(&n.hotkey) {
+                        ips.insert(roster_ip);
+                    }
+                }
                 Ok(SourceAllowlist::Enforce(ips))
             }
         }
     }
+}
+
+/// Read `n.axon_ip` as an `IpAddr` if the chain entry is populated (non-empty
+/// string, parseable, and not the all-zero sentinel). Validators that have not
+/// run `serve_axon` keep the default `0.0.0.0` axon entry; treating that as
+/// "no chain IP" lets the TOFU roster supply their IP instead.
+fn chain_axon_ip(n: &NeuronInfo) -> Option<IpAddr> {
+    if n.axon_ip.is_empty() {
+        return None;
+    }
+    let ip: IpAddr = n.axon_ip.parse().ok()?;
+    if ip.is_unspecified() {
+        return None;
+    }
+    Some(ip)
 }
 
 #[async_trait::async_trait]
@@ -420,5 +441,83 @@ mod tests {
             !cov.enforcing,
             "coverage drops to 100/1000 = 10% < kappa; must fall back to Learning"
         );
+    }
+
+    fn neuron_with_axon(uid: u16, hotkey: &str, stake: u64, axon_ip: &str) -> NeuronInfo {
+        let mut n = neuron(uid, hotkey, stake, true);
+        n.axon_ip = axon_ip.to_string();
+        n
+    }
+
+    #[tokio::test]
+    async fn chain_axon_ip_covers_validator_without_handshake() {
+        // hk_chain publishes an axon IP on chain; hk_legacy does not.
+        // The chain entry alone should make hk_chain's stake count toward
+        // kappa coverage and place its IP in the enforced source set.
+        let meta = build_meta(
+            vec![
+                neuron_with_axon(0, "hk_chain", 900, "10.0.0.1"),
+                neuron(1, "hk_legacy", 100, true),
+            ],
+            500,
+            32767,
+            100,
+        );
+        let al = build_allowlist(meta).await;
+        let _ = al.evaluate().await;
+        // No handshake observed for hk_chain — coverage must come from the chain entry.
+        al.metagraph.write().await.block = 600;
+        let cov = al.evaluate().await;
+        assert!(
+            cov.enforcing,
+            "chain axon IP alone should satisfy kappa coverage"
+        );
+        assert!(cov.allowed_ips.contains(&"10.0.0.1".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn chain_unspecified_ip_does_not_count_as_coverage() {
+        // Validators that have not run serve_axon keep 0.0.0.0 on chain; this
+        // must be treated identically to an absent entry.
+        let meta = build_meta(
+            vec![
+                neuron_with_axon(0, "hk_unset", 900, "0.0.0.0"),
+                neuron(1, "hk_other", 100, true),
+            ],
+            500,
+            32767,
+            100,
+        );
+        let al = build_allowlist(meta).await;
+        let _ = al.evaluate().await;
+        al.metagraph.write().await.block = 600;
+        let cov = al.evaluate().await;
+        assert!(
+            !cov.enforcing,
+            "0.0.0.0 axon entry must not count toward coverage"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_and_roster_ips_are_unioned() {
+        // hk_chain publishes one IP on chain; the roster has observed it from
+        // a different address (e.g., the validator just rotated egress). Both
+        // IPs should appear in the enforced source set so the rotation does
+        // not interrupt traffic.
+        let meta = build_meta(
+            vec![neuron_with_axon(0, "hk_chain", 1000, "10.0.0.1")],
+            500,
+            32767,
+            100,
+        );
+        let al = build_allowlist(meta).await;
+        let _ = al.evaluate().await;
+        al.observe_successful_handshake("hk_chain", "10.0.0.2".parse().unwrap())
+            .await;
+        al.metagraph.write().await.block = 600;
+        let cov = al.evaluate().await;
+        assert!(cov.enforcing);
+        assert!(cov.allowed_ips.contains(&"10.0.0.1".parse().unwrap()));
+        assert!(cov.allowed_ips.contains(&"10.0.0.2".parse().unwrap()));
     }
 }

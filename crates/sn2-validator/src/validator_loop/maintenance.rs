@@ -36,6 +36,7 @@ impl ValidatorLoop {
 
             if now.duration_since(self.timings.metagraph_sync) > Duration::from_secs(3600) {
                 self.sync_metagraph().await?;
+                self.publish_axon_if_configured().await;
                 self.timings.metagraph_sync = now;
             }
 
