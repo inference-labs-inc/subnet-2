@@ -49,7 +49,17 @@ fn rmpv_to_json_value(value: RmpvValue) -> JsonValue {
             let mut obj = serde_json::Map::with_capacity(pairs.len());
             for (k, v) in pairs {
                 let key = match k {
-                    RmpvValue::String(s) => s.into_str().unwrap_or_default(),
+                    // MessagePack `str` is byte-clean and not guaranteed UTF-8.
+                    // Fall back to a hex-prefixed encoding for non-UTF-8 bytes
+                    // so each malformed key stays distinct rather than
+                    // collapsing onto an empty string.
+                    RmpvValue::String(s) => {
+                        if s.is_str() {
+                            s.into_str().unwrap_or_default()
+                        } else {
+                            format!("__msgpack_str_hex:{}", hex::encode(s.into_bytes()))
+                        }
+                    }
                     RmpvValue::Integer(i) => i.to_string(),
                     other => format!("{other}"),
                 };
@@ -182,6 +192,24 @@ mod tests {
         )]);
         let json = rmpv_to_json_value(value);
         assert_eq!(json["proof"], JsonValue::String("deadbeef".into()));
+    }
+
+    #[test]
+    fn non_utf8_map_keys_are_lossless() {
+        // Hand-encoded MessagePack: fixmap(2) { fixstr[2]=0xff,0x00 => 1, fixstr[2]=0xfe,0x01 => 2 }
+        let bytes: &[u8] = &[
+            0x82, // fixmap, 2 entries
+            0xa2, 0xff, 0x00, // fixstr(2) with non-utf8 bytes
+            0x01, 0xa2, 0xfe, 0x01, // fixstr(2) with different non-utf8 bytes
+            0x02,
+        ];
+        let value = rmpv::decode::read_value(&mut std::io::Cursor::new(bytes)).expect("decode");
+        let json = rmpv_to_json_value(value);
+        let obj = json.as_object().expect("map");
+        assert_eq!(obj.len(), 2, "non-utf8 keys must not collide");
+        assert!(obj.keys().all(|k| k.starts_with("__msgpack_str_hex:")));
+        assert!(obj.contains_key("__msgpack_str_hex:ff00"));
+        assert!(obj.contains_key("__msgpack_str_hex:fe01"));
     }
 
     #[test]
