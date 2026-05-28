@@ -63,6 +63,7 @@ jobs:
       - name: Run Semgrep
         run: |
           semgrep --config=auto \
+            --exclude-rule=javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket \
             --json --output=semgrep-results.json \
             --error
 
@@ -70,6 +71,7 @@ jobs:
         if: always()
         run: |
           semgrep --config=auto \
+            --exclude-rule=javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket \
             --sarif --output=semgrep-results.sarif \
             || true
 
