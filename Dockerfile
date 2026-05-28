@@ -86,7 +86,7 @@ RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["sn2-validator", "--help"]
 
-EXPOSE 8091/tcp
+EXPOSE 8091/udp
 EXPOSE 8443/tcp
 EXPOSE 9090/tcp
 
