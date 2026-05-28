@@ -30,6 +30,9 @@ pub struct ValidatorConfig {
     pub additional_circuits: Vec<String>,
     pub verification_concurrency: Option<usize>,
     pub dispatch_ceiling: Option<usize>,
+    pub external_ip: Option<String>,
+    pub axon_port: u16,
+    pub disable_axon_publish: bool,
 }
 
 impl ValidatorConfig {
@@ -37,9 +40,7 @@ impl ValidatorConfig {
         let endpoint =
             sn2_chain::resolve_endpoint(&cli.network, cli.subtensor_chain_endpoint.as_deref());
 
-        let chain_client = OnlineClient::<PolkadotConfig>::from_url(&endpoint)
-            .await
-            .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
+        let chain_client = sn2_chain::connect_chain(&endpoint).await?;
 
         let wallet = Arc::new(
             Wallet::from_paths(
@@ -99,6 +100,9 @@ impl ValidatorConfig {
             additional_circuits: cli.additional_circuits.clone(),
             verification_concurrency: cli.verification_concurrency,
             dispatch_ceiling: cli.dispatch_ceiling,
+            external_ip: cli.external_ip.clone(),
+            axon_port: cli.axon_port,
+            disable_axon_publish: cli.disable_axon_publish,
         })
     }
 
@@ -162,14 +166,15 @@ impl ValidatorConfig {
             additional_circuits: cli.additional_circuits.clone(),
             verification_concurrency: cli.verification_concurrency,
             dispatch_ceiling: cli.dispatch_ceiling,
+            external_ip: None,
+            axon_port: cli.axon_port,
+            disable_axon_publish: true,
         })
     }
 
     pub async fn reconnect_chain_client(&mut self) -> Result<()> {
         info!(endpoint = %self.chain_endpoint, "reconnecting to subtensor");
-        let client = OnlineClient::<PolkadotConfig>::from_url(&self.chain_endpoint)
-            .await
-            .with_context(|| format!("reconnecting to subtensor at {}", self.chain_endpoint))?;
+        let client = sn2_chain::connect_chain(&self.chain_endpoint).await?;
         self.chain_client = Some(client);
         info!("subtensor reconnection successful");
         Ok(())

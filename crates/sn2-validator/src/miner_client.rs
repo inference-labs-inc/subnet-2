@@ -4,8 +4,72 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use btlightning::{LightningClient, QuicAxonInfo, QuicRequest, Signer};
+use rmpv::Value as RmpvValue;
+use serde_json::Value as JsonValue;
 use sn2_chain::Wallet;
 use tracing::{debug, info};
+
+/// Converts an `rmpv::Value` tree into a `serde_json::Value`, hex-encoding any
+/// MessagePack `bin` payloads so they appear as hex strings to the rest of the
+/// validator pipeline. This is the wire-boundary adapter that lets miners emit
+/// binary proof/witness/public_signals without forcing changes through
+/// `MinerResponse`, the verifier, the proof uploader, and the relay.
+fn rmpv_to_json_value(value: RmpvValue) -> JsonValue {
+    match value {
+        RmpvValue::Nil => JsonValue::Null,
+        RmpvValue::Boolean(b) => JsonValue::Bool(b),
+        RmpvValue::Integer(i) => {
+            if let Some(u) = i.as_u64() {
+                JsonValue::Number(u.into())
+            } else if let Some(s) = i.as_i64() {
+                JsonValue::Number(s.into())
+            } else if let Some(f) = i.as_f64() {
+                serde_json::Number::from_f64(f)
+                    .map(JsonValue::Number)
+                    .unwrap_or(JsonValue::Null)
+            } else {
+                JsonValue::Null
+            }
+        }
+        RmpvValue::F32(f) => serde_json::Number::from_f64(f as f64)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+        RmpvValue::F64(f) => serde_json::Number::from_f64(f)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+        RmpvValue::String(s) => s
+            .into_str()
+            .map(JsonValue::String)
+            .unwrap_or(JsonValue::Null),
+        RmpvValue::Binary(bytes) => JsonValue::String(hex::encode(bytes)),
+        RmpvValue::Array(items) => {
+            JsonValue::Array(items.into_iter().map(rmpv_to_json_value).collect())
+        }
+        RmpvValue::Map(pairs) => {
+            let mut obj = serde_json::Map::with_capacity(pairs.len());
+            for (k, v) in pairs {
+                let key = match k {
+                    // MessagePack `str` is byte-clean and not guaranteed UTF-8.
+                    // Fall back to a hex-prefixed encoding for non-UTF-8 bytes
+                    // so each malformed key stays distinct rather than
+                    // collapsing onto an empty string.
+                    RmpvValue::String(s) => {
+                        if s.is_str() {
+                            s.into_str().unwrap_or_default()
+                        } else {
+                            format!("__msgpack_str_hex:{}", hex::encode(s.into_bytes()))
+                        }
+                    }
+                    RmpvValue::Integer(i) => i.to_string(),
+                    other => format!("{other}"),
+                };
+                obj.insert(key, rmpv_to_json_value(v));
+            }
+            JsonValue::Object(obj)
+        }
+        RmpvValue::Ext(_, _) => JsonValue::Null,
+    }
+}
 
 struct WalletSigner(Arc<Wallet>);
 
@@ -96,10 +160,66 @@ impl MinerQueryClient {
 
         let response = response.into_result().map_err(anyhow::Error::from)?;
 
-        let resp_body: serde_json::Value = response
-            .deserialize_data()
-            .map_err(anyhow::Error::from)
-            .context("deserializing QUIC response")?;
+        let mut obj = serde_json::Map::with_capacity(response.data.len());
+        for (k, v) in response.data {
+            obj.insert(k, rmpv_to_json_value(v));
+        }
+        let resp_body = serde_json::Value::Object(obj);
         Ok((resp_body, elapsed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_field_becomes_hex_string() {
+        let bytes = vec![0xde, 0xad, 0xbe, 0xef];
+        let value = RmpvValue::Map(vec![(
+            RmpvValue::String("proof".into()),
+            RmpvValue::Binary(bytes.clone()),
+        )]);
+        let json = rmpv_to_json_value(value);
+        assert_eq!(json["proof"], JsonValue::String(hex::encode(&bytes)));
+    }
+
+    #[test]
+    fn legacy_string_payloads_pass_through() {
+        let value = RmpvValue::Map(vec![(
+            RmpvValue::String("proof".into()),
+            RmpvValue::String("deadbeef".into()),
+        )]);
+        let json = rmpv_to_json_value(value);
+        assert_eq!(json["proof"], JsonValue::String("deadbeef".into()));
+    }
+
+    #[test]
+    fn non_utf8_map_keys_are_lossless() {
+        // Hand-encoded MessagePack: fixmap(2) { fixstr[2]=0xff,0x00 => 1, fixstr[2]=0xfe,0x01 => 2 }
+        let bytes: &[u8] = &[
+            0x82, // fixmap, 2 entries
+            0xa2, 0xff, 0x00, // fixstr(2) with non-utf8 bytes
+            0x01, 0xa2, 0xfe, 0x01, // fixstr(2) with different non-utf8 bytes
+            0x02,
+        ];
+        let value = rmpv::decode::read_value(&mut std::io::Cursor::new(bytes)).expect("decode");
+        let json = rmpv_to_json_value(value);
+        let obj = json.as_object().expect("map");
+        assert_eq!(obj.len(), 2, "non-utf8 keys must not collide");
+        assert!(obj.keys().all(|k| k.starts_with("__msgpack_str_hex:")));
+        assert!(obj.contains_key("__msgpack_str_hex:ff00"));
+        assert!(obj.contains_key("__msgpack_str_hex:fe01"));
+    }
+
+    #[test]
+    fn nested_binary_in_arrays_is_hex_encoded() {
+        let value = RmpvValue::Array(vec![
+            RmpvValue::Binary(vec![0x01, 0x02]),
+            RmpvValue::String("abc".into()),
+        ]);
+        let json = rmpv_to_json_value(value);
+        assert_eq!(json[0], JsonValue::String("0102".into()));
+        assert_eq!(json[1], JsonValue::String("abc".into()));
     }
 }

@@ -9,13 +9,7 @@ use tracing::{info, warn};
 
 use super::ValidatorLoop;
 use crate::relay::DsperseSubmission;
-
-/// Number of blocks before a slice in `disabled_slices` is reconsidered for
-/// dispatch. Roughly one tempo on subtensor (~12s blocks). Picked so that a
-/// transient network or chain event that synchronously fails every slice
-/// (e.g. a chain RPC reconnect storm) self-heals within the next epoch
-/// rather than persisting until the validator is restarted.
-const DISABLED_SLICE_REHAB_BLOCKS: u64 = 360;
+use sn2_types::REHAB_BLOCKS as DISABLED_SLICE_REHAB_BLOCKS;
 
 enum ExpectedInputs {
     NoMetadata,

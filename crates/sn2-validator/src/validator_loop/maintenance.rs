@@ -36,7 +36,13 @@ impl ValidatorLoop {
 
             if now.duration_since(self.timings.metagraph_sync) > Duration::from_secs(3600) {
                 self.sync_metagraph().await?;
+                self.publish_axon_if_configured().await;
                 self.timings.metagraph_sync = now;
+            }
+
+            if now.duration_since(self.timings.cooldown_prune) > Duration::from_secs(60) {
+                self.prune_expired_cooldowns();
+                self.timings.cooldown_prune = now;
             }
 
             if now.duration_since(self.timings.weight_update)
@@ -123,6 +129,10 @@ impl ValidatorLoop {
                     factor = CAPACITY_PRESSURE_BACKOFF_FACTOR,
                     "host memory pressure: trimming adaptive caps across all miners"
                 );
+            }
+            let idle_decayed = self.performance_tracker.decay_idle_caps(&self.uid_hotkeys);
+            if idle_decayed > 0 {
+                info!(decremented = idle_decayed, "decayed idle adaptive caps");
             }
             info!(
                 active_tasks = active_tasks,
@@ -221,6 +231,36 @@ impl ValidatorLoop {
         }
     }
 
+    pub(super) fn prune_expired_cooldowns(&mut self) {
+        let cooldowns_before = self.dispatch_cooldowns.len();
+        let expired_hotkeys: Vec<String> = self
+            .dispatch_cooldowns
+            .iter()
+            .filter(|(_, &until)| self.current_block >= until)
+            .map(|(hk, _)| hk.clone())
+            .collect();
+        let mut rehabilitated = false;
+        for hk in &expired_hotkeys {
+            self.dispatch_cooldowns.remove(hk);
+            if let Some(uid) = self.config.metagraph.get_uid_by_hotkey(hk) {
+                self.performance_tracker.rehabilitate(uid, hk);
+                rehabilitated = true;
+            }
+        }
+        if rehabilitated {
+            self.dispatch_cache.refreshed_at = None;
+        }
+        let cooldowns_after = self.dispatch_cooldowns.len();
+        if cooldowns_before != cooldowns_after {
+            info!(
+                expired = cooldowns_before - cooldowns_after,
+                remaining = cooldowns_after,
+                rehab_blocks = sn2_types::REHAB_BLOCKS,
+                "dispatch_cooldowns pruned"
+            );
+        }
+    }
+
     pub(super) async fn sync_metagraph(&mut self) -> Result<()> {
         let chain_client = self
             .config
@@ -261,17 +301,7 @@ impl ValidatorLoop {
         self.score_manager.sync_uids(&uids);
         self.rsv
             .prune_expired(self.current_block, self.blocks_per_tempo);
-        let blacklist_before = self.reconnect_blacklist.len();
-        self.reconnect_blacklist
-            .retain(|_, until| self.current_block < *until);
-        let blacklist_after = self.reconnect_blacklist.len();
-        if blacklist_before != blacklist_after {
-            info!(
-                expired = blacklist_before - blacklist_after,
-                remaining = blacklist_after,
-                "reconnect_blacklist pruned"
-            );
-        }
+        self.prune_expired_cooldowns();
 
         let mut axon_count = 0usize;
         for n in &self.config.metagraph.neurons {
@@ -456,7 +486,7 @@ impl ValidatorLoop {
                     if self.rsv.is_skiplisted(hk, current_block) {
                         return true;
                     }
-                    self.reconnect_blacklist
+                    self.dispatch_cooldowns
                         .get(hk)
                         .is_some_and(|&until| current_block < until)
                 })

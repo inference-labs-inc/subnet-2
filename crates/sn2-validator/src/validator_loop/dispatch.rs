@@ -49,6 +49,8 @@ impl ValidatorLoop {
 
         metrics::set_active_tasks(active_count);
 
+        self.absorb_pending_evictions();
+
         let current_block = self.current_block;
         let mut queryable_uids: Vec<u16> = self
             .config
@@ -56,7 +58,7 @@ impl ValidatorLoop {
             .neurons
             .iter()
             .filter(|n| {
-                if let Some(&until) = self.reconnect_blacklist.get(&n.hotkey) {
+                if let Some(&until) = self.dispatch_cooldowns.get(&n.hotkey) {
                     if current_block < until {
                         return false;
                     }
@@ -138,6 +140,28 @@ impl ValidatorLoop {
         }
 
         Ok(())
+    }
+
+    fn absorb_pending_evictions(&mut self) {
+        let evicted = self.performance_tracker.drain_pending_evictions();
+        if evicted.is_empty() {
+            return;
+        }
+        let until = self.current_block.saturating_add(sn2_types::REHAB_BLOCKS);
+        for (uid, hotkey) in &evicted {
+            let prev = self.dispatch_cooldowns.get(hotkey).copied().unwrap_or(0);
+            let new_until = std::cmp::max(prev, until);
+            self.dispatch_cooldowns.insert(hotkey.clone(), new_until);
+            if prev == 0 {
+                tracing::info!(
+                    uid = *uid,
+                    until_block = new_until,
+                    rehab_blocks = sn2_types::REHAB_BLOCKS,
+                    "miner evicted from dispatch"
+                );
+            }
+        }
+        self.dispatch_cache.refreshed_at = None;
     }
 
     fn refresh_dispatch_cache_if_stale(&mut self, queryable_uids: &[u16]) {

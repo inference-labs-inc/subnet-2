@@ -15,3 +15,4 @@ ndarray = { workspace = true }
 rmp-serde = { workspace = true }
 rmpv = { workspace = true }
 bytes = { workspace = true }
+serde_bytes = { workspace = true }

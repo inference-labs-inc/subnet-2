@@ -6,18 +6,13 @@ use crate::relay::FRAME_PROOF_RESULT;
 use crate::response_processor::ResponseProcessor;
 
 impl ValidatorLoop {
-    pub(super) fn start_verification(&mut self, mut result: TaskResult) {
+    pub(super) async fn start_verification(&mut self, mut result: TaskResult) {
         let uid = result.uid;
 
         if let Some(count) = self.miner_active_count.get_mut(&uid) {
             *count = count.saturating_sub(1);
         }
 
-        // Decide sampling now so we can free proof bytes from responses
-        // that will be no-op verified and never relayed. Holding the bytes
-        // until spawn_verification means pending_verifications buffers the
-        // full proof payload across the verify-CPU bottleneck for ~95% of
-        // responses that take the RSV fast path without needing them.
         let sample = decide_sample(&result);
         if !sample && !response_needs_proof_bytes_for_downstream(&result) {
             if let TaskOutcome::Success(ref mut response) = result.outcome {
@@ -26,20 +21,36 @@ impl ValidatorLoop {
                 response.witness = None;
                 response.raw = None;
                 response.public_json = None;
-                // Also release the validator's local input copy. Pre-sampling
-                // at dispatch already drops most of these before the task is
-                // spawned, but the audit-eligible path still allocates inputs
-                // and this branch lets force-verify-then-no-verify edge cases
-                // (e.g. empty proof on a force_verify request) reclaim them.
                 response.inputs = None;
             }
+        }
+
+        let needs_real_verify =
+            sample && matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
+        if !needs_real_verify {
+            let guard_hash = result.guard_hash.clone();
+            let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
+            let verified =
+                matches!(result.outcome, TaskOutcome::Success(ref r) if r.proof_size > 0);
+            if verified {
+                if let TaskOutcome::Success(ref mut response) = result.outcome {
+                    response.verification_result = true;
+                }
+            }
+            let vr = VerifyResult {
+                verify_task_id: None,
+                task_result: result,
+                verified,
+                hotkey,
+            };
+            self.finish_verification(vr, guard_hash).await;
+            return;
         }
 
         if self.verify_tasks.len() >= self.verification_concurrency {
             self.pending_verifications.push_back((result, sample));
             return;
         }
-
         self.spawn_verification(result, sample);
     }
 
@@ -75,7 +86,7 @@ impl ValidatorLoop {
                     let captured_hotkey = hotkey.clone();
                     self.verify_tasks.spawn(async move {
                         VerifyResult {
-                            verify_task_id: tokio::task::id(),
+                            verify_task_id: Some(tokio::task::id()),
                             task_result: result,
                             verified: true,
                             hotkey: captured_hotkey,
@@ -85,7 +96,7 @@ impl ValidatorLoop {
                     let processor = ResponseProcessor::new();
                     let captured_hotkey = hotkey.clone();
                     self.verify_tasks.spawn(async move {
-                        let verify_task_id = tokio::task::id();
+                        let verify_task_id = Some(tokio::task::id());
                         let verified =
                             matches!(processor.verify_response(&mut response).await, Ok(true));
                         response.verification_result = verified;
@@ -103,7 +114,7 @@ impl ValidatorLoop {
                 let captured_hotkey = hotkey.clone();
                 self.verify_tasks.spawn(async move {
                     VerifyResult {
-                        verify_task_id: tokio::task::id(),
+                        verify_task_id: Some(tokio::task::id()),
                         task_result: result,
                         verified: false,
                         hotkey: captured_hotkey,

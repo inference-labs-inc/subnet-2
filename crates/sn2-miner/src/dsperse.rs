@@ -56,12 +56,18 @@ fn extract_input_json(inputs: &serde_json::Value) -> &serde_json::Value {
     inputs
 }
 
+pub struct ProveArtifacts {
+    pub proof: Vec<u8>,
+    pub witness: Vec<u8>,
+    pub computed_outputs: Vec<f64>,
+}
+
 fn prove_and_build_response(
     backend: &dsperse::backend::jstprove::JstproveBackend,
     circuit_path: &Path,
     witness_bytes: &[u8],
     effective_input_dims: Option<usize>,
-) -> Result<serde_json::Value> {
+) -> Result<ProveArtifacts> {
     let holographic = circuit_path.join("vk.bin").is_file();
     let proof_bytes = if holographic {
         backend
@@ -98,11 +104,11 @@ fn prove_and_build_response(
         "witness and proof generated"
     );
 
-    Ok(serde_json::json!({
-        "proof": hex::encode(&proof_bytes),
-        "witness": hex::encode(witness_bytes),
-        "computed_outputs": computed_outputs,
-    }))
+    Ok(ProveArtifacts {
+        proof: proof_bytes,
+        witness: witness_bytes.to_vec(),
+        computed_outputs,
+    })
 }
 
 impl DSperseClient {
@@ -165,7 +171,7 @@ impl DSperseClient {
         &self,
         model_id: &str,
         inputs: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<ProveArtifacts> {
         validate_circuit_id(model_id)?;
         let model_dir = self.cache_dir.join(format!("model_{model_id}"));
         let circuit_path = model_dir.join("model.compiled");
@@ -184,7 +190,7 @@ impl DSperseClient {
 
         let inputs_clone = inputs.clone();
 
-        tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
+        tokio::task::spawn_blocking(move || -> Result<ProveArtifacts> {
             let inputs_bytes = rmp_serde::to_vec_named(&inputs_clone)?;
             let backend = dsperse::backend::jstprove::JstproveBackend::new();
 
@@ -209,7 +215,7 @@ impl DSperseClient {
         slice_num: &str,
         inputs: &serde_json::Value,
         resolved_component_dir: PathBuf,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<ProveArtifacts> {
         validate_circuit_id(circuit_id)?;
         // Validate slice format; the normalized path is not needed since
         // resolved_component_dir already contains the canonical slice path.
@@ -246,7 +252,7 @@ impl DSperseClient {
 
         let input_data = extract_input_json(inputs).clone();
 
-        tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
+        tokio::task::spawn_blocking(move || -> Result<ProveArtifacts> {
             let input_flat = flatten_json_to_f64(&input_data);
             anyhow::ensure!(
                 !input_flat.is_empty(),

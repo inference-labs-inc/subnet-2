@@ -53,6 +53,8 @@ const MAX_BUFFERED_CAP_EVENTS: usize = 4096;
 pub enum CapDirection {
     Ramp,
     Backoff,
+    Evict,
+    Rehab,
 }
 
 #[derive(Clone, Debug)]
@@ -71,8 +73,12 @@ pub struct PerformanceTracker {
     adaptive_caps: HashMap<u16, usize>,
     at_cap_results: HashMap<u16, VecDeque<bool>>,
     cap_events: Vec<CapEvent>,
+    pending_evictions: Vec<(u16, String)>,
+    at_cap_last_touched: HashMap<u16, Instant>,
     persistence_path: Option<PathBuf>,
 }
+
+const CAP_DECAY_IDLE_SECS: u64 = 600;
 
 fn window_ttl() -> Duration {
     Duration::from_secs(VERIFICATION_WINDOW_BLOCKS * BLOCK_TIME_SECS)
@@ -96,6 +102,8 @@ impl PerformanceTracker {
             adaptive_caps: HashMap::new(),
             at_cap_results: HashMap::new(),
             cap_events: Vec::new(),
+            pending_evictions: Vec::new(),
+            at_cap_last_touched: HashMap::new(),
             persistence_path: Some(path),
         };
         tracker.load();
@@ -139,6 +147,7 @@ impl PerformanceTracker {
             if results.len() > CAPACITY_WINDOW_SIZE {
                 results.pop_front();
             }
+            self.at_cap_last_touched.insert(uid, now);
             self.update_adaptive_cap(uid, hotkey);
         }
     }
@@ -377,6 +386,7 @@ impl PerformanceTracker {
                     .map(|v| v.iter().filter_map(|b| b.as_bool()).collect())
                     .unwrap_or_default();
                 self.adaptive_caps.insert(uid, cap);
+                self.at_cap_last_touched.insert(uid, Instant::now());
                 if !results.is_empty() {
                     self.at_cap_results.insert(uid, results);
                 }
@@ -447,6 +457,8 @@ impl PerformanceTracker {
         self.windows.remove(&uid);
         self.adaptive_caps.remove(&uid);
         self.at_cap_results.remove(&uid);
+        self.at_cap_last_touched.remove(&uid);
+        self.pending_evictions.retain(|(u, _)| *u != uid);
         self.cap_events.retain(|e| e.hotkey != hotkey);
     }
 
@@ -480,9 +492,14 @@ impl PerformanceTracker {
             if let Some(r) = self.at_cap_results.get_mut(&uid) {
                 r.clear();
             }
-        } else if success_rate < CAPACITY_BACKOFF_THRESHOLD && *current > 1 {
+        } else if success_rate < CAPACITY_BACKOFF_THRESHOLD && *current > 0 {
             *current -= 1;
-            direction = Some(CapDirection::Backoff);
+            direction = if *current == 0 {
+                self.pending_evictions.push((uid, hotkey.to_string()));
+                Some(CapDirection::Evict)
+            } else {
+                Some(CapDirection::Backoff)
+            };
             if let Some(r) = self.at_cap_results.get_mut(&uid) {
                 r.clear();
             }
@@ -513,6 +530,89 @@ impl PerformanceTracker {
     pub fn drain_cap_events(&mut self) -> Vec<CapEvent> {
         std::mem::take(&mut self.cap_events)
     }
+
+    pub fn drain_pending_evictions(&mut self) -> Vec<(u16, String)> {
+        std::mem::take(&mut self.pending_evictions)
+    }
+
+    pub fn decay_idle_caps(&mut self, uid_hotkeys: &HashMap<u16, String>) -> usize {
+        let now = Instant::now();
+        let idle = Duration::from_secs(CAP_DECAY_IDLE_SECS);
+        let mut decayed = 0usize;
+        let uids: Vec<u16> = self
+            .adaptive_caps
+            .iter()
+            .filter(|(_, &cap)| cap > 0)
+            .filter(|(uid, _)| {
+                self.at_cap_last_touched
+                    .get(uid)
+                    .map(|t| now.duration_since(*t) > idle)
+                    .unwrap_or(true)
+            })
+            .map(|(uid, _)| *uid)
+            .collect();
+        for uid in uids {
+            let current = self.adaptive_caps.entry(uid).or_insert(1);
+            if *current == 0 {
+                continue;
+            }
+            let cap_from = *current;
+            *current -= 1;
+            let cap_to = *current;
+            decayed += 1;
+            if let Some(r) = self.at_cap_results.get_mut(&uid) {
+                r.clear();
+            }
+            let hotkey = uid_hotkeys.get(&uid).cloned().unwrap_or_default();
+            let direction = if cap_to == 0 {
+                self.pending_evictions.push((uid, hotkey.clone()));
+                CapDirection::Evict
+            } else {
+                CapDirection::Backoff
+            };
+            self.cap_events.push(CapEvent {
+                uid,
+                hotkey,
+                direction,
+                cap_from,
+                cap_to,
+                success_rate: 0.0,
+                at: now,
+            });
+            if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
+                let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
+                self.cap_events.drain(0..drop);
+            }
+        }
+        decayed
+    }
+
+    pub fn rehabilitate(&mut self, uid: u16, hotkey: &str) {
+        let current = match self.adaptive_caps.get_mut(&uid) {
+            Some(c) if *c == 0 => c,
+            _ => return,
+        };
+        let cap_from = *current;
+        *current = 1;
+        let cap_to = *current;
+        if let Some(r) = self.at_cap_results.get_mut(&uid) {
+            r.clear();
+        }
+        self.at_cap_last_touched.insert(uid, Instant::now());
+        self.cap_events.push(CapEvent {
+            uid,
+            hotkey: hotkey.to_string(),
+            direction: CapDirection::Rehab,
+            cap_from,
+            cap_to,
+            success_rate: 0.0,
+            at: Instant::now(),
+        });
+        if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
+            let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
+            self.cap_events.drain(0..drop);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -525,6 +625,8 @@ mod tests {
             adaptive_caps: HashMap::new(),
             at_cap_results: HashMap::new(),
             cap_events: Vec::new(),
+            pending_evictions: Vec::new(),
+            at_cap_last_touched: HashMap::new(),
             persistence_path: None,
         }
     }
@@ -720,5 +822,85 @@ mod tests {
         let remaining = tracker.drain_cap_events();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].hotkey, "hk_new");
+    }
+
+    fn run_at_cap_failures(tracker: &mut PerformanceTracker, uid: u16, hotkey: &str, n: usize) {
+        for _ in 0..n {
+            tracker.record(uid, hotkey, false, 1.0, true);
+        }
+    }
+
+    #[test]
+    fn cap_ratchets_below_one_to_zero_on_sustained_failure() {
+        let mut tracker = test_tracker();
+        // Ramp to a higher cap first by running successful at-cap windows.
+        for _ in 0..(CAPACITY_MIN_AT_CAP * 3) {
+            tracker.record(1, "hk", true, 1.0, true);
+        }
+        assert!(tracker.adaptive_caps.get(&1).copied().unwrap_or(0) >= 2);
+        // Now ratchet down with failure windows until we hit 0.
+        for _ in 0..30 {
+            run_at_cap_failures(&mut tracker, 1, "hk", CAPACITY_MIN_AT_CAP);
+            if tracker.adaptive_caps.get(&1).copied() == Some(0) {
+                break;
+            }
+        }
+        assert_eq!(tracker.adaptive_caps.get(&1).copied(), Some(0));
+    }
+
+    #[test]
+    fn cap_drop_to_zero_emits_evict_event_and_pending_eviction() {
+        let mut tracker = test_tracker();
+        // Force the at-cap window full of failures; cap starts at default 1.
+        run_at_cap_failures(&mut tracker, 7, "hk_dead", CAPACITY_MIN_AT_CAP);
+        assert_eq!(tracker.adaptive_caps.get(&7).copied(), Some(0));
+        let events = tracker.drain_cap_events();
+        let evict = events
+            .iter()
+            .find(|e| matches!(e.direction, CapDirection::Evict))
+            .expect("expected Evict event");
+        assert_eq!(evict.uid, 7);
+        assert_eq!(evict.hotkey, "hk_dead");
+        assert_eq!(evict.cap_from, 1);
+        assert_eq!(evict.cap_to, 0);
+        let evicted = tracker.drain_pending_evictions();
+        assert_eq!(evicted, vec![(7, "hk_dead".to_string())]);
+    }
+
+    #[test]
+    fn drain_pending_evictions_clears() {
+        let mut tracker = test_tracker();
+        run_at_cap_failures(&mut tracker, 7, "hk_dead", CAPACITY_MIN_AT_CAP);
+        assert!(!tracker.drain_pending_evictions().is_empty());
+        assert!(tracker.drain_pending_evictions().is_empty());
+    }
+
+    #[test]
+    fn rehabilitate_restores_cap_from_zero_to_one() {
+        let mut tracker = test_tracker();
+        run_at_cap_failures(&mut tracker, 7, "hk_dead", CAPACITY_MIN_AT_CAP);
+        let _ = tracker.drain_cap_events();
+        tracker.rehabilitate(7, "hk_dead");
+        assert_eq!(tracker.adaptive_caps.get(&7).copied(), Some(1));
+        let events = tracker.drain_cap_events();
+        assert!(events
+            .iter()
+            .any(|e| matches!(e.direction, CapDirection::Rehab)));
+        // at-cap window cleared so the next probe doesn't carry old failures.
+        assert!(tracker
+            .at_cap_results
+            .get(&7)
+            .map(|r| r.is_empty())
+            .unwrap_or(true));
+    }
+
+    #[test]
+    fn rehabilitate_is_noop_when_cap_is_nonzero() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(7, 3);
+        tracker.rehabilitate(7, "hk_alive");
+        assert_eq!(tracker.adaptive_caps.get(&7).copied(), Some(3));
+        let events = tracker.drain_cap_events();
+        assert!(events.is_empty());
     }
 }

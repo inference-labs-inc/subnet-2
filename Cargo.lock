@@ -6362,7 +6362,6 @@ dependencies = [
  "btlightning",
  "clap",
  "dsperse",
- "hex",
  "parity-scale-codec",
  "reqwest 0.12.28",
  "rmp-serde",
@@ -6389,6 +6388,7 @@ dependencies = [
  "rmp-serde",
  "rmpv",
  "serde",
+ "serde_bytes",
  "serde_json",
  "tracing-subscriber",
 ]
@@ -6415,6 +6415,7 @@ dependencies = [
  "ndarray 0.17.2",
  "rand 0.9.4",
  "reqwest 0.12.28",
+ "rmpv",
  "rustls",
  "serde_json",
  "sha2 0.10.9",

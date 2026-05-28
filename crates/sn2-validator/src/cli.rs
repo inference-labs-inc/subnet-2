@@ -83,4 +83,33 @@ pub struct Cli {
 
     #[arg(long, value_delimiter = ',')]
     pub additional_circuits: Vec<String>,
+
+    #[arg(
+        long,
+        alias = "axon.external_ip",
+        help = "External IP to publish to the subtensor Axons map so miners can \
+                enforce a source-IP allowlist. Auto-detected via api.ipify.org \
+                when unset."
+    )]
+    pub external_ip: Option<String>,
+
+    #[arg(
+        long,
+        alias = "axon.port",
+        default_value_t = 8091,
+        help = "Port published alongside external_ip in the Axons map. The \
+                validator does not bind this port — it is a placeholder used \
+                only so miners running source-IP allowlists can identify the \
+                validator's hotkey by IP."
+    )]
+    pub axon_port: u16,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Skip publishing the validator axon (IP + port) to the chain. \
+                Use only when the validator runs behind an unstable egress IP \
+                and cannot serve a stable source IP to miners."
+    )]
+    pub disable_axon_publish: bool,
 }

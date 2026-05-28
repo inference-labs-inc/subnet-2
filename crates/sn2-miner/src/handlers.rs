@@ -36,7 +36,7 @@ impl MinerHandlers {
         Ok(())
     }
 
-    pub async fn handle_query_zk_proof(&self, data: QueryZkProof) -> Result<serde_json::Value> {
+    pub async fn handle_query_zk_proof(&self, data: QueryZkProof) -> Result<QueryZkProofResponse> {
         let model_id = data.model_id.as_deref().unwrap_or("");
         info!(model_id = model_id, "handling QueryZkProof");
 
@@ -44,22 +44,22 @@ impl MinerHandlers {
             self.ensure_circuit_cached(model_id).await?;
         }
 
-        let result = self
+        let artifacts = self
             .dsperse
             .prove(model_id, &data.query_input.unwrap_or(json!({})))
             .await?;
 
-        Ok(json!({
-            "query_output": result.get("proof").and_then(|v| v.as_str()).unwrap_or(""),
-            "witness": result.get("witness").and_then(|v| v.as_str()).unwrap_or(""),
-            "computed_outputs": result.get("computed_outputs").cloned().unwrap_or(json!([])),
-        }))
+        Ok(QueryZkProofResponse {
+            query_output: artifacts.proof,
+            witness: artifacts.witness,
+            computed_outputs: artifacts.computed_outputs,
+        })
     }
 
     pub async fn handle_proof_of_weights(
         &self,
         data: ProofOfWeightsDataModel,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<ProofOfWeightsResponse> {
         info!(
             vk_hash = %data.verification_key_hash,
             "handling ProofOfWeights"
@@ -68,21 +68,21 @@ impl MinerHandlers {
         self.ensure_circuit_cached(&data.verification_key_hash)
             .await?;
 
-        let result = self
+        let artifacts = self
             .dsperse
             .prove(&data.verification_key_hash, &data.inputs)
             .await?;
 
-        Ok(json!({
-            "proof": result.get("proof").and_then(|v| v.as_str()).unwrap_or(""),
-            "public_signals": result.get("public_signals").and_then(|v| v.as_str()).unwrap_or(""),
-        }))
+        Ok(ProofOfWeightsResponse {
+            proof: artifacts.proof,
+            public_signals: Vec::new(),
+        })
     }
 
     pub async fn handle_dslice(
         &self,
         data: DSliceProofGenerationDataModel,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<DSliceResponse> {
         let circuit_id = data.circuit.as_deref().unwrap_or("");
         let slice_num = data.slice_num.as_deref().unwrap_or("");
         let component_sha = data.component_sha.as_deref();
@@ -121,11 +121,15 @@ impl MinerHandlers {
             }
         };
 
-        let result = self
+        let artifacts = self
             .dsperse
             .prove_slice(circuit_id, slice_num, &inputs, dir)
             .await?;
 
-        Ok(result)
+        Ok(DSliceResponse {
+            proof: artifacts.proof,
+            witness: artifacts.witness,
+            computed_outputs: artifacts.computed_outputs,
+        })
     }
 }

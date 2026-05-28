@@ -6,12 +6,12 @@ mod results;
 mod verification;
 
 use std::collections::{HashMap, VecDeque};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use sn2_chain::WeightsSetter;
+use sn2_chain::{Registration, WeightsSetter};
 use sn2_types::*;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{watch, Notify, RwLock};
@@ -77,7 +77,7 @@ pub(super) enum TaskOutcome {
 }
 
 pub(super) struct VerifyResult {
-    pub(super) verify_task_id: tokio::task::Id,
+    pub(super) verify_task_id: Option<tokio::task::Id>,
     pub(super) task_result: TaskResult,
     pub(super) verified: bool,
     pub(super) hotkey: String,
@@ -92,6 +92,7 @@ pub(super) struct PeriodicTimings {
     pub(super) health_log: Instant,
     pub(super) replenish: Instant,
     pub(super) gc: Instant,
+    pub(super) cooldown_prune: Instant,
 }
 
 impl PeriodicTimings {
@@ -105,6 +106,7 @@ impl PeriodicTimings {
             health_log: now,
             replenish: now,
             gc: now,
+            cooldown_prune: now,
         }
     }
 }
@@ -179,7 +181,7 @@ pub struct ValidatorLoop {
     pub(super) blocks_per_tempo: u64,
     pub(super) consecutive_metagraph_failures: u32,
     pub(super) dispatch_cache: dispatch::DispatchCache,
-    pub(super) reconnect_blacklist: HashMap<String, u64>,
+    pub(super) dispatch_cooldowns: HashMap<String, u64>,
 }
 
 pub(super) const METAGRAPH_FAILURE_RECONNECT_THRESHOLD: u32 = 3;
@@ -388,7 +390,7 @@ impl ValidatorLoop {
             blocks_per_tempo: 360,
             consecutive_metagraph_failures: 0,
             dispatch_cache: dispatch::DispatchCache::new(),
-            reconnect_blacklist: HashMap::new(),
+            dispatch_cooldowns: HashMap::new(),
         })
     }
 
@@ -397,6 +399,8 @@ impl ValidatorLoop {
         if let Some(relay) = &mut self.relay {
             relay.start().await?;
         }
+
+        self.publish_axon_if_configured().await;
 
         {
             let initial_miners = if self.config.loopback {
@@ -449,7 +453,7 @@ impl ValidatorLoop {
                     match result {
                         Ok(task_result) => {
                             self.task_meta.remove(&task_result.tokio_task_id);
-                            self.start_verification(task_result);
+                            self.start_verification(task_result).await;
                         }
                         Err(e) => {
                             if let Some((uid, guard_hash)) = self.task_meta.remove(&e.id()) {
@@ -471,8 +475,11 @@ impl ValidatorLoop {
                 Some(result) = self.verify_tasks.join_next() => {
                     match result {
                         Ok(verify_result) => {
-                            let guard_hash = self.verify_guard_hashes.remove(&verify_result.verify_task_id);
-                            self.finish_verification(verify_result, guard_hash.flatten()).await;
+                            let guard_hash = verify_result
+                                .verify_task_id
+                                .and_then(|id| self.verify_guard_hashes.remove(&id))
+                                .flatten();
+                            self.finish_verification(verify_result, guard_hash).await;
                         }
                         Err(e) => {
                             if let Some(Some(hash)) = self.verify_guard_hashes.remove(&e.id()) {
@@ -524,6 +531,44 @@ impl ValidatorLoop {
         Ok(())
     }
 
+    /// Publish the validator's external IP + axon port to the on-chain Axons
+    /// map. Miners running source-IP allowlists rely on this entry to identify
+    /// the validator's hotkey by source address; without it they cannot
+    /// distinguish a permitted validator from an unknown peer and must fall
+    /// back to handshake-only TOFU. `Registration::serve_axon` is idempotent
+    /// (chain state is checked first and the extrinsic is skipped if the
+    /// existing entry already matches), so callers may invoke this on every
+    /// metagraph sync without producing spurious extrinsics.
+    async fn publish_axon_if_configured(&self) {
+        if self.config.disable_axon_publish || self.config.loopback {
+            return;
+        }
+        let chain_client = match &self.config.chain_client {
+            Some(c) => c,
+            None => return,
+        };
+        let wallet = match &self.config.wallet {
+            Some(w) => w,
+            None => return,
+        };
+        let external_ip = match resolve_external_ip(self.config.external_ip.as_deref()).await {
+            Ok(ip) => ip,
+            Err(e) => {
+                warn!(error = ?e, "could not resolve external IP for axon publish; \
+                    miners with source-IP allowlists may reject this validator");
+                return;
+            }
+        };
+        let registration = Registration::new(self.config.netuid);
+        if let Err(e) = registration
+            .serve_axon(chain_client, wallet, external_ip, self.config.axon_port, 4)
+            .await
+        {
+            warn!(error = ?e, ip = %external_ip, port = self.config.axon_port,
+                "axon publish to chain failed; will retry on next metagraph sync");
+        }
+    }
+
     async fn shutdown(&mut self) {
         while self.dsperse_emit_tasks.join_next().await.is_some() {}
         if let Some(ev) = &self.dsperse_events {
@@ -560,6 +605,45 @@ impl ValidatorLoop {
         }
         self.performance_tracker.save();
         self.rsv.save();
+    }
+}
+
+async fn resolve_external_ip(override_ip: Option<&str>) -> Result<IpAddr> {
+    if let Some(ip) = override_ip {
+        let parsed: IpAddr = ip.parse().context("parsing --external-ip")?;
+        return require_ipv4(parsed);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("building HTTP client for external-IP detection")?;
+    let resp = client
+        .get("https://api4.ipify.org")
+        .send()
+        .await
+        .context("detecting external IP via api4.ipify.org")?
+        .text()
+        .await
+        .context("reading external IP response body")?;
+    let parsed: IpAddr = resp
+        .trim()
+        .parse()
+        .with_context(|| format!("parsing detected IP: {resp}"))?;
+    require_ipv4(parsed)
+}
+
+fn require_ipv4(ip: IpAddr) -> Result<IpAddr> {
+    match ip {
+        IpAddr::V4(v4) if is_valid_ip(&v4.to_string()) => Ok(IpAddr::V4(v4)),
+        IpAddr::V4(v4) => anyhow::bail!(
+            "external IP must be a publicly routable IPv4 (loopback, RFC1918, \
+             CGNAT, link-local, multicast, and unspecified addresses are \
+             rejected so a misconfigured override does not count toward miner \
+             allowlist coverage without admitting the real public source): {v4}"
+        ),
+        IpAddr::V6(_) => anyhow::bail!(
+            "external IP must be IPv4 (axon registration does not support IPv6): {ip}"
+        ),
     }
 }
 
