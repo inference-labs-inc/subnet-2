@@ -87,9 +87,11 @@ pub struct Cli {
     #[arg(
         long,
         alias = "axon.external_ip",
+        env = "BT_AXON_EXTERNAL_IP",
         help = "External IP to publish to the subtensor Axons map so miners can \
                 enforce a source-IP allowlist. Auto-detected via api.ipify.org \
-                when unset."
+                when unset. May also be supplied via the BT_AXON_EXTERNAL_IP \
+                environment variable; the CLI flag wins when both are present."
     )]
     pub external_ip: Option<String>,
 
@@ -112,4 +114,44 @@ pub struct Cli {
                 and cannot serve a stable source IP to miners."
     )]
     pub disable_axon_publish: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    fn min_args() -> Vec<&'static str> {
+        vec!["sn2-validator"]
+    }
+
+    #[test]
+    fn external_ip_resolution_prefers_cli_then_env_then_unset() {
+        // The env var and CLI flag share a single field; clap's resolution
+        // rule is "CLI wins over env, env wins over default/unset". The three
+        // assertions run inside one test so the env mutation isn't racing
+        // with sibling parser invocations on other rules.
+        let var = "BT_AXON_EXTERNAL_IP";
+
+        // Snapshot any operator-set value so the test doesn't clobber it.
+        let prior = std::env::var(var).ok();
+
+        std::env::remove_var(var);
+        let cli = Cli::try_parse_from(min_args()).expect("parse without env");
+        assert_eq!(cli.external_ip, None);
+
+        std::env::set_var(var, "10.0.0.42");
+        let cli = Cli::try_parse_from(min_args()).expect("parse with env only");
+        assert_eq!(cli.external_ip.as_deref(), Some("10.0.0.42"));
+
+        let mut args = min_args();
+        args.extend_from_slice(&["--external-ip", "10.0.0.99"]);
+        let cli = Cli::try_parse_from(args).expect("parse with flag overriding env");
+        assert_eq!(cli.external_ip.as_deref(), Some("10.0.0.99"));
+
+        match prior {
+            Some(v) => std::env::set_var(var, v),
+            None => std::env::remove_var(var),
+        }
+    }
 }
