@@ -125,16 +125,34 @@ mod tests {
         vec!["sn2-validator"]
     }
 
+    struct EnvRestore {
+        var: &'static str,
+        prior: Option<String>,
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match self.prior.take() {
+                Some(v) => std::env::set_var(self.var, v),
+                None => std::env::remove_var(self.var),
+            }
+        }
+    }
+
     #[test]
     fn external_ip_resolution_prefers_cli_then_env_then_unset() {
         // The env var and CLI flag share a single field; clap's resolution
         // rule is "CLI wins over env, env wins over default/unset". The three
         // assertions run inside one test so the env mutation isn't racing
-        // with sibling parser invocations on other rules.
+        // with sibling parser invocations on other rules. EnvRestore is an
+        // RAII guard that restores the operator's original value even if any
+        // assertion below panics, so a failing assertion can't leak mutated
+        // state into the rest of the test binary.
         let var = "BT_AXON_EXTERNAL_IP";
-
-        // Snapshot any operator-set value so the test doesn't clobber it.
-        let prior = std::env::var(var).ok();
+        let _guard = EnvRestore {
+            var,
+            prior: std::env::var(var).ok(),
+        };
 
         std::env::remove_var(var);
         let cli = Cli::try_parse_from(min_args()).expect("parse without env");
@@ -148,10 +166,5 @@ mod tests {
         args.extend_from_slice(&["--external-ip", "10.0.0.99"]);
         let cli = Cli::try_parse_from(args).expect("parse with flag overriding env");
         assert_eq!(cli.external_ip.as_deref(), Some("10.0.0.99"));
-
-        match prior {
-            Some(v) => std::env::set_var(var, v),
-            None => std::env::remove_var(var),
-        }
     }
 }
