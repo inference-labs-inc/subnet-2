@@ -51,6 +51,17 @@ pub struct Cli {
     #[arg(long)]
     pub circuit_api_url: Option<String>,
 
+    #[arg(
+        long,
+        env = "SN2_CIRCUIT_CACHE_DIR",
+        help = "Directory for the persisted circuit cache. Defaults to \
+                ~/.bittensor/subnet-2/circuit_cache when unset. May also be \
+                supplied via the SN2_CIRCUIT_CACHE_DIR environment variable; \
+                the CLI flag wins when both are present. A leading ~ is \
+                expanded to the home directory."
+    )]
+    pub circuit_cache_dir: Option<String>,
+
     #[arg(long)]
     pub verification_concurrency: Option<usize>,
 
@@ -166,5 +177,31 @@ mod tests {
         args.extend_from_slice(&["--external-ip", "10.0.0.99"]);
         let cli = Cli::try_parse_from(args).expect("parse with flag overriding env");
         assert_eq!(cli.external_ip.as_deref(), Some("10.0.0.99"));
+    }
+
+    #[test]
+    fn circuit_cache_dir_resolution_prefers_cli_then_env_then_unset() {
+        // Mirrors external_ip: a single field backs both the CLI flag and the
+        // SN2_CIRCUIT_CACHE_DIR env var, with CLI winning over env and env over
+        // unset. Guarded by EnvRestore so a panicking assertion cannot leak the
+        // mutated value into sibling tests in this binary.
+        let var = "SN2_CIRCUIT_CACHE_DIR";
+        let _guard = EnvRestore {
+            var,
+            prior: std::env::var(var).ok(),
+        };
+
+        std::env::remove_var(var);
+        let cli = Cli::try_parse_from(min_args()).expect("parse without env");
+        assert_eq!(cli.circuit_cache_dir, None);
+
+        std::env::set_var(var, "/var/cache/sn2");
+        let cli = Cli::try_parse_from(min_args()).expect("parse with env only");
+        assert_eq!(cli.circuit_cache_dir.as_deref(), Some("/var/cache/sn2"));
+
+        let mut args = min_args();
+        args.extend_from_slice(&["--circuit-cache-dir", "/srv/circuits"]);
+        let cli = Cli::try_parse_from(args).expect("parse with flag overriding env");
+        assert_eq!(cli.circuit_cache_dir.as_deref(), Some("/srv/circuits"));
     }
 }

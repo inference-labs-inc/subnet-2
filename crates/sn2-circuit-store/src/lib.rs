@@ -50,8 +50,10 @@ impl CircuitStore {
         api_url_override: Option<&str>,
         loopback: bool,
         additional_circuits: Vec<String>,
+        cache_dir_override: Option<&str>,
     ) -> Self {
-        let cache_dir = shellexpand::tilde(CIRCUIT_CACHE_DIR).to_string();
+        let cache_dir =
+            shellexpand::tilde(cache_dir_override.unwrap_or(CIRCUIT_CACHE_DIR)).to_string();
         let api_url_overridden = api_url_override.is_some();
         Self {
             circuits: HashMap::new(),

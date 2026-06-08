@@ -345,6 +345,7 @@ impl ValidatorLoop {
             config.circuit_api_url.as_deref(),
             circuit_store_loopback,
             config.additional_circuits.clone(),
+            config.circuit_cache_dir.as_deref(),
         );
         let run_manager = IncrementalRunManager::new();
 

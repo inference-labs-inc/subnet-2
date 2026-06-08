@@ -106,7 +106,12 @@ async fn main() -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    let circuit_store = init_circuit_store(false, &cli.additional_circuits).await;
+    let circuit_store = init_circuit_store(
+        false,
+        &cli.additional_circuits,
+        cli.circuit_cache_dir.as_deref(),
+    )
+    .await;
 
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
@@ -261,7 +266,12 @@ async fn run_loopback(cli: Cli) -> Result<()> {
 
     let dsperse = dsperse::DSperseClient::new();
 
-    let circuit_store = init_circuit_store(true, &cli.additional_circuits).await;
+    let circuit_store = init_circuit_store(
+        true,
+        &cli.additional_circuits,
+        cli.circuit_cache_dir.as_deref(),
+    )
+    .await;
 
     let handlers = handlers::MinerHandlers::new(dsperse, circuit_store);
     let handlers = std::sync::Arc::new(handlers);
@@ -348,9 +358,14 @@ fn require_ipv4(ip: IpAddr) -> Result<IpAddr> {
 async fn init_circuit_store(
     loopback: bool,
     additional_circuits: &[String],
+    cache_dir_override: Option<&str>,
 ) -> sn2_circuit_store::CircuitStore {
-    let mut store =
-        sn2_circuit_store::CircuitStore::new(None, loopback, additional_circuits.to_vec());
+    let mut store = sn2_circuit_store::CircuitStore::new(
+        None,
+        loopback,
+        additional_circuits.to_vec(),
+        cache_dir_override,
+    );
     if let Err(e) = store.load_circuits().await {
         warn!(error = %e, "failed to load circuits from cache");
     }

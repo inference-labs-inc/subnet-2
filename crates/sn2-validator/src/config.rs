@@ -25,6 +25,7 @@ pub struct ValidatorConfig {
     pub proof_api_url: Option<String>,
     pub target_uids: Option<HashSet<u16>>,
     pub circuit_api_url: Option<String>,
+    pub circuit_cache_dir: Option<String>,
     pub disable_metric_logging: bool,
     pub loopback: bool,
     pub additional_circuits: Vec<String>,
@@ -95,6 +96,7 @@ impl ValidatorConfig {
                 Some(cli.target_uid.iter().copied().collect())
             },
             circuit_api_url: cli.circuit_api_url.clone(),
+            circuit_cache_dir: cli.circuit_cache_dir.clone(),
             disable_metric_logging: cli.disable_metric_logging,
             loopback: false,
             additional_circuits: cli.additional_circuits.clone(),
@@ -161,6 +163,7 @@ impl ValidatorConfig {
             proof_api_url: None,
             target_uids: Some([0].into_iter().collect()),
             circuit_api_url: cli.circuit_api_url.clone(),
+            circuit_cache_dir: cli.circuit_cache_dir.clone(),
             disable_metric_logging: true,
             loopback: true,
             additional_circuits: cli.additional_circuits.clone(),

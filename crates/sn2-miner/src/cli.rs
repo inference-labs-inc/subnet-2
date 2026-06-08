@@ -85,6 +85,17 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',')]
     pub additional_circuits: Vec<String>,
 
+    #[arg(
+        long,
+        env = "SN2_CIRCUIT_CACHE_DIR",
+        help = "Directory for the persisted circuit cache. Defaults to \
+                ~/.bittensor/subnet-2/circuit_cache when unset. May also be \
+                supplied via the SN2_CIRCUIT_CACHE_DIR environment variable; \
+                the CLI flag wins when both are present. A leading ~ is \
+                expanded to the home directory."
+    )]
+    pub circuit_cache_dir: Option<String>,
+
     #[arg(long, default_value_t = sn2_types::CIRCUIT_TIMEOUT_SECONDS, value_parser = clap::value_parser!(u64).range(1..))]
     pub handler_timeout: u64,
 }
