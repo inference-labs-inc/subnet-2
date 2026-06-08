@@ -112,10 +112,17 @@ fn prove_and_build_response(
 }
 
 impl DSperseClient {
-    pub fn new() -> Self {
-        let cache_dir = PathBuf::from(shellexpand::tilde(sn2_types::CIRCUIT_CACHE_DIR).to_string());
+    pub fn new(cache_dir_override: Option<&str>) -> Self {
+        let cache_dir = PathBuf::from(
+            shellexpand::tilde(cache_dir_override.unwrap_or(sn2_types::CIRCUIT_CACHE_DIR))
+                .to_string(),
+        );
         info!(cache_dir = %cache_dir.display(), "initialized DSperseClient");
         Self { cache_dir }
+    }
+
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
     }
 
     pub async fn resolve_component(

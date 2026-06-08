@@ -112,11 +112,11 @@ impl MinerHandlers {
             Some(dir) => dir,
             None => {
                 let slice_id = normalize_slice_id(slice_num)?;
-                let slices_dir = std::path::PathBuf::from(
-                    shellexpand::tilde(sn2_types::CIRCUIT_CACHE_DIR).to_string(),
-                )
-                .join(format!("model_{circuit_id}"))
-                .join("slices");
+                let slices_dir = self
+                    .dsperse
+                    .cache_dir()
+                    .join(format!("model_{circuit_id}"))
+                    .join("slices");
                 slices_dir.join(slice_id)
             }
         };

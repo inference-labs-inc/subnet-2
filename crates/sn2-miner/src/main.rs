@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
     let quic_port = cli.axon_port;
     anyhow::ensure!(quic_port != 0, "QUIC port must be non-zero");
 
-    let dsperse = dsperse::DSperseClient::new();
+    let dsperse = dsperse::DSperseClient::new(cli.circuit_cache_dir.as_deref());
 
     let circuit_store = init_circuit_store(
         false,
@@ -264,7 +264,7 @@ async fn run_loopback(cli: Cli) -> Result<()> {
     )
     .context("loading wallet")?;
 
-    let dsperse = dsperse::DSperseClient::new();
+    let dsperse = dsperse::DSperseClient::new(cli.circuit_cache_dir.as_deref());
 
     let circuit_store = init_circuit_store(
         true,
