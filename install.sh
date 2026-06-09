@@ -67,10 +67,22 @@ verify_sums_signature() {
     exit 1
   fi
 
-  if ! curl -fSL --connect-timeout 10 --max-time 30 \
-    -o "${TMP_DIR}/SHA256SUMS.sigstore.json" "$bundle_url"; then
-    echo "Release ${tag} does not publish a SHA256SUMS.sigstore.json signature bundle." >&2
-    echo "Refusing to install an unsigned release." >&2
+  local http_code curl_status=0
+  http_code="$(curl -fsSL --connect-timeout 10 --max-time 30 \
+    -o "${TMP_DIR}/SHA256SUMS.sigstore.json" -w '%{http_code}' \
+    "$bundle_url" 2>"${TMP_DIR}/curl_stderr")" || curl_status=$?
+  if [ "$curl_status" -ne 0 ]; then
+    case "$http_code" in
+      4*)
+        echo "Release ${tag} does not publish a SHA256SUMS.sigstore.json signature bundle (HTTP ${http_code})." >&2
+        echo "Refusing to install an unsigned release." >&2
+        ;;
+      *)
+        echo "Failed to fetch the signature bundle (curl exit ${curl_status}, HTTP ${http_code:-none}):" >&2
+        cat "${TMP_DIR}/curl_stderr" >&2
+        echo "Refusing to install without signature verification; re-run when the network is available." >&2
+        ;;
+    esac
     exit 1
   fi
 
