@@ -76,8 +76,11 @@ impl Circuit {
             _ => return Ok(()),
         };
 
-        let value = rmpv::decode::read_value(&mut &inputs[..])
-            .map_err(|e| format!("decoding msgpack inputs: {e}"))?;
+        let value = rmpv::decode::read_value_with_max_depth(
+            &mut &inputs[..],
+            crate::tensor_codec::MSGPACK_MAX_DEPTH,
+        )
+        .map_err(|e| format!("decoding msgpack inputs: {e}"))?;
 
         let entries = match &value {
             rmpv::Value::Map(entries) => entries,

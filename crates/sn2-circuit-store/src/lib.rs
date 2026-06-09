@@ -462,6 +462,10 @@ impl CircuitStore {
         circuit_id: &str,
         data: &serde_json::Value,
     ) -> Result<(Circuit, Vec<(String, String)>)> {
+        anyhow::ensure!(
+            is_sha256_hex(circuit_id),
+            "invalid circuit id {circuit_id:?}: expected 64-character sha256 hex"
+        );
         let cache_path = self.cache_dir.join(format!("model_{circuit_id}"));
         let is_fresh = !cache_path.exists();
         std::fs::create_dir_all(&cache_path)
@@ -648,7 +652,11 @@ impl CircuitStore {
                     .get("sha256")
                     .and_then(|v| v.as_str())
                     .context("component missing sha256")?
-                    .to_string();
+                    .to_lowercase();
+                anyhow::ensure!(
+                    is_sha256_hex(&sha),
+                    "component {name}: invalid sha256 {sha:?}"
+                );
                 let files: Vec<String> = comp
                     .get("files")
                     .and_then(|v| v.as_array())
@@ -658,28 +666,29 @@ impl CircuitStore {
                             .collect()
                     })
                     .unwrap_or_default();
-                let weights: Vec<WeightRef> = comp
-                    .get("weights")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .enumerate()
-                            .filter_map(|(i, w)| {
-                                let wb_sha = w.get("sha256")?.as_str()?.to_string();
-                                let fallback = format!("{name}_weight_{i}.onnx");
-                                let filename = w
-                                    .get("filename")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or(&fallback)
-                                    .to_string();
-                                Some(WeightRef {
-                                    sha: wb_sha,
-                                    filename,
-                                })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let mut weights: Vec<WeightRef> = Vec::new();
+                if let Some(arr) = comp.get("weights").and_then(|v| v.as_array()) {
+                    for (i, w) in arr.iter().enumerate() {
+                        let Some(wb_sha) = w.get("sha256").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        let wb_sha = wb_sha.to_lowercase();
+                        anyhow::ensure!(
+                            is_sha256_hex(&wb_sha),
+                            "component {name}: invalid weight blob sha256 {wb_sha:?}"
+                        );
+                        let fallback = format!("{name}_weight_{i}.onnx");
+                        let filename = w
+                            .get("filename")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&fallback)
+                            .to_string();
+                        weights.push(WeightRef {
+                            sha: wb_sha,
+                            filename,
+                        });
+                    }
+                }
                 let has_circuit = files.iter().any(|f| f == "circuit.bin");
                 Ok(ParsedComponent {
                     name,
@@ -808,7 +817,7 @@ impl CircuitStore {
                     "{}/components/{}/files/{}",
                     self.api_url, comp.sha, filename
                 );
-                self.download_file(&url, &dest)
+                self.download_file(&url, &dest, None)
                     .await
                     .with_context(|| format!("downloading {}/{}", comp.name, filename))?;
             }
@@ -830,7 +839,7 @@ impl CircuitStore {
                 continue;
             }
             let url = format!("{}/models/wb/{}", self.api_url, wb.sha);
-            self.download_file(&url, &dest)
+            self.download_file(&url, &dest, Some(&wb.sha))
                 .await
                 .with_context(|| format!("downloading weight blob for {}", comp.name))?;
             Self::write_weight_sha_stamp(&dest, &wb.sha);
@@ -1016,7 +1025,12 @@ impl CircuitStore {
                 .get("sha256")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
-                .context("model artifact missing sha256")?;
+                .context("model artifact missing sha256")?
+                .to_lowercase();
+            anyhow::ensure!(
+                is_sha256_hex(&sha),
+                "model artifact: invalid sha256 {sha:?}"
+            );
             let raw_filename = artifact
                 .get("filename")
                 .and_then(|v| v.as_str())
@@ -1027,7 +1041,7 @@ impl CircuitStore {
                 continue;
             }
             let url = format!("{}/models/wb/{}", self.api_url, sha);
-            self.download_file(&url, &dest)
+            self.download_file(&url, &dest, Some(&sha))
                 .await
                 .with_context(|| format!("downloading model artifact {filename}"))?;
             info!(filename, "downloaded model artifact");
@@ -1121,7 +1135,7 @@ impl CircuitStore {
     ) -> Option<(String, Circuit)> {
         let dir_name = entry.file_name().to_string_lossy().to_string();
         let circuit_id = match dir_name.strip_prefix("model_") {
-            Some(id) if id.len() == 64 => id.to_string(),
+            Some(id) if is_sha256_hex(id) => id.to_string(),
             _ => return None,
         };
 
@@ -1157,12 +1171,29 @@ impl CircuitStore {
         }
     }
 
-    async fn download_file(&self, url: &str, dest: &Path) -> Result<()> {
-        download_file_static(&self.http, url, dest).await
+    async fn download_file(
+        &self,
+        url: &str,
+        dest: &Path,
+        pinned_sha256: Option<&str>,
+    ) -> Result<()> {
+        download_file_static(&self.http, url, dest, pinned_sha256).await
     }
 }
 
-async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) -> Result<()> {
+async fn download_file_static(
+    http: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    pinned_sha256: Option<&str>,
+) -> Result<()> {
+    if let Some(pinned) = pinned_sha256 {
+        anyhow::ensure!(
+            is_sha256_hex(pinned),
+            "pinned sha256 for {url} is not 64-character hex: {pinned:?}"
+        );
+    }
+
     let resp = http
         .get(url)
         .timeout(std::time::Duration::from_secs(300))
@@ -1174,11 +1205,14 @@ async fn download_file_static(http: &reqwest::Client, url: &str, dest: &Path) ->
         anyhow::bail!("download returned {}", resp.status());
     }
 
-    let expected_sha256 = resp
-        .headers()
-        .get("x-checksum-sha256")
-        .and_then(|v| v.to_str().ok())
+    let expected_sha256 = pinned_sha256
         .map(|s| s.trim().to_lowercase())
+        .or_else(|| {
+            resp.headers()
+                .get("x-checksum-sha256")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_lowercase())
+        })
         .or_else(|| {
             let segment = url.rsplit('/').next()?;
             let clean = segment.split('?').next()?;

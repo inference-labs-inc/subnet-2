@@ -163,9 +163,7 @@ impl TileStore {
             tile_refs.push(&entry.data);
         }
 
-        Ok(reconstruct::grid_reconstruct(
-            &tile_refs, tiles_y, tiles_x, channels, tile_h, tile_w,
-        ))
+        reconstruct::grid_reconstruct(&tile_refs, tiles_y, tiles_x, channels, tile_h, tile_w)
     }
 
     pub fn evict(&self, keys: &[String]) -> Result<usize> {

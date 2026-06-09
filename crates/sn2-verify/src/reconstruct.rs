@@ -1,3 +1,7 @@
+use anyhow::{bail, Result};
+
+const MAX_OUTPUT_ELEMENTS: usize = 1 << 26;
+
 pub fn grid_reconstruct(
     tiles: &[&[f64]],
     tiles_y: usize,
@@ -5,10 +9,42 @@ pub fn grid_reconstruct(
     channels: usize,
     tile_h: usize,
     tile_w: usize,
-) -> Vec<f64> {
-    let out_h = tiles_y * tile_h;
-    let out_w = tiles_x * tile_w;
-    let mut output = vec![0.0f64; channels * out_h * out_w];
+) -> Result<Vec<f64>> {
+    let expected_tiles = tiles_y
+        .checked_mul(tiles_x)
+        .ok_or_else(|| anyhow::anyhow!("tile grid {tiles_y}x{tiles_x} overflows"))?;
+    if tiles.len() != expected_tiles {
+        bail!("tile count {} != grid {tiles_y}x{tiles_x}", tiles.len());
+    }
+    let tile_elements = channels
+        .checked_mul(tile_h)
+        .and_then(|v| v.checked_mul(tile_w))
+        .ok_or_else(|| anyhow::anyhow!("tile shape {channels}x{tile_h}x{tile_w} overflows"))?;
+    let out_h = tiles_y
+        .checked_mul(tile_h)
+        .ok_or_else(|| anyhow::anyhow!("output height {tiles_y}*{tile_h} overflows"))?;
+    let out_w = tiles_x
+        .checked_mul(tile_w)
+        .ok_or_else(|| anyhow::anyhow!("output width {tiles_x}*{tile_w} overflows"))?;
+    let total_elements = channels
+        .checked_mul(out_h)
+        .and_then(|v| v.checked_mul(out_w))
+        .ok_or_else(|| anyhow::anyhow!("output shape {channels}x{out_h}x{out_w} overflows"))?;
+    if total_elements > MAX_OUTPUT_ELEMENTS {
+        bail!(
+            "output shape {channels}x{out_h}x{out_w} has {total_elements} elements, max is {MAX_OUTPUT_ELEMENTS}"
+        );
+    }
+    for (idx, tile) in tiles.iter().enumerate() {
+        if tile.len() != tile_elements {
+            bail!(
+                "tile {idx} length {} != expected {tile_elements}",
+                tile.len()
+            );
+        }
+    }
+
+    let mut output = vec![0.0f64; total_elements];
 
     for ty in 0..tiles_y {
         for tx in 0..tiles_x {
@@ -26,7 +62,7 @@ pub fn grid_reconstruct(
         }
     }
 
-    output
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -41,7 +77,7 @@ mod tests {
         let t3: Vec<f64> = vec![13.0, 14.0, 15.0, 16.0];
         let tiles: Vec<&[f64]> = vec![&t0, &t1, &t2, &t3];
 
-        let result = grid_reconstruct(&tiles, 2, 2, 1, 2, 2);
+        let result = grid_reconstruct(&tiles, 2, 2, 1, 2, 2).unwrap();
 
         assert_eq!(result.len(), 4 * 4);
         #[rustfmt::skip]
@@ -75,7 +111,7 @@ mod tests {
         }
         let tiles: Vec<&[f64]> = tiles_data.iter().map(|v| v.as_slice()).collect();
 
-        let result = grid_reconstruct(&tiles, 2, 2, c, h, w);
+        let result = grid_reconstruct(&tiles, 2, 2, c, h, w).unwrap();
 
         assert_eq!(result.len(), c * 4 * 4);
 
@@ -106,7 +142,7 @@ mod tests {
     fn test_1x1_grid() {
         let tile: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let tiles: Vec<&[f64]> = vec![&tile];
-        let result = grid_reconstruct(&tiles, 1, 1, 2, 1, 3);
+        let result = grid_reconstruct(&tiles, 1, 1, 2, 1, 3).unwrap();
         assert_eq!(result, tile);
     }
 
@@ -120,7 +156,40 @@ mod tests {
             tiles_data.push((0..c * h * w).map(|i| (t * 100 + i) as f64).collect());
         }
         let tiles: Vec<&[f64]> = tiles_data.iter().map(|v| v.as_slice()).collect();
-        let result = grid_reconstruct(&tiles, 3, 2, c, h, w);
+        let result = grid_reconstruct(&tiles, 3, 2, c, h, w).unwrap();
         assert_eq!(result.len(), c * 6 * 6);
+    }
+
+    #[test]
+    fn test_rejects_output_above_element_cap() {
+        let tile: Vec<f64> = vec![0.0; 4];
+        let tiles: Vec<&[f64]> = vec![&tile];
+        let result = grid_reconstruct(&tiles, 1, 1, 2, 8192, 8192);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("max is"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_rejects_overflowing_shape_product() {
+        let tile: Vec<f64> = vec![0.0; 4];
+        let tiles: Vec<&[f64]> = vec![&tile];
+        let result = grid_reconstruct(&tiles, 1, 1, usize::MAX, usize::MAX, usize::MAX);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rejects_tile_count_mismatch() {
+        let tile: Vec<f64> = vec![0.0; 4];
+        let tiles: Vec<&[f64]> = vec![&tile];
+        let result = grid_reconstruct(&tiles, 2, 2, 1, 2, 2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rejects_tile_length_mismatch() {
+        let short: Vec<f64> = vec![0.0; 3];
+        let tiles: Vec<&[f64]> = vec![&short];
+        let result = grid_reconstruct(&tiles, 1, 1, 1, 2, 2);
+        assert!(result.is_err());
     }
 }

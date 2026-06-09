@@ -9,13 +9,23 @@ use serde_json::Value as JsonValue;
 use sn2_chain::Wallet;
 use tracing::{debug, info};
 
+const MAX_RESPONSE_VALUE_DEPTH: usize = 64;
+
 /// Converts an `rmpv::Value` tree into a `serde_json::Value`, hex-encoding any
 /// MessagePack `bin` payloads so they appear as hex strings to the rest of the
 /// validator pipeline. This is the wire-boundary adapter that lets miners emit
 /// binary proof/witness/public_signals without forcing changes through
 /// `MinerResponse`, the verifier, the proof uploader, and the relay.
-fn rmpv_to_json_value(value: RmpvValue) -> JsonValue {
-    match value {
+fn rmpv_to_json_value(value: RmpvValue) -> Result<JsonValue> {
+    rmpv_to_json_value_bounded(value, 0)
+}
+
+fn rmpv_to_json_value_bounded(value: RmpvValue, depth: usize) -> Result<JsonValue> {
+    anyhow::ensure!(
+        depth <= MAX_RESPONSE_VALUE_DEPTH,
+        "miner response nesting depth exceeds {MAX_RESPONSE_VALUE_DEPTH}"
+    );
+    Ok(match value {
         RmpvValue::Nil => JsonValue::Null,
         RmpvValue::Boolean(b) => JsonValue::Bool(b),
         RmpvValue::Integer(i) => {
@@ -42,9 +52,12 @@ fn rmpv_to_json_value(value: RmpvValue) -> JsonValue {
             .map(JsonValue::String)
             .unwrap_or(JsonValue::Null),
         RmpvValue::Binary(bytes) => JsonValue::String(hex::encode(bytes)),
-        RmpvValue::Array(items) => {
-            JsonValue::Array(items.into_iter().map(rmpv_to_json_value).collect())
-        }
+        RmpvValue::Array(items) => JsonValue::Array(
+            items
+                .into_iter()
+                .map(|item| rmpv_to_json_value_bounded(item, depth + 1))
+                .collect::<Result<Vec<_>>>()?,
+        ),
         RmpvValue::Map(pairs) => {
             let mut obj = serde_json::Map::with_capacity(pairs.len());
             for (k, v) in pairs {
@@ -63,12 +76,12 @@ fn rmpv_to_json_value(value: RmpvValue) -> JsonValue {
                     RmpvValue::Integer(i) => i.to_string(),
                     other => format!("{other}"),
                 };
-                obj.insert(key, rmpv_to_json_value(v));
+                obj.insert(key, rmpv_to_json_value_bounded(v, depth + 1)?);
             }
             JsonValue::Object(obj)
         }
         RmpvValue::Ext(_, _) => JsonValue::Null,
-    }
+    })
 }
 
 struct WalletSigner(Arc<Wallet>);
@@ -162,7 +175,10 @@ impl MinerQueryClient {
 
         let mut obj = serde_json::Map::with_capacity(response.data.len());
         for (k, v) in response.data {
-            obj.insert(k, rmpv_to_json_value(v));
+            obj.insert(
+                k,
+                rmpv_to_json_value(v).context("decoding miner response value")?,
+            );
         }
         let resp_body = serde_json::Value::Object(obj);
         Ok((resp_body, elapsed))
@@ -180,7 +196,7 @@ mod tests {
             RmpvValue::String("proof".into()),
             RmpvValue::Binary(bytes.clone()),
         )]);
-        let json = rmpv_to_json_value(value);
+        let json = rmpv_to_json_value(value).unwrap();
         assert_eq!(json["proof"], JsonValue::String(hex::encode(&bytes)));
     }
 
@@ -190,7 +206,7 @@ mod tests {
             RmpvValue::String("proof".into()),
             RmpvValue::String("deadbeef".into()),
         )]);
-        let json = rmpv_to_json_value(value);
+        let json = rmpv_to_json_value(value).unwrap();
         assert_eq!(json["proof"], JsonValue::String("deadbeef".into()));
     }
 
@@ -204,7 +220,7 @@ mod tests {
             0x02,
         ];
         let value = rmpv::decode::read_value(&mut std::io::Cursor::new(bytes)).expect("decode");
-        let json = rmpv_to_json_value(value);
+        let json = rmpv_to_json_value(value).unwrap();
         let obj = json.as_object().expect("map");
         assert_eq!(obj.len(), 2, "non-utf8 keys must not collide");
         assert!(obj.keys().all(|k| k.starts_with("__msgpack_str_hex:")));
@@ -218,8 +234,27 @@ mod tests {
             RmpvValue::Binary(vec![0x01, 0x02]),
             RmpvValue::String("abc".into()),
         ]);
-        let json = rmpv_to_json_value(value);
+        let json = rmpv_to_json_value(value).unwrap();
         assert_eq!(json[0], JsonValue::String("0102".into()));
         assert_eq!(json[1], JsonValue::String("abc".into()));
+    }
+
+    #[test]
+    fn nesting_beyond_depth_limit_is_rejected() {
+        let mut value = RmpvValue::Nil;
+        for _ in 0..=MAX_RESPONSE_VALUE_DEPTH {
+            value = RmpvValue::Array(vec![value]);
+        }
+        let err = rmpv_to_json_value(value).unwrap_err().to_string();
+        assert!(err.contains("nesting depth"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn nesting_at_depth_limit_is_accepted() {
+        let mut value = RmpvValue::Boolean(true);
+        for _ in 0..MAX_RESPONSE_VALUE_DEPTH {
+            value = RmpvValue::Array(vec![value]);
+        }
+        assert!(rmpv_to_json_value(value).is_ok());
     }
 }

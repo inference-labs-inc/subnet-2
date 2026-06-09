@@ -7,6 +7,7 @@ use std::io::Read;
 const MAX_TENSOR_ELEMENTS: usize = 16_777_216;
 const MAX_PROTOBUF_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PROTO_SHAPE_DIMS: usize = 32;
+pub const MSGPACK_MAX_DEPTH: usize = 64;
 
 pub fn decode_gzipped_protobuf_tensor(gzipped: &[u8], shape: &[usize]) -> Result<ArrayD<f64>> {
     let expected = shape
@@ -327,9 +328,12 @@ pub fn input_data_payload(arr: &ArrayD<f64>) -> bytes::Bytes {
 }
 
 pub fn decode_msgpack_value(bytes: &[u8]) -> anyhow::Result<rmpv::Value> {
-    rmpv::decode::read_value(&mut &bytes[..]).context("decoding msgpack value")
+    rmpv::decode::read_value_with_max_depth(&mut &bytes[..], MSGPACK_MAX_DEPTH)
+        .context("decoding msgpack value")
 }
 
 pub fn decode_msgpack_to_json(bytes: &[u8]) -> anyhow::Result<serde_json::Value> {
-    rmp_serde::from_slice::<serde_json::Value>(bytes).context("decoding msgpack to json")
+    let mut deserializer = rmp_serde::Deserializer::from_read_ref(bytes);
+    deserializer.set_max_depth(MSGPACK_MAX_DEPTH);
+    serde::Deserialize::deserialize(&mut deserializer).context("decoding msgpack to json")
 }
