@@ -670,6 +670,11 @@ impl CircuitStore {
                 if let Some(arr) = comp.get("weights").and_then(|v| v.as_array()) {
                     for (i, w) in arr.iter().enumerate() {
                         let Some(wb_sha) = w.get("sha256").and_then(|v| v.as_str()) else {
+                            warn!(
+                                component = %name,
+                                index = i,
+                                "skipping weight entry with missing sha256"
+                            );
                             continue;
                         };
                         let wb_sha = wb_sha.to_lowercase();

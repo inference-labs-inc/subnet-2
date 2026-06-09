@@ -7,9 +7,8 @@ use btlightning::{LightningClient, QuicAxonInfo, QuicRequest, Signer};
 use rmpv::Value as RmpvValue;
 use serde_json::Value as JsonValue;
 use sn2_chain::Wallet;
+use sn2_types::tensor_codec::MSGPACK_MAX_DEPTH;
 use tracing::{debug, info};
-
-const MAX_RESPONSE_VALUE_DEPTH: usize = 64;
 
 /// Converts an `rmpv::Value` tree into a `serde_json::Value`, hex-encoding any
 /// MessagePack `bin` payloads so they appear as hex strings to the rest of the
@@ -22,8 +21,8 @@ fn rmpv_to_json_value(value: RmpvValue) -> Result<JsonValue> {
 
 fn rmpv_to_json_value_bounded(value: RmpvValue, depth: usize) -> Result<JsonValue> {
     anyhow::ensure!(
-        depth <= MAX_RESPONSE_VALUE_DEPTH,
-        "miner response nesting depth exceeds {MAX_RESPONSE_VALUE_DEPTH}"
+        depth <= MSGPACK_MAX_DEPTH,
+        "miner response nesting depth exceeds {MSGPACK_MAX_DEPTH}"
     );
     Ok(match value {
         RmpvValue::Nil => JsonValue::Null,
@@ -242,7 +241,7 @@ mod tests {
     #[test]
     fn nesting_beyond_depth_limit_is_rejected() {
         let mut value = RmpvValue::Nil;
-        for _ in 0..=MAX_RESPONSE_VALUE_DEPTH {
+        for _ in 0..=MSGPACK_MAX_DEPTH {
             value = RmpvValue::Array(vec![value]);
         }
         let err = rmpv_to_json_value(value).unwrap_err().to_string();
@@ -252,7 +251,7 @@ mod tests {
     #[test]
     fn nesting_at_depth_limit_is_accepted() {
         let mut value = RmpvValue::Boolean(true);
-        for _ in 0..MAX_RESPONSE_VALUE_DEPTH {
+        for _ in 0..MSGPACK_MAX_DEPTH {
             value = RmpvValue::Array(vec![value]);
         }
         assert!(rmpv_to_json_value(value).is_ok());
