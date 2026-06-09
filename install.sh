@@ -5,6 +5,8 @@ REPO="inference-labs-inc/subnet-2"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 NETWORK="$(echo "${NETWORK:-mainnet}" | tr '[:upper:]' '[:lower:]')"
 BINARY="${1:-all}"
+OIDC_ISSUER="https://token.actions.githubusercontent.com"
+SIGNER_IDENTITY_REGEXP="^https://github.com/${REPO}/.github/workflows/release.yml@"
 
 case "$NETWORK" in
   mainnet|testnet) ;;
@@ -36,19 +38,65 @@ detect_platform() {
 }
 
 get_latest_tag() {
-  local api_url
   if [ "$NETWORK" = "testnet" ]; then
-    api_url="https://api.github.com/repos/${REPO}/releases/tags/testnet-latest"
+    curl -fsSL --connect-timeout 10 --max-time 30 \
+      "https://api.github.com/repos/${REPO}/releases?per_page=30" 2>/dev/null |
+      grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' |
+      grep '^testnet-' | head -1 || true
   else
-    api_url="https://api.github.com/repos/${REPO}/releases/latest"
+    curl -fsSL --connect-timeout 10 --max-time 30 \
+      "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null |
+      grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' || true
   fi
-  curl -fsSL --connect-timeout 10 --max-time 30 "$api_url" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' || true
 }
 
 download_sums() {
   local tag="$1"
   local sums_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS"
   curl -fSL --connect-timeout 10 --max-time 30 -o "${TMP_DIR}/SHA256SUMS" "$sums_url"
+  verify_sums_signature "$tag"
+}
+
+verify_sums_signature() {
+  local tag="$1"
+  local bundle_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS.sigstore.json"
+
+  if ! command -v cosign &>/dev/null; then
+    echo "cosign is required to verify the release signature but is not installed." >&2
+    echo "Install it from https://docs.sigstore.dev/cosign/system_config/installation/ and re-run." >&2
+    exit 1
+  fi
+
+  local http_code curl_status=0
+  http_code="$(curl -fsSL --connect-timeout 10 --max-time 30 \
+    -o "${TMP_DIR}/SHA256SUMS.sigstore.json" -w '%{http_code}' \
+    "$bundle_url" 2>"${TMP_DIR}/curl_stderr")" || curl_status=$?
+  if [ "$curl_status" -ne 0 ]; then
+    case "$http_code" in
+      4*)
+        echo "Release ${tag} does not publish a SHA256SUMS.sigstore.json signature bundle (HTTP ${http_code})." >&2
+        echo "Refusing to install an unsigned release." >&2
+        ;;
+      *)
+        echo "Failed to fetch the signature bundle (curl exit ${curl_status}, HTTP ${http_code:-none}):" >&2
+        cat "${TMP_DIR}/curl_stderr" >&2
+        echo "Refusing to install without signature verification; re-run when the network is available." >&2
+        ;;
+    esac
+    exit 1
+  fi
+
+  echo "Verifying SHA256SUMS signature against the ${REPO} release workflow identity..."
+  if ! cosign verify-blob \
+    --bundle "${TMP_DIR}/SHA256SUMS.sigstore.json" \
+    --certificate-identity-regexp "$SIGNER_IDENTITY_REGEXP" \
+    --certificate-oidc-issuer "$OIDC_ISSUER" \
+    "${TMP_DIR}/SHA256SUMS"; then
+    echo "Signature verification FAILED for SHA256SUMS (${tag})." >&2
+    echo "Refusing to install. The release may have been tampered with." >&2
+    exit 1
+  fi
+  echo "Signature verified."
 }
 
 download_and_verify() {
