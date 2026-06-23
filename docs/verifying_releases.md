@@ -8,10 +8,8 @@ Every release artifact — binaries and Docker images — can be independently v
 |---|---|---|---|
 | **Mainnet** | semver (e.g. `0.3.0`) | Git tag push | SHA256SUMS + cosign keyless bundle + build provenance attestation |
 | **Testnet latest** | `testnet-latest` | Push to `testnet` branch | SHA256SUMS |
-| **Testnet nightly** | `testnet-nightly` | Nightly cron after E2E passes | SHA256SUMS |
 | **Docker (release)** | `:latest`, `:<tag>` | GitHub Release created | SLSA provenance attestation |
 | **Docker (dev)** | `:dev`, `:dev-<sha>` | Push to `testnet` branch | SLSA provenance attestation |
-| **Docker (nightly)** | `:testnet-nightly` | Nightly cron after E2E passes | SLSA provenance attestation |
 
 ## Verifying Binary Checksums
 
@@ -85,10 +83,6 @@ gh attestation verify oci://ghcr.io/inference-labs-inc/subnet-2:latest \
 
 # Verify the dev image
 gh attestation verify oci://ghcr.io/inference-labs-inc/subnet-2:dev \
-  --owner inference-labs-inc
-
-# Verify the nightly image
-gh attestation verify oci://ghcr.io/inference-labs-inc/subnet-2:testnet-nightly \
   --owner inference-labs-inc
 ```
 
