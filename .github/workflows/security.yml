@@ -22,7 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Cache cargo-audit binary
         id: cache-audit
@@ -58,7 +60,9 @@ jobs:
       image: semgrep/semgrep
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Run Semgrep
         run: |
@@ -87,7 +91,7 @@ jobs:
 
       - name: Upload SARIF results to GitHub
         if: always() && hashFiles('semgrep-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4.36.1
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
@@ -100,7 +104,9 @@ jobs:
       security-events: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Scan repository
         uses: ./.github/actions/trivy-sarif
@@ -129,22 +135,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
-      - uses: EmbarkStudios/cargo-deny-action@a531616d8ce3b9177443e48a1159bc945a099823 # v2.0.19
+      - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
 
   secrets-detection:
     name: Secret Detection
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: TruffleHog OSS (Pull Request)
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26 # v3.95.2
+        uses: trufflesecurity/trufflehog@d411fff7b8879a62509f3fa98c07f247ac089a51 # v3.95.5
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -153,7 +162,7 @@ jobs:
 
       - name: TruffleHog OSS (Push)
         if: github.event_name == 'push'
-        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26 # v3.95.2
+        uses: trufflesecurity/trufflehog@d411fff7b8879a62509f3fa98c07f247ac089a51 # v3.95.5
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -162,14 +171,14 @@ jobs:
 
       - name: TruffleHog OSS (Schedule)
         if: github.event_name == 'schedule'
-        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26 # v3.95.2
+        uses: trufflesecurity/trufflehog@d411fff7b8879a62509f3fa98c07f247ac089a51 # v3.95.5
         with:
           path: ./
           extra_args: --debug --only-verified
 
       - name: TruffleHog OSS (Release gate)
         if: github.event_name == 'workflow_call'
-        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26 # v3.95.2
+        uses: trufflesecurity/trufflehog@d411fff7b8879a62509f3fa98c07f247ac089a51 # v3.95.5
         with:
           path: ./
           extra_args: --debug --only-verified
