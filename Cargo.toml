@@ -58,7 +58,7 @@ futures-util = "0.3"
 shellexpand = "3.1.2"
 openssl = { version = "0.10", features = ["vendored"] }
 flate2 = "1"
-dsperse = { git = "https://github.com/inference-labs-inc/dsperse", rev = "0e693a13b223e500ee3227627d45d7987a61e663" }
+dsperse = { git = "https://github.com/inference-labs-inc/dsperse", rev = "249440cdc9cc24eea07b92e6421bcb586a25774c" }
 ndarray = { version = "0.17", features = ["serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 bittensor-drand = { git = "https://github.com/inference-labs-inc/bittensor-drand.git", rev = "e55ed98", default-features = false }
