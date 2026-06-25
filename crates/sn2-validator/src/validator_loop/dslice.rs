@@ -250,6 +250,25 @@ impl ValidatorLoop {
             _ => return None,
         };
 
+        if let Some(ds) = &work.dim_split {
+            let bundle_expected: usize = params
+                .inputs
+                .iter()
+                .map(|io| io.shape.iter().product::<usize>())
+                .sum();
+            let k_chunk_size = ds.k_dim.div_ceil(ds.k_chunks.max(1));
+            let per_request_actual = k_chunk_size.saturating_mul(1 + ds.n_dim);
+            return if per_request_actual == bundle_expected {
+                None
+            } else {
+                Some(BundleDispatchMismatch {
+                    bundle_expected,
+                    per_request_actual,
+                    strategy: "dim-split",
+                })
+            };
+        }
+
         let initializer_count = if params.weights_as_inputs {
             let onnx = work.onnx_path.as_ref()?;
             match dsperse::pipeline::extract_onnx_initializers(std::path::Path::new(onnx), &params)
@@ -267,10 +286,7 @@ impl ValidatorLoop {
             .map(|io| io.shape.iter().product::<usize>())
             .sum();
 
-        let (per_request_actual, strategy) = if let Some(ds) = &work.dim_split {
-            let k_chunk_size = ds.k_dim.div_ceil(ds.k_chunks.max(1));
-            (k_chunk_size.saturating_mul(1 + ds.n_dim), "dim-split")
-        } else if let Some(tiling) = &work.tiling {
+        let (per_request_actual, strategy) = if let Some(tiling) = &work.tiling {
             let n = std::cmp::max(work.named_inputs.len(), 1);
             let per_input = if tiling.ndim == 1 {
                 tiling.segment_size.unwrap_or(0)
