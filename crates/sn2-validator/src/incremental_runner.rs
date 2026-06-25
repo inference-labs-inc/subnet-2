@@ -277,6 +277,50 @@ impl IncrementalRunManager {
         Ok(())
     }
 
+    pub fn init_dim_split_counter(
+        &mut self,
+        run_uid: &str,
+        slice_id: &str,
+        total_units: usize,
+        expected_indices: HashSet<u32>,
+    ) -> anyhow::Result<()> {
+        if total_units == 0 {
+            return Err(anyhow::anyhow!(
+                "dim-split counter init requires total_units > 0 for run {run_uid}, slice {slice_id}"
+            ));
+        }
+        if expected_indices.is_empty() {
+            return Err(anyhow::anyhow!(
+                "dim-split counter init requires at least one expected unit for run {run_uid}, slice {slice_id}"
+            ));
+        }
+        if let Some(&max_idx) = expected_indices.iter().max() {
+            if (max_idx as usize) >= total_units {
+                return Err(anyhow::anyhow!(
+                    "expected unit index {max_idx} exceeds total_units {total_units} for run {run_uid}, slice {slice_id}"
+                ));
+            }
+        }
+        let expected_count = expected_indices.len();
+        let key = (run_uid.to_string(), slice_id.to_string());
+        use std::collections::hash_map::Entry;
+        match self.tile_counters.entry(key) {
+            Entry::Vacant(e) => {
+                e.insert(TileCounter {
+                    grid_total: total_units,
+                    expected: expected_indices,
+                    received: HashSet::with_capacity(expected_count),
+                });
+            }
+            Entry::Occupied(_) => {
+                return Err(anyhow::anyhow!(
+                    "tile counter already exists for run {run_uid}, slice {slice_id}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn record_tile(
         &mut self,
         run_uid: &str,

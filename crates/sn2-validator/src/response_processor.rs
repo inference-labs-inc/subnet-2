@@ -80,6 +80,21 @@ fn build_expected_inputs(
         return Some(flat);
     }
 
+    let backend = dsperse::backend::jstprove::JstproveBackend::new();
+    let params = backend
+        .load_params(std::path::Path::new(circuit_path))
+        .ok()
+        .flatten()?;
+
+    let full_input_sum: usize = params
+        .inputs
+        .iter()
+        .map(|io| io.shape.iter().product::<usize>())
+        .sum();
+    if flat.len() == full_input_sum {
+        return Some(flat);
+    }
+
     let bundle_path = std::path::Path::new(circuit_path);
     let slice_dir = bundle_path.parent().and_then(|p| p.parent())?;
     let payload_dir = slice_dir.join("payload");
@@ -89,12 +104,6 @@ fn build_expected_inputs(
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .find(|p| p.extension().is_some_and(|e| e == "onnx"))?;
-
-    let backend = dsperse::backend::jstprove::JstproveBackend::new();
-    let params = backend
-        .load_params(std::path::Path::new(circuit_path))
-        .ok()
-        .flatten()?;
 
     match dsperse::pipeline::extract_onnx_initializers(&onnx_path, &params) {
         Ok(inits) => {

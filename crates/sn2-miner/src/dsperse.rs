@@ -270,16 +270,22 @@ impl DSperseClient {
             let params = backend
                 .load_params(&circuit_path)
                 .map_err(|e| anyhow::anyhow!("loading circuit params: {e}"))?;
-            let inits = match params.as_ref() {
+            let (activations, inits) = match params.as_ref() {
                 Some(p) if p.weights_as_inputs => {
-                    dsperse::pipeline::extract_onnx_initializers(&onnx_path, p)
-                        .map_err(|e| anyhow::anyhow!("extracting initializers: {e}"))?
+                    match dsperse::pipeline::split_inline_wai_inputs(p, &input_flat) {
+                        Some(split) => split,
+                        None => {
+                            let inits = dsperse::pipeline::extract_onnx_initializers(&onnx_path, p)
+                                .map_err(|e| anyhow::anyhow!("extracting initializers: {e}"))?;
+                            (input_flat.clone(), inits)
+                        }
+                    }
                 }
-                _ => Vec::new(),
+                _ => (input_flat.clone(), Vec::new()),
             };
 
             let witness_bytes = backend
-                .witness_f64(&circuit_path, &input_flat, &inits)
+                .witness_f64(&circuit_path, &activations, &inits)
                 .map_err(|e| anyhow::anyhow!("witness generation: {e}"))?;
 
             let dims = params.as_ref().map(|p| p.effective_input_dims());

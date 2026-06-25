@@ -267,7 +267,10 @@ impl ValidatorLoop {
             .map(|io| io.shape.iter().product::<usize>())
             .sum();
 
-        let (per_request_actual, strategy) = if let Some(tiling) = &work.tiling {
+        let (per_request_actual, strategy) = if let Some(ds) = &work.dim_split {
+            let k_chunk_size = ds.k_dim.div_ceil(ds.k_chunks.max(1));
+            (k_chunk_size.saturating_mul(1 + ds.n_dim), "dim-split")
+        } else if let Some(tiling) = &work.tiling {
             let n = std::cmp::max(work.named_inputs.len(), 1);
             let per_input = if tiling.ndim == 1 {
                 tiling.segment_size.unwrap_or(0)
@@ -537,7 +540,28 @@ impl ValidatorLoop {
                 .circuit_store
                 .component_sha(&circuit.id, &work.slice_id);
 
-            let queued = if let Some(ref tiling) = work.tiling {
+            let queued = if let Some(ref ds) = work.dim_split {
+                match Self::stage_dim_split_work(
+                    &mut staged,
+                    &mut self.run_manager,
+                    run_uid,
+                    circuit,
+                    &work.slice_id,
+                    work.circuit_path.as_deref(),
+                    work.onnx_path.as_deref(),
+                    comp_sha,
+                    ds,
+                    &input_tensor,
+                    run_source,
+                    clamped_prove_pct,
+                ) {
+                    Some(n) => n,
+                    None => {
+                        self.teardown_run(run_uid).await;
+                        return;
+                    }
+                }
+            } else if let Some(ref tiling) = work.tiling {
                 match Self::stage_tiled_work(
                     &mut staged,
                     &mut self.run_manager,
@@ -716,6 +740,110 @@ impl ValidatorLoop {
                 slice_id,
                 run_uid,
                 tile_bytes,
+                idx as u32,
+                run_source,
+                circuit_path,
+                component_sha,
+            ));
+        }
+
+        Some(staged_count)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stage_dim_split_work(
+        staged: &mut StagedWork,
+        run_manager: &mut crate::incremental_runner::IncrementalRunManager,
+        run_uid: &str,
+        circuit: &Arc<Circuit>,
+        slice_id: &str,
+        circuit_path: Option<&str>,
+        onnx_path: Option<&str>,
+        component_sha: Option<&str>,
+        ds: &dsperse::schema::tiling::DimSplitInfo,
+        input_tensor: &ndarray::ArrayD<f64>,
+        run_source: RunSource,
+        prove_pct: f64,
+    ) -> Option<usize> {
+        let onnx_path = match onnx_path {
+            Some(p) => p,
+            None => {
+                warn!(
+                    run_uid = %run_uid,
+                    slice = %slice_id,
+                    "dim-split slice missing onnx_path, cannot bind chunk weights"
+                );
+                return None;
+            }
+        };
+        let units = match dsperse::pipeline::dim_split_bound_inputs(
+            input_tensor,
+            std::path::Path::new(onnx_path),
+            ds,
+        ) {
+            Ok(u) => u,
+            Err(e) => {
+                warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "dim_split_bound_inputs failed");
+                return None;
+            }
+        };
+        let num_units = units.len();
+        if num_units == 0 {
+            warn!(run_uid = %run_uid, slice = %slice_id, "dim-split produced zero units");
+            return None;
+        }
+
+        let sampled_indices =
+            Self::sample_tile_indices(num_units, prove_pct, run_source, run_uid, slice_id);
+        if sampled_indices.is_empty() {
+            warn!(run_uid = %run_uid, slice = %slice_id, "prove_pct sampled zero dim-split units");
+            return None;
+        }
+
+        let mut prepared: Vec<(usize, bytes::Bytes)> = Vec::with_capacity(sampled_indices.len());
+        for (idx, unit) in units.into_iter().enumerate() {
+            if !sampled_indices.contains(&idx) {
+                continue;
+            }
+            let len = unit.len();
+            let unit_arr = match ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[len]), unit) {
+                Ok(arr) => arr,
+                Err(e) => {
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %slice_id,
+                        unit_idx = idx,
+                        error = %e,
+                        "skipping dim-split unit: from_shape_vec rejected 1-D shape"
+                    );
+                    continue;
+                }
+            };
+            let unit_bytes = crate::tensor::input_data_payload(&unit_arr);
+            prepared.push((idx, unit_bytes));
+        }
+
+        if prepared.is_empty() {
+            warn!(run_uid = %run_uid, slice = %slice_id, "no dim-split units survived staging");
+            return None;
+        }
+
+        let expected_indices: std::collections::HashSet<u32> =
+            prepared.iter().map(|(idx, _)| *idx as u32).collect();
+        if let Err(e) =
+            run_manager.init_dim_split_counter(run_uid, slice_id, num_units, expected_indices)
+        {
+            warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "init_dim_split_counter failed");
+            return None;
+        }
+
+        let staged_count = prepared.len();
+        for (idx, unit_bytes) in prepared {
+            staged.stage_request(Self::build_tile_request(
+                circuit,
+                slice_id,
+                run_uid,
+                unit_bytes,
                 idx as u32,
                 run_source,
                 circuit_path,
