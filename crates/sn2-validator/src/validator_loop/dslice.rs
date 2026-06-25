@@ -556,7 +556,11 @@ impl ValidatorLoop {
                 .circuit_store
                 .component_sha(&circuit.id, &work.slice_id);
 
-            let queued = if let Some(ref ds) = work.dim_split {
+            let queued = if let Some(ds) = work
+                .dim_split
+                .as_ref()
+                .filter(|ds| Self::is_weight_bound_dim_split(ds))
+            {
                 match Self::stage_dim_split_work(
                     &mut staged,
                     &mut self.run_manager,
@@ -573,8 +577,9 @@ impl ValidatorLoop {
                 ) {
                     Some(n) => n,
                     None => {
-                        self.teardown_run(run_uid).await;
-                        return;
+                        self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
+                        self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
+                        continue;
                     }
                 }
             } else if let Some(ref tiling) = work.tiling {
@@ -764,6 +769,10 @@ impl ValidatorLoop {
         }
 
         Some(staged_count)
+    }
+
+    fn is_weight_bound_dim_split(ds: &dsperse::schema::tiling::DimSplitInfo) -> bool {
+        ds.weight_name.is_some() && ds.k_dim > 0 && ds.n_dim > 0
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1136,5 +1145,47 @@ impl ValidatorLoop {
         let circuit = Arc::new(circuit.clone());
         self.enqueue_all_dslices(&run_uid, &circuit, RunSource::Benchmark, 1.0)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ValidatorLoop;
+    use dsperse::schema::tiling::{DimSplitInfo, DimSplitKind};
+
+    #[test]
+    fn weight_bound_dim_split_requires_full_matmul_metadata() {
+        let matmul = DimSplitInfo {
+            split_kind: DimSplitKind::MatMulOutputDim,
+            weight_name: Some("onnx::MatMul_4211".to_string()),
+            k_dim: 384,
+            n_dim: 1536,
+            k_chunks: 2,
+            ..Default::default()
+        };
+        assert!(ValidatorLoop::is_weight_bound_dim_split(&matmul));
+
+        let head_dim = DimSplitInfo {
+            split_kind: DimSplitKind::HeadDim,
+            weight_name: None,
+            ..Default::default()
+        };
+        assert!(!ValidatorLoop::is_weight_bound_dim_split(&head_dim));
+
+        let weightless = DimSplitInfo {
+            weight_name: None,
+            k_dim: 384,
+            n_dim: 1536,
+            ..Default::default()
+        };
+        assert!(!ValidatorLoop::is_weight_bound_dim_split(&weightless));
+
+        let zero_dims = DimSplitInfo {
+            weight_name: Some("w".to_string()),
+            k_dim: 0,
+            n_dim: 0,
+            ..Default::default()
+        };
+        assert!(!ValidatorLoop::is_weight_bound_dim_split(&zero_dims));
     }
 }
