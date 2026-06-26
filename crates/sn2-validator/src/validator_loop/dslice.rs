@@ -583,6 +583,10 @@ impl ValidatorLoop {
                         continue;
                     }
                 }
+            } else if work.dim_split.is_some() {
+                self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
+                self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
+                continue;
             } else if let Some(ref tiling) = work.tiling {
                 match Self::stage_tiled_work(
                     &mut staged,
