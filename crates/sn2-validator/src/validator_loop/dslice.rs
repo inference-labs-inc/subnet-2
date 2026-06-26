@@ -801,18 +801,14 @@ impl ValidatorLoop {
                 return None;
             }
         };
-        let units = match dsperse::pipeline::dim_split_bound_inputs(
-            input_tensor,
-            std::path::Path::new(onnx_path),
-            ds,
-        ) {
-            Ok(u) => u,
+        let activations = match dsperse::pipeline::split_for_dim_split_dispatch(input_tensor, ds) {
+            Ok(a) => a,
             Err(e) => {
                 warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "dim_split_bound_inputs failed");
                 return None;
             }
         };
-        let num_units = units.len();
+        let num_units = activations.len();
         if num_units == 0 {
             warn!(run_uid = %run_uid, slice = %slice_id, "dim-split produced zero units");
             return None;
@@ -825,11 +821,30 @@ impl ValidatorLoop {
             return None;
         }
 
-        let mut prepared: Vec<(usize, bytes::Bytes)> = Vec::with_capacity(sampled_indices.len());
-        for (idx, unit) in units.into_iter().enumerate() {
-            if !sampled_indices.contains(&idx) {
-                continue;
+        let (full_weight, trans_b) = match dsperse::pipeline::dim_split_weight_and_transb(
+            std::path::Path::new(onnx_path),
+            ds,
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "dim_split_bound_inputs failed");
+                return None;
             }
+        };
+        let k_chunks = ds.k_chunks.max(1);
+        let weight_chunks: Vec<Vec<f64>> = (0..k_chunks)
+            .map(|kc| {
+                dsperse::pipeline::dim_split_weight_chunk(&full_weight, ds, kc, trans_b)
+                    .into_iter()
+                    .map(f64::from)
+                    .collect()
+            })
+            .collect();
+
+        let mut prepared: Vec<(usize, bytes::Bytes)> = Vec::with_capacity(sampled_indices.len());
+        for &idx in &sampled_indices {
+            let mut unit = activations[idx].clone();
+            unit.extend_from_slice(&weight_chunks[idx % k_chunks]);
             let len = unit.len();
             let unit_arr = match ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[len]), unit) {
                 Ok(arr) => arr,
