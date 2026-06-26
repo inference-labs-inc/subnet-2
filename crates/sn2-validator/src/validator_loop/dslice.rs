@@ -559,6 +559,7 @@ impl ValidatorLoop {
             let queued = if let Some(ds) = work
                 .dim_split
                 .as_ref()
+                .filter(|_| Self::dim_split_dispatch_enabled())
                 .filter(|ds| Self::is_weight_bound_dim_split(ds))
             {
                 match Self::stage_dim_split_work(
@@ -769,6 +770,15 @@ impl ValidatorLoop {
         }
 
         Some(staged_count)
+    }
+
+    fn dim_split_dispatch_enabled() -> bool {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var("SN2_DIM_SPLIT_DISPATCH")
+                .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "on" | "yes"))
+                .unwrap_or(false)
+        })
     }
 
     fn is_weight_bound_dim_split(ds: &dsperse::schema::tiling::DimSplitInfo) -> bool {
