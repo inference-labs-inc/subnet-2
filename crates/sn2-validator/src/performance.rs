@@ -7,8 +7,7 @@ use sn2_types::{
     BLOCK_TIME_SECS, CAPACITY_BACKOFF_REL_SPEED, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
     CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_REL_SPEED, CAPACITY_RAMP_THRESHOLD,
     CAPACITY_UNIT_REFERENCE_PERCENTILE, CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS,
-    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RATE_CAP, PERFORMANCE_RESCHEDULE_PENALTY,
-    PERFORMANCE_SCORING_PERCENTILE, VERIFICATION_WINDOW_BLOCKS,
+    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::{debug, warn};
 
@@ -191,7 +190,7 @@ impl PerformanceTracker {
             evict_timed(unit, UNIT_TIMES_CAP);
             let reference = self.cached_unit_reference(work_key);
             if reference > 0.0 {
-                let rel = (reference / response_time).min(PERFORMANCE_RATE_CAP);
+                let rel = reference / response_time;
                 let samples = self.rel_speed.entry(uid).or_default();
                 samples.push_back((now, rel));
                 evict_timed(samples, REL_SPEED_WINDOW);
@@ -452,19 +451,17 @@ impl PerformanceTracker {
     }
 
     pub fn snapshot(&self) -> HashMap<u16, (f64, usize)> {
-        let reference = self.scoring_reference_time();
         self.windows
             .iter()
-            .map(|(&uid, w)| (uid, (Self::uid_rate(w, reference), w.len())))
+            .map(|(&uid, w)| (uid, (self.miner_rel_speed(uid).unwrap_or(1.0), w.len())))
             .collect()
     }
 
     pub fn throughput_snapshot(&self) -> HashMap<u16, (f64, usize, usize)> {
-        let reference = self.scoring_reference_time();
         self.windows
             .iter()
             .map(|(&uid, w)| {
-                let rate = Self::uid_rate(w, reference);
+                let rate = self.miner_rel_speed(uid).unwrap_or(1.0);
                 let cap = if w.len() < PERFORMANCE_MIN_SAMPLES {
                     1
                 } else {
@@ -473,41 +470,6 @@ impl PerformanceTracker {
                 (uid, (rate, cap, w.len()))
             })
             .collect()
-    }
-
-    fn scoring_reference_time(&self) -> f64 {
-        let mut times: Vec<f64> = self
-            .windows
-            .values()
-            .flat_map(|w| w.iter().filter(|(_, s, _)| *s).map(|(_, _, t)| *t))
-            .collect();
-
-        if times.len() < PERFORMANCE_MIN_SAMPLES {
-            return CIRCUIT_TIMEOUT_SECONDS as f64;
-        }
-
-        times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let idx = ((times.len() as f64 * PERFORMANCE_SCORING_PERCENTILE) as usize)
-            .min(times.len().saturating_sub(1));
-        times[idx].max(1.0)
-    }
-
-    fn uid_rate(w: &VecDeque<WindowEntry>, reference: f64) -> f64 {
-        if w.is_empty() {
-            return 0.0;
-        }
-        let mut total = 0.0;
-        for &(_, success, rt) in w {
-            if rt == PERFORMANCE_RESCHEDULE_PENALTY {
-                total += PERFORMANCE_RESCHEDULE_PENALTY;
-            } else if !success {
-            } else if rt <= 0.0 {
-                total += PERFORMANCE_RATE_CAP;
-            } else {
-                total += (reference / rt).min(PERFORMANCE_RATE_CAP);
-            }
-        }
-        (total / w.len() as f64).max(0.0)
     }
 
     pub fn reset_uid(&mut self, uid: u16, hotkey: &str) {
