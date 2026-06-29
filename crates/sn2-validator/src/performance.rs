@@ -75,10 +75,14 @@ pub struct PerformanceTracker {
     cap_events: Vec<CapEvent>,
     pending_evictions: Vec<(u16, String)>,
     at_cap_last_touched: HashMap<u16, Instant>,
+    reference_cache: Option<(u64, f64)>,
+    total_records: u64,
     persistence_path: Option<PathBuf>,
 }
 
 const CAP_DECAY_IDLE_SECS: u64 = 600;
+
+const REFERENCE_CACHE_RECORDS: u64 = 64;
 
 fn window_ttl() -> Duration {
     Duration::from_secs(VERIFICATION_WINDOW_BLOCKS * BLOCK_TIME_SECS)
@@ -104,6 +108,8 @@ impl PerformanceTracker {
             cap_events: Vec::new(),
             pending_evictions: Vec::new(),
             at_cap_last_touched: HashMap::new(),
+            reference_cache: None,
+            total_records: 0,
             persistence_path: Some(path),
         };
         tracker.load();
@@ -137,6 +143,7 @@ impl PerformanceTracker {
         was_at_capacity: bool,
         now: Instant,
     ) {
+        self.total_records = self.total_records.wrapping_add(1);
         let window = self.windows.entry(uid).or_default();
         window.push_back((now, success, response_time));
         evict_expired(window);
@@ -462,8 +469,18 @@ impl PerformanceTracker {
         self.cap_events.retain(|e| e.hotkey != hotkey);
     }
 
-    fn speed_target_cap(&self, uid: u16) -> usize {
+    fn cached_reference_time(&mut self) -> f64 {
+        if let Some((at, reference)) = self.reference_cache {
+            if self.total_records.saturating_sub(at) < REFERENCE_CACHE_RECORDS {
+                return reference;
+            }
+        }
         let reference = self.scoring_reference_time();
+        self.reference_cache = Some((self.total_records, reference));
+        reference
+    }
+
+    fn speed_target_cap(&self, uid: u16, reference: f64) -> usize {
         let speed = self
             .windows
             .get(&uid)
@@ -480,7 +497,8 @@ impl PerformanceTracker {
             _ => return,
         };
 
-        let target = self.speed_target_cap(uid);
+        let reference = self.cached_reference_time();
+        let target = self.speed_target_cap(uid, reference);
 
         let current = self.adaptive_caps.entry(uid).or_insert(1);
         let cap_from = *current;
@@ -644,6 +662,8 @@ mod tests {
             cap_events: Vec::new(),
             pending_evictions: Vec::new(),
             at_cap_last_touched: HashMap::new(),
+            reference_cache: None,
+            total_records: 0,
             persistence_path: None,
         }
     }
@@ -817,6 +837,27 @@ mod tests {
         }
         let slow = tracker.cap_snapshot().get(&2).copied().unwrap_or(0);
         assert!(slow <= 2, "slow miner cap should stay low, got {slow}");
+    }
+
+    #[test]
+    fn cap_trims_toward_lowered_target_when_speed_degrades() {
+        let mut tracker = test_tracker();
+        for _ in 0..200 {
+            tracker.record(2, "anchor", true, 1.0, true);
+        }
+        for _ in 0..200 {
+            tracker.record(1, "hk", true, 1.0, true);
+        }
+        let high = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(high >= 4, "expected ramp-up before degradation, got {high}");
+        for _ in 0..600 {
+            tracker.record(1, "hk", true, 12.0, true);
+        }
+        let trimmed = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            (1..high).contains(&trimmed),
+            "cap should trim down toward lowered target while staying above zero: high={high}, trimmed={trimmed}"
+        );
     }
 
     #[test]
