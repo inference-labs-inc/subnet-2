@@ -501,18 +501,29 @@ impl PerformanceTracker {
             }
         }
         let reference = self.unit_reference(work_key);
-        self.unit_reference_cache
-            .insert(work_key.to_string(), (self.total_records, reference));
+        if reference > 0.0 {
+            self.unit_reference_cache
+                .insert(work_key.to_string(), (self.total_records, reference));
+        }
         reference
     }
 
     fn miner_rel_speed(&self, uid: u16) -> Option<f64> {
         let samples = self.rel_speed.get(&uid)?;
-        if samples.is_empty() {
+        let ttl = window_ttl();
+        let mut count = 0usize;
+        let sum: f64 = samples
+            .iter()
+            .filter(|(ts, _)| ts.elapsed() <= ttl)
+            .map(|(_, r)| {
+                count += 1;
+                *r
+            })
+            .sum();
+        if count == 0 {
             return None;
         }
-        let sum: f64 = samples.iter().map(|(_, r)| *r).sum();
-        Some(sum / samples.len() as f64)
+        Some(sum / count as f64)
     }
 
     fn update_adaptive_cap(&mut self, uid: u16, hotkey: &str) {
