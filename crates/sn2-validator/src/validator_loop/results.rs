@@ -15,8 +15,20 @@ impl ValidatorLoop {
     ) {
         let elapsed = response.response_time;
         let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
-        self.performance_tracker
-            .record(uid, &hotkey, true, elapsed, was_at_capacity);
+        let work_key = match (&response.request_type, response.dsperse_slice_num) {
+            (Some(rt), Some(slice)) => format!("{rt:?}:{slice}"),
+            (Some(rt), None) => format!("{rt:?}"),
+            (None, Some(slice)) => format!("slice:{slice}"),
+            (None, None) => String::new(),
+        };
+        self.performance_tracker.record_keyed(
+            uid,
+            &hotkey,
+            true,
+            elapsed,
+            was_at_capacity,
+            &work_key,
+        );
         self.score_manager.update_score(
             uid,
             true,

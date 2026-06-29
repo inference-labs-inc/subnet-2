@@ -4,10 +4,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
-    BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
-    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD, CAPACITY_SPEED_TO_CAP,
-    CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RATE_CAP,
-    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_SCORING_PERCENTILE, VERIFICATION_WINDOW_BLOCKS,
+    BLOCK_TIME_SECS, CAPACITY_BACKOFF_REL_SPEED, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
+    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_REL_SPEED, CAPACITY_RAMP_THRESHOLD,
+    CAPACITY_UNIT_REFERENCE_PERCENTILE, CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS,
+    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RATE_CAP, PERFORMANCE_RESCHEDULE_PENALTY,
+    PERFORMANCE_SCORING_PERCENTILE, VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::{debug, warn};
 
@@ -75,14 +76,19 @@ pub struct PerformanceTracker {
     cap_events: Vec<CapEvent>,
     pending_evictions: Vec<(u16, String)>,
     at_cap_last_touched: HashMap<u16, Instant>,
-    reference_cache: Option<(u64, f64)>,
+    unit_times: HashMap<String, VecDeque<(Instant, f64)>>,
+    unit_reference_cache: HashMap<String, (u64, f64)>,
+    rel_speed: HashMap<u16, VecDeque<(Instant, f64)>>,
     total_records: u64,
     persistence_path: Option<PathBuf>,
 }
 
 const CAP_DECAY_IDLE_SECS: u64 = 600;
 
-const REFERENCE_CACHE_RECORDS: u64 = 64;
+const UNIT_REFERENCE_REFRESH_RECORDS: u64 = 64;
+const UNIT_TIMES_CAP: usize = 256;
+const UNIT_REFERENCE_MIN_SAMPLES: usize = 8;
+const REL_SPEED_WINDOW: usize = 64;
 
 fn window_ttl() -> Duration {
     Duration::from_secs(VERIFICATION_WINDOW_BLOCKS * BLOCK_TIME_SECS)
@@ -99,6 +105,20 @@ fn evict_expired(window: &mut VecDeque<WindowEntry>) {
     }
 }
 
+fn evict_timed(samples: &mut VecDeque<(Instant, f64)>, cap: usize) {
+    let ttl = window_ttl();
+    while let Some((ts, _)) = samples.front() {
+        if ts.elapsed() > ttl {
+            samples.pop_front();
+        } else {
+            break;
+        }
+    }
+    while samples.len() > cap {
+        samples.pop_front();
+    }
+}
+
 impl PerformanceTracker {
     pub fn new_with_persistence(path: PathBuf) -> Self {
         let mut tracker = Self {
@@ -108,7 +128,9 @@ impl PerformanceTracker {
             cap_events: Vec::new(),
             pending_evictions: Vec::new(),
             at_cap_last_touched: HashMap::new(),
-            reference_cache: None,
+            unit_times: HashMap::new(),
+            unit_reference_cache: HashMap::new(),
+            rel_speed: HashMap::new(),
             total_records: 0,
             persistence_path: Some(path),
         };
@@ -116,6 +138,7 @@ impl PerformanceTracker {
         tracker
     }
 
+    #[cfg(test)]
     pub fn record(
         &mut self,
         uid: u16,
@@ -124,12 +147,25 @@ impl PerformanceTracker {
         response_time: f64,
         was_at_capacity: bool,
     ) {
+        self.record_keyed(uid, hotkey, success, response_time, was_at_capacity, "");
+    }
+
+    pub fn record_keyed(
+        &mut self,
+        uid: u16,
+        hotkey: &str,
+        success: bool,
+        response_time: f64,
+        was_at_capacity: bool,
+        work_key: &str,
+    ) {
         self.record_with_time(
             uid,
             hotkey,
             success,
             response_time,
             was_at_capacity,
+            work_key,
             Instant::now(),
         );
     }
@@ -141,12 +177,26 @@ impl PerformanceTracker {
         success: bool,
         response_time: f64,
         was_at_capacity: bool,
+        work_key: &str,
         now: Instant,
     ) {
         self.total_records = self.total_records.wrapping_add(1);
         let window = self.windows.entry(uid).or_default();
         window.push_back((now, success, response_time));
         evict_expired(window);
+
+        if success && response_time > 0.0 {
+            let unit = self.unit_times.entry(work_key.to_string()).or_default();
+            unit.push_back((now, response_time));
+            evict_timed(unit, UNIT_TIMES_CAP);
+            let reference = self.cached_unit_reference(work_key);
+            if reference > 0.0 {
+                let rel = (reference / response_time).min(PERFORMANCE_RATE_CAP);
+                let samples = self.rel_speed.entry(uid).or_default();
+                samples.push_back((now, rel));
+                evict_timed(samples, REL_SPEED_WINDOW);
+            }
+        }
 
         if was_at_capacity {
             let results = self.at_cap_results.entry(uid).or_default();
@@ -465,28 +515,42 @@ impl PerformanceTracker {
         self.adaptive_caps.remove(&uid);
         self.at_cap_results.remove(&uid);
         self.at_cap_last_touched.remove(&uid);
+        self.rel_speed.remove(&uid);
         self.pending_evictions.retain(|(u, _)| *u != uid);
         self.cap_events.retain(|e| e.hotkey != hotkey);
     }
 
-    fn cached_reference_time(&mut self) -> f64 {
-        if let Some((at, reference)) = self.reference_cache {
-            if self.total_records.saturating_sub(at) < REFERENCE_CACHE_RECORDS {
-                return reference;
+    fn unit_reference(&self, work_key: &str) -> f64 {
+        let samples = match self.unit_times.get(work_key) {
+            Some(s) if s.len() >= UNIT_REFERENCE_MIN_SAMPLES => s,
+            _ => return 0.0,
+        };
+        let mut times: Vec<f64> = samples.iter().map(|(_, t)| *t).collect();
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = ((times.len() as f64 * CAPACITY_UNIT_REFERENCE_PERCENTILE) as usize)
+            .min(times.len().saturating_sub(1));
+        times[idx]
+    }
+
+    fn cached_unit_reference(&mut self, work_key: &str) -> f64 {
+        if let Some((at, reference)) = self.unit_reference_cache.get(work_key) {
+            if self.total_records.saturating_sub(*at) < UNIT_REFERENCE_REFRESH_RECORDS {
+                return *reference;
             }
         }
-        let reference = self.scoring_reference_time();
-        self.reference_cache = Some((self.total_records, reference));
+        let reference = self.unit_reference(work_key);
+        self.unit_reference_cache
+            .insert(work_key.to_string(), (self.total_records, reference));
         reference
     }
 
-    fn speed_target_cap(&self, uid: u16, reference: f64) -> usize {
-        let speed = self
-            .windows
-            .get(&uid)
-            .map(|w| Self::uid_rate(w, reference))
-            .unwrap_or(0.0);
-        ((speed * CAPACITY_SPEED_TO_CAP).round() as usize).max(1)
+    fn miner_rel_speed(&self, uid: u16) -> Option<f64> {
+        let samples = self.rel_speed.get(&uid)?;
+        if samples.is_empty() {
+            return None;
+        }
+        let sum: f64 = samples.iter().map(|(_, r)| *r).sum();
+        Some(sum / samples.len() as f64)
     }
 
     fn update_adaptive_cap(&mut self, uid: u16, hotkey: &str) {
@@ -497,8 +561,7 @@ impl PerformanceTracker {
             _ => return,
         };
 
-        let reference = self.cached_reference_time();
-        let target = self.speed_target_cap(uid, reference);
+        let rel_speed = self.miner_rel_speed(uid).unwrap_or(CAPACITY_RAMP_REL_SPEED);
 
         let current = self.adaptive_caps.entry(uid).or_insert(1);
         let cap_from = *current;
@@ -517,10 +580,10 @@ impl PerformanceTracker {
                 }
                 return;
             }
-            if *current < target {
+            if rel_speed >= CAPACITY_RAMP_REL_SPEED {
                 *current += 1;
                 direction = Some(CapDirection::Ramp);
-            } else if *current > target {
+            } else if rel_speed < CAPACITY_BACKOFF_REL_SPEED && *current > 1 {
                 *current -= 1;
                 direction = Some(CapDirection::Backoff);
             }
@@ -662,7 +725,9 @@ mod tests {
             cap_events: Vec::new(),
             pending_evictions: Vec::new(),
             at_cap_last_touched: HashMap::new(),
-            reference_cache: None,
+            unit_times: HashMap::new(),
+            unit_reference_cache: HashMap::new(),
+            rel_speed: HashMap::new(),
             total_records: 0,
             persistence_path: None,
         }
@@ -770,8 +835,8 @@ mod tests {
         let stale = now
             .checked_sub(window_ttl() + Duration::from_secs(60))
             .expect("Instant arithmetic");
-        tracker.record_with_time(1, "hk", true, 5.0, false, stale);
-        tracker.record_with_time(1, "hk", true, 6.0, false, now);
+        tracker.record_with_time(1, "hk", true, 5.0, false, "", stale);
+        tracker.record_with_time(1, "hk", true, 6.0, false, "", now);
         let window = tracker.windows.get(&1).unwrap();
         assert_eq!(window.len(), 1);
         assert_eq!(window[0].2, 6.0);
@@ -811,11 +876,11 @@ mod tests {
     #[test]
     fn faster_miner_reaches_higher_cap_than_slower_one_at_capacity() {
         let mut tracker = test_tracker();
-        for _ in 0..200 {
-            tracker.record(1, "fast", true, 1.0, true);
-        }
-        for _ in 0..200 {
-            tracker.record(2, "slow", true, 10.0, true);
+        for _ in 0..400 {
+            tracker.record(0, "anchor", true, 10.0, false);
+            tracker.record(0, "anchor", true, 10.0, false);
+            tracker.record(1, "fast", true, 2.0, true);
+            tracker.record(2, "slow", true, 50.0, true);
         }
         let caps = tracker.cap_snapshot();
         let fast = caps.get(&1).copied().unwrap_or(0);
@@ -827,36 +892,56 @@ mod tests {
     }
 
     #[test]
-    fn slow_miner_cap_is_bounded_by_speed_not_occupancy() {
+    fn slow_miner_trims_to_low_cap_when_below_peer_speed() {
         let mut tracker = test_tracker();
-        for _ in 0..200 {
-            tracker.record(1, "fast", true, 1.0, true);
-        }
         for _ in 0..400 {
-            tracker.record(2, "slow", true, 10.0, true);
+            tracker.record(0, "anchor", true, 10.0, false);
+            tracker.record(0, "anchor", true, 10.0, false);
+            tracker.record(2, "slow", true, 50.0, true);
         }
         let slow = tracker.cap_snapshot().get(&2).copied().unwrap_or(0);
         assert!(slow <= 2, "slow miner cap should stay low, got {slow}");
     }
 
     #[test]
-    fn cap_trims_toward_lowered_target_when_speed_degrades() {
+    fn cap_trims_back_down_when_speed_degrades() {
         let mut tracker = test_tracker();
-        for _ in 0..200 {
-            tracker.record(2, "anchor", true, 1.0, true);
-        }
-        for _ in 0..200 {
-            tracker.record(1, "hk", true, 1.0, true);
+        for _ in 0..300 {
+            tracker.record(0, "anchor", true, 10.0, false);
+            tracker.record(0, "anchor", true, 10.0, false);
+            tracker.record(1, "hk", true, 2.0, true);
         }
         let high = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
         assert!(high >= 4, "expected ramp-up before degradation, got {high}");
-        for _ in 0..600 {
-            tracker.record(1, "hk", true, 12.0, true);
+        for _ in 0..400 {
+            tracker.record(0, "anchor", true, 10.0, false);
+            tracker.record(0, "anchor", true, 10.0, false);
+            tracker.record(1, "hk", true, 100.0, true);
         }
         let trimmed = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
         assert!(
             (1..high).contains(&trimmed),
-            "cap should trim down toward lowered target while staying above zero: high={high}, trimmed={trimmed}"
+            "cap should trim back down as speed degrades while staying above zero: high={high}, trimmed={trimmed}"
+        );
+    }
+
+    #[test]
+    fn circuit_relative_speed_outranks_absolute_speed() {
+        let mut tracker = test_tracker();
+        for _ in 0..400 {
+            tracker.record_keyed(0, "a", true, 100.0, false, "A");
+            tracker.record_keyed(0, "a", true, 100.0, false, "A");
+            tracker.record_keyed(3, "b", true, 1.0, false, "B");
+            tracker.record_keyed(3, "b", true, 1.0, false, "B");
+            tracker.record_keyed(1, "x", true, 50.0, true, "A");
+            tracker.record_keyed(2, "y", true, 2.0, true, "B");
+        }
+        let caps = tracker.cap_snapshot();
+        let x = caps.get(&1).copied().unwrap_or(0);
+        let y = caps.get(&2).copied().unwrap_or(0);
+        assert!(
+            x > y,
+            "circuit-relative speed should win over raw latency: x={x}, y={y}"
         );
     }
 
