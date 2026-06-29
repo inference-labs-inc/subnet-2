@@ -5,9 +5,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
     BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
-    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD, CAPACITY_WINDOW_SIZE,
-    CIRCUIT_TIMEOUT_SECONDS, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY,
-    PERFORMANCE_SCORING_PERCENTILE, VERIFICATION_WINDOW_BLOCKS,
+    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD, CAPACITY_SPEED_TO_CAP,
+    CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RATE_CAP,
+    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_SCORING_PERCENTILE, VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::{debug, warn};
 
@@ -445,9 +445,9 @@ impl PerformanceTracker {
                 total += PERFORMANCE_RESCHEDULE_PENALTY;
             } else if !success {
             } else if rt <= 0.0 {
-                total += 2.0;
+                total += PERFORMANCE_RATE_CAP;
             } else {
-                total += (reference / rt).min(2.0);
+                total += (reference / rt).min(PERFORMANCE_RATE_CAP);
             }
         }
         (total / w.len() as f64).max(0.0)
@@ -462,6 +462,16 @@ impl PerformanceTracker {
         self.cap_events.retain(|e| e.hotkey != hotkey);
     }
 
+    fn speed_target_cap(&self, uid: u16) -> usize {
+        let reference = self.scoring_reference_time();
+        let speed = self
+            .windows
+            .get(&uid)
+            .map(|w| Self::uid_rate(w, reference))
+            .unwrap_or(0.0);
+        ((speed * CAPACITY_SPEED_TO_CAP).round() as usize).max(1)
+    }
+
     fn update_adaptive_cap(&mut self, uid: u16, hotkey: &str) {
         let success_rate = match self.at_cap_results.get(&uid) {
             Some(r) if r.len() >= CAPACITY_MIN_AT_CAP => {
@@ -469,6 +479,8 @@ impl PerformanceTracker {
             }
             _ => return,
         };
+
+        let target = self.speed_target_cap(uid);
 
         let current = self.adaptive_caps.entry(uid).or_insert(1);
         let cap_from = *current;
@@ -487,8 +499,13 @@ impl PerformanceTracker {
                 }
                 return;
             }
-            *current += 1;
-            direction = Some(CapDirection::Ramp);
+            if *current < target {
+                *current += 1;
+                direction = Some(CapDirection::Ramp);
+            } else if *current > target {
+                *current -= 1;
+                direction = Some(CapDirection::Backoff);
+            }
             if let Some(r) = self.at_cap_results.get_mut(&uid) {
                 r.clear();
             }
@@ -769,6 +786,37 @@ mod tests {
         assert_eq!(events[0].direction, CapDirection::Backoff);
         assert_eq!(events[0].cap_from, 2);
         assert_eq!(events[0].cap_to, 1);
+    }
+
+    #[test]
+    fn faster_miner_reaches_higher_cap_than_slower_one_at_capacity() {
+        let mut tracker = test_tracker();
+        for _ in 0..200 {
+            tracker.record(1, "fast", true, 1.0, true);
+        }
+        for _ in 0..200 {
+            tracker.record(2, "slow", true, 10.0, true);
+        }
+        let caps = tracker.cap_snapshot();
+        let fast = caps.get(&1).copied().unwrap_or(0);
+        let slow = caps.get(&2).copied().unwrap_or(0);
+        assert!(
+            fast > slow,
+            "faster miner should hold the higher cap: fast={fast}, slow={slow}"
+        );
+    }
+
+    #[test]
+    fn slow_miner_cap_is_bounded_by_speed_not_occupancy() {
+        let mut tracker = test_tracker();
+        for _ in 0..200 {
+            tracker.record(1, "fast", true, 1.0, true);
+        }
+        for _ in 0..400 {
+            tracker.record(2, "slow", true, 10.0, true);
+        }
+        let slow = tracker.cap_snapshot().get(&2).copied().unwrap_or(0);
+        assert!(slow <= 2, "slow miner cap should stay low, got {slow}");
     }
 
     #[test]
