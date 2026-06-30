@@ -4,10 +4,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
-    BLOCK_TIME_SECS, CAPACITY_BACKOFF_REL_SPEED, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
-    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_REL_SPEED, CAPACITY_RAMP_THRESHOLD,
+    BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
+    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD, CAPACITY_SATURATION_TOLERANCE,
     CAPACITY_UNIT_REFERENCE_PERCENTILE, CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS,
-    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, VERIFICATION_WINDOW_BLOCKS,
+    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE,
+    VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::{debug, warn};
 
@@ -78,6 +79,8 @@ pub struct PerformanceTracker {
     unit_times: HashMap<String, VecDeque<(Instant, f64)>>,
     unit_reference_cache: HashMap<String, (u64, f64)>,
     rel_speed: HashMap<u16, VecDeque<(Instant, f64)>>,
+    unit_own_best: HashMap<u16, HashMap<String, (Instant, f64)>>,
+    miner_slowdown: HashMap<u16, VecDeque<(Instant, f64)>>,
     total_records: u64,
     persistence_path: Option<PathBuf>,
 }
@@ -88,6 +91,8 @@ const UNIT_REFERENCE_REFRESH_RECORDS: u64 = 64;
 const UNIT_TIMES_CAP: usize = 256;
 const UNIT_REFERENCE_MIN_SAMPLES: usize = 8;
 const REL_SPEED_WINDOW: usize = 64;
+
+const SLOWDOWN_WINDOW: usize = 64;
 
 fn window_ttl() -> Duration {
     Duration::from_secs(VERIFICATION_WINDOW_BLOCKS * BLOCK_TIME_SECS)
@@ -101,6 +106,9 @@ fn evict_expired(window: &mut VecDeque<WindowEntry>) {
         } else {
             break;
         }
+    }
+    while window.len() > PERFORMANCE_WINDOW_SIZE {
+        window.pop_front();
     }
 }
 
@@ -130,6 +138,8 @@ impl PerformanceTracker {
             unit_times: HashMap::new(),
             unit_reference_cache: HashMap::new(),
             rel_speed: HashMap::new(),
+            unit_own_best: HashMap::new(),
+            miner_slowdown: HashMap::new(),
             total_records: 0,
             persistence_path: Some(path),
         };
@@ -188,12 +198,40 @@ impl PerformanceTracker {
             let unit = self.unit_times.entry(work_key.to_string()).or_default();
             unit.push_back((now, response_time));
             evict_timed(unit, UNIT_TIMES_CAP);
-            let reference = self.cached_unit_reference(work_key);
-            if reference > 0.0 {
-                let rel = reference / response_time;
-                let samples = self.rel_speed.entry(uid).or_default();
-                samples.push_back((now, rel));
-                evict_timed(samples, REL_SPEED_WINDOW);
+
+            // The miner's own best latency on this unit, held for a full window
+            // so sustained load can't drag the baseline up with it. It only
+            // resets upward when no faster sample has been seen for the whole
+            // TTL (a genuine, lasting slowdown), not when we are congesting it.
+            let best_entry = self
+                .unit_own_best
+                .entry(uid)
+                .or_default()
+                .entry(work_key.to_string())
+                .or_insert((now, response_time));
+            if response_time <= best_entry.1 || now.duration_since(best_entry.0) > window_ttl() {
+                *best_entry = (now, response_time);
+            }
+            let own_best = best_entry.1;
+
+            if own_best > 0.0 {
+                // Saturation: how far this miner's current latency has drifted
+                // above its own best. Drives the cap, self-referential.
+                let slowdown = (response_time / own_best).max(1.0);
+                let trend = self.miner_slowdown.entry(uid).or_default();
+                trend.push_back((now, slowdown));
+                evict_timed(trend, SLOWDOWN_WINDOW);
+
+                // Weight rate: the circuit's fast end (load-independent) over
+                // this miner's own best. Both ends ignore queue latency, so the
+                // ratio reflects intrinsic speed and cannot be inflated by load.
+                let reference = self.cached_unit_reference(work_key);
+                if reference > 0.0 {
+                    let rel = reference / own_best;
+                    let samples = self.rel_speed.entry(uid).or_default();
+                    samples.push_back((now, rel));
+                    evict_timed(samples, REL_SPEED_WINDOW);
+                }
             }
         }
 
@@ -478,6 +516,8 @@ impl PerformanceTracker {
         self.at_cap_results.remove(&uid);
         self.at_cap_last_touched.remove(&uid);
         self.rel_speed.remove(&uid);
+        self.unit_own_best.remove(&uid);
+        self.miner_slowdown.remove(&uid);
         self.pending_evictions.retain(|(u, _)| *u != uid);
         self.cap_events.retain(|e| e.hotkey != hotkey);
     }
@@ -526,6 +566,32 @@ impl PerformanceTracker {
         Some(sum / count as f64)
     }
 
+    /// How much a miner's recent latency has degraded relative to its own
+    /// best on the same work units. 1.0 means it is serving at its unloaded
+    /// speed (spare capacity); a higher value means the load we are giving it
+    /// is congesting it. This is purely self-referential, so it cannot couple
+    /// one miner's capacity to another's and cannot drive a feedback spiral.
+    fn miner_saturation(&self, uid: u16) -> f64 {
+        let samples = match self.miner_slowdown.get(&uid) {
+            Some(s) => s,
+            None => return 1.0,
+        };
+        let ttl = window_ttl();
+        let mut count = 0usize;
+        let sum: f64 = samples
+            .iter()
+            .filter(|(ts, _)| ts.elapsed() <= ttl)
+            .map(|(_, s)| {
+                count += 1;
+                *s
+            })
+            .sum();
+        if count == 0 {
+            return 1.0;
+        }
+        sum / count as f64
+    }
+
     fn update_adaptive_cap(&mut self, uid: u16, hotkey: &str) {
         let success_rate = match self.at_cap_results.get(&uid) {
             Some(r) if r.len() >= CAPACITY_MIN_AT_CAP => {
@@ -534,7 +600,7 @@ impl PerformanceTracker {
             _ => return,
         };
 
-        let rel_speed = self.miner_rel_speed(uid).unwrap_or(CAPACITY_RAMP_REL_SPEED);
+        let saturation = self.miner_saturation(uid);
 
         let current = self.adaptive_caps.entry(uid).or_insert(1);
         let cap_from = *current;
@@ -553,10 +619,10 @@ impl PerformanceTracker {
                 }
                 return;
             }
-            if rel_speed >= CAPACITY_RAMP_REL_SPEED {
+            if saturation <= CAPACITY_SATURATION_TOLERANCE {
                 *current += 1;
                 direction = Some(CapDirection::Ramp);
-            } else if rel_speed < CAPACITY_BACKOFF_REL_SPEED && *current > 1 {
+            } else if *current > 1 {
                 *current -= 1;
                 direction = Some(CapDirection::Backoff);
             }
@@ -701,6 +767,8 @@ mod tests {
             unit_times: HashMap::new(),
             unit_reference_cache: HashMap::new(),
             rel_speed: HashMap::new(),
+            unit_own_best: HashMap::new(),
+            miner_slowdown: HashMap::new(),
             total_records: 0,
             persistence_path: None,
         }
@@ -847,11 +915,12 @@ mod tests {
     }
 
     #[test]
-    fn faster_miner_reaches_higher_cap_than_slower_one_at_capacity() {
+    fn cap_reflects_sustainable_concurrency_not_absolute_speed() {
+        // Two miners, one 25x slower per proof, both with perfectly stable
+        // latency. Capacity tracks each miner's own saturation, not its speed,
+        // so a slow-but-stable miner is utilized just as fully as a fast one.
         let mut tracker = test_tracker();
         for _ in 0..400 {
-            tracker.record(0, "anchor", true, 10.0, false);
-            tracker.record(0, "anchor", true, 10.0, false);
             tracker.record(1, "fast", true, 2.0, true);
             tracker.record(2, "slow", true, 50.0, true);
         }
@@ -859,47 +928,41 @@ mod tests {
         let fast = caps.get(&1).copied().unwrap_or(0);
         let slow = caps.get(&2).copied().unwrap_or(0);
         assert!(
-            fast > slow,
-            "faster miner should hold the higher cap: fast={fast}, slow={slow}"
+            fast > 4 && slow > 4,
+            "both should ramp: fast={fast}, slow={slow}"
+        );
+        assert_eq!(
+            fast, slow,
+            "absolute speed must not affect capacity: fast={fast}, slow={slow}"
         );
     }
 
     #[test]
-    fn slow_miner_trims_to_low_cap_when_below_peer_speed() {
-        let mut tracker = test_tracker();
-        for _ in 0..400 {
-            tracker.record(0, "anchor", true, 10.0, false);
-            tracker.record(0, "anchor", true, 10.0, false);
-            tracker.record(2, "slow", true, 50.0, true);
-        }
-        let slow = tracker.cap_snapshot().get(&2).copied().unwrap_or(0);
-        assert!(slow <= 2, "slow miner cap should stay low, got {slow}");
-    }
-
-    #[test]
-    fn cap_trims_back_down_when_speed_degrades() {
+    fn cap_backs_off_when_own_latency_degrades() {
+        // Ramp on stable latency, then degrade it relative to the miner's own
+        // best. The self-referential saturation signal must trim the cap.
         let mut tracker = test_tracker();
         for _ in 0..300 {
-            tracker.record(0, "anchor", true, 10.0, false);
-            tracker.record(0, "anchor", true, 10.0, false);
             tracker.record(1, "hk", true, 2.0, true);
         }
         let high = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
         assert!(high >= 4, "expected ramp-up before degradation, got {high}");
-        for _ in 0..400 {
-            tracker.record(0, "anchor", true, 10.0, false);
-            tracker.record(0, "anchor", true, 10.0, false);
+        tracker.cap_events.clear();
+        for _ in 0..CAPACITY_MIN_AT_CAP {
             tracker.record(1, "hk", true, 100.0, true);
         }
-        let trimmed = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        let events = tracker.drain_cap_events();
         assert!(
-            (1..high).contains(&trimmed),
-            "cap should trim back down as speed degrades while staying above zero: high={high}, trimmed={trimmed}"
+            events.iter().any(|e| e.direction == CapDirection::Backoff),
+            "degrading own latency should trigger a backoff, got {events:?}"
         );
     }
 
     #[test]
-    fn circuit_relative_speed_outranks_absolute_speed() {
+    fn circuit_relative_speed_drives_weight_rate() {
+        // Capacity no longer depends on relative speed; the weight does.
+        // A miner slow in absolute terms but fast for its circuit must carry a
+        // higher weight rate than one fast in absolute terms but slow for its.
         let mut tracker = test_tracker();
         for _ in 0..400 {
             tracker.record_keyed(0, "a", true, 100.0, false, "A");
@@ -909,12 +972,12 @@ mod tests {
             tracker.record_keyed(1, "x", true, 50.0, true, "A");
             tracker.record_keyed(2, "y", true, 2.0, true, "B");
         }
-        let caps = tracker.cap_snapshot();
-        let x = caps.get(&1).copied().unwrap_or(0);
-        let y = caps.get(&2).copied().unwrap_or(0);
+        let snap = tracker.throughput_snapshot();
+        let x = snap.get(&1).map(|&(r, _, _)| r).unwrap_or(0.0);
+        let y = snap.get(&2).map(|&(r, _, _)| r).unwrap_or(0.0);
         assert!(
             x > y,
-            "circuit-relative speed should win over raw latency: x={x}, y={y}"
+            "circuit-relative speed should drive the weight rate: x={x}, y={y}"
         );
     }
 
