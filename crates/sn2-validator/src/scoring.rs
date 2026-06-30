@@ -137,10 +137,9 @@ impl ScoreManager {
                 if skiplisted.contains(&uid) || coldstart.contains(&uid) {
                     return 0.0;
                 }
-                let (rate, cap, count) = snap.get(&uid).copied().unwrap_or((0.0, 1, 0));
+                let (rel_speed, _cap, count) = snap.get(&uid).copied().unwrap_or((0.0, 1, 0));
                 if count >= PERFORMANCE_MIN_SAMPLES {
-                    let throughput = rate * cap as f64;
-                    throughput.powf(PERFORMANCE_CURVE_POWER)
+                    rel_speed.powf(PERFORMANCE_CURVE_POWER)
                 } else {
                     0.0
                 }

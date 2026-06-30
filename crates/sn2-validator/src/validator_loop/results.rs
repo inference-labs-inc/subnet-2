@@ -15,9 +15,10 @@ impl ValidatorLoop {
     ) {
         let elapsed = response.response_time;
         let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
-        let work_key = match (&response.request_type, response.dsperse_slice_num) {
-            (Some(rt), Some(slice)) => format!("{rt:?}:{slice}"),
-            (Some(rt), None) => format!("{rt:?}"),
+        let circuit_id = response.circuit.as_ref().map(|c| c.id.as_str());
+        let work_key = match (circuit_id, response.dsperse_slice_num) {
+            (Some(id), Some(slice)) => format!("{id}:{slice}"),
+            (Some(id), None) => id.to_string(),
             (None, Some(slice)) => format!("slice:{slice}"),
             (None, None) => String::new(),
         };
