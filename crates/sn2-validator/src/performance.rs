@@ -269,6 +269,7 @@ impl PerformanceTracker {
         }
     }
 
+    #[cfg(test)]
     pub fn record_reschedule(&mut self, uid: u16) {
         self.record_reschedule_keyed(uid, "");
     }
