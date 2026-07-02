@@ -52,6 +52,13 @@ impl ValidatorLoop {
         self.absorb_pending_evictions();
 
         let current_block = self.current_block;
+        // Prefer neurons whose hotkey holds an authenticated connection binding.
+        // Left permissive when the set is empty (startup / transient) so the
+        // loop never stalls; routing itself is the authoritative selector.
+        let authenticated = {
+            let guard = self.miner_client.read().await;
+            guard.authenticated_hotkeys().await
+        };
         let mut queryable_uids: Vec<u16> = self
             .config
             .metagraph
@@ -70,6 +77,9 @@ impl ValidatorLoop {
                     return false;
                 }
                 if n.axon_ip.is_empty() || n.axon_port == 0 {
+                    return false;
+                }
+                if !authenticated.is_empty() && !authenticated.contains(&n.hotkey) {
                     return false;
                 }
                 is_valid_ip(&n.axon_ip)

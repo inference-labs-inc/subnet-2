@@ -125,6 +125,11 @@ impl MinerQueryClient {
         &mut self.lightning
     }
 
+    /// Hotkeys that currently hold an authenticated connection binding.
+    pub async fn authenticated_hotkeys(&self) -> std::collections::HashSet<String> {
+        self.lightning.authenticated_hotkeys().await
+    }
+
     pub async fn query_miner(
         &self,
         ip: &str,
