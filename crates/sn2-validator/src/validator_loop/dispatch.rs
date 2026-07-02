@@ -52,6 +52,7 @@ impl ValidatorLoop {
         metrics::set_active_tasks(active_count);
 
         self.absorb_pending_evictions();
+        self.refill_dslice_queues();
 
         let current_block = self.current_block;
         let mut queryable_uids: Vec<u16> = self
@@ -82,6 +83,10 @@ impl ValidatorLoop {
             .map(|n| n.uid)
             .collect();
         queryable_uids.shuffle(&mut rand::rng());
+        let sample_counts = self.performance_tracker.sample_counts();
+        queryable_uids.sort_by_key(|uid| {
+            sample_counts.get(uid).copied().unwrap_or(0) >= PERFORMANCE_MIN_SAMPLES
+        });
 
         self.refresh_dispatch_cache_if_stale(&queryable_uids).await;
         let adaptive_timeout = self.dispatch_cache.adaptive_timeout;

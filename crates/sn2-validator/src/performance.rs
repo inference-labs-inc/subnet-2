@@ -7,8 +7,8 @@ use sn2_types::{
     BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
     CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD, CAPACITY_SATURATION_TOLERANCE,
     CAPACITY_UNIT_REFERENCE_PERCENTILE, CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS,
-    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE,
-    VERIFICATION_WINDOW_BLOCKS,
+    DELIVERED_WORK_BUCKET_SECS, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY,
+    PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::{debug, warn};
 
@@ -81,6 +81,7 @@ pub struct PerformanceTracker {
     rel_speed: HashMap<u16, VecDeque<(Instant, f64)>>,
     unit_own_best: HashMap<u16, HashMap<String, (Instant, f64)>>,
     miner_slowdown: HashMap<u16, VecDeque<(Instant, f64)>>,
+    delivered_work: HashMap<u16, VecDeque<(Instant, f64)>>,
     total_records: u64,
     persistence_path: Option<PathBuf>,
 }
@@ -140,6 +141,7 @@ impl PerformanceTracker {
             rel_speed: HashMap::new(),
             unit_own_best: HashMap::new(),
             miner_slowdown: HashMap::new(),
+            delivered_work: HashMap::new(),
             total_records: 0,
             persistence_path: Some(path),
         };
@@ -231,6 +233,27 @@ impl PerformanceTracker {
                     let samples = self.rel_speed.entry(uid).or_default();
                     samples.push_back((now, rel));
                     evict_timed(samples, REL_SPEED_WINDOW);
+
+                    let ttl = window_ttl();
+                    let buckets = self.delivered_work.entry(uid).or_default();
+                    match buckets.back_mut() {
+                        Some((start, sum))
+                            if now.duration_since(*start).as_secs()
+                                < DELIVERED_WORK_BUCKET_SECS =>
+                        {
+                            *sum += reference;
+                        }
+                        _ => buckets.push_back((now, reference)),
+                    }
+                    while let Some((start, _)) = buckets.front() {
+                        if now.duration_since(*start)
+                            > ttl + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS)
+                        {
+                            buckets.pop_front();
+                        } else {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -491,7 +514,7 @@ impl PerformanceTracker {
     pub fn snapshot(&self) -> HashMap<u16, (f64, usize)> {
         self.windows
             .iter()
-            .map(|(&uid, w)| (uid, (self.miner_rel_speed(uid).unwrap_or(1.0), w.len())))
+            .map(|(&uid, w)| (uid, (self.miner_rel_speed(uid).unwrap_or(0.0), w.len())))
             .collect()
     }
 
@@ -499,15 +522,33 @@ impl PerformanceTracker {
         self.windows
             .iter()
             .map(|(&uid, w)| {
-                let rate = self.miner_rel_speed(uid).unwrap_or(1.0);
-                let cap = if w.len() < PERFORMANCE_MIN_SAMPLES {
-                    1
-                } else {
-                    self.adaptive_caps.get(&uid).copied().unwrap_or(1)
-                };
-                (uid, (rate, cap, w.len()))
+                let work = self.miner_delivered_work(uid);
+                let cap = self.adaptive_caps.get(&uid).copied().unwrap_or(1);
+                (uid, (work, cap, w.len()))
             })
             .collect()
+    }
+
+    pub fn sample_counts(&self) -> HashMap<u16, usize> {
+        self.windows
+            .iter()
+            .map(|(&uid, w)| (uid, w.len()))
+            .collect()
+    }
+
+    fn miner_delivered_work(&self, uid: u16) -> f64 {
+        let buckets = match self.delivered_work.get(&uid) {
+            Some(b) => b,
+            None => return 0.0,
+        };
+        let ttl = window_ttl();
+        buckets
+            .iter()
+            .filter(|(start, _)| {
+                start.elapsed() <= ttl + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS)
+            })
+            .map(|(_, sum)| *sum)
+            .sum()
     }
 
     pub fn reset_uid(&mut self, uid: u16, hotkey: &str) {
@@ -518,6 +559,7 @@ impl PerformanceTracker {
         self.rel_speed.remove(&uid);
         self.unit_own_best.remove(&uid);
         self.miner_slowdown.remove(&uid);
+        self.delivered_work.remove(&uid);
         self.pending_evictions.retain(|(u, _)| *u != uid);
         self.cap_events.retain(|e| e.hotkey != hotkey);
     }
@@ -769,6 +811,7 @@ mod tests {
             rel_speed: HashMap::new(),
             unit_own_best: HashMap::new(),
             miner_slowdown: HashMap::new(),
+            delivered_work: HashMap::new(),
             total_records: 0,
             persistence_path: None,
         }
@@ -959,10 +1002,7 @@ mod tests {
     }
 
     #[test]
-    fn circuit_relative_speed_drives_weight_rate() {
-        // Capacity no longer depends on relative speed; the weight does.
-        // A miner slow in absolute terms but fast for its circuit must carry a
-        // higher weight rate than one fast in absolute terms but slow for its.
+    fn unit_reference_prices_delivered_work() {
         let mut tracker = test_tracker();
         for _ in 0..400 {
             tracker.record_keyed(0, "a", true, 100.0, false, "A");
@@ -973,12 +1013,55 @@ mod tests {
             tracker.record_keyed(2, "y", true, 2.0, true, "B");
         }
         let snap = tracker.throughput_snapshot();
-        let x = snap.get(&1).map(|&(r, _, _)| r).unwrap_or(0.0);
-        let y = snap.get(&2).map(|&(r, _, _)| r).unwrap_or(0.0);
+        let x = snap.get(&1).map(|&(w, _, _)| w).unwrap_or(0.0);
+        let y = snap.get(&2).map(|&(w, _, _)| w).unwrap_or(0.0);
         assert!(
             x > y,
-            "circuit-relative speed should drive the weight rate: x={x}, y={y}"
+            "equal volume on a heavier unit must earn more: x={x}, y={y}"
         );
+    }
+
+    #[test]
+    fn delivered_work_accrues_only_on_verified_success() {
+        let mut tracker = test_tracker();
+        for _ in 0..200 {
+            tracker.record_keyed(1, "a", true, 2.0, false, "A");
+            tracker.record_keyed(2, "b", true, 2.0, false, "A");
+            tracker.record_keyed(2, "b", false, 2.0, false, "A");
+        }
+        for _ in 0..200 {
+            tracker.record_keyed(1, "a", true, 2.0, false, "A");
+        }
+        let snap = tracker.throughput_snapshot();
+        let w1 = snap.get(&1).map(|&(w, _, _)| w).unwrap_or(0.0);
+        let w2 = snap.get(&2).map(|&(w, _, _)| w).unwrap_or(0.0);
+        assert!(w1 > 0.0 && w2 > 0.0);
+        assert!(
+            w1 > w2 * 1.5,
+            "failures must not earn work credit: w1={w1}, w2={w2}"
+        );
+    }
+
+    #[test]
+    fn unmeasured_miner_ranks_zero_not_neutral() {
+        let mut tracker = test_tracker();
+        for _ in 0..(PERFORMANCE_MIN_SAMPLES + 10) {
+            tracker.record_reschedule(3);
+            tracker.record_keyed(4, "hk", true, 2.0, false, "A");
+        }
+        let rate = tracker
+            .snapshot()
+            .get(&3)
+            .map(|&(r, _)| r)
+            .expect("uid 3 tracked");
+        assert_eq!(rate, 0.0);
+        let (work, _, count) = tracker
+            .throughput_snapshot()
+            .get(&3)
+            .copied()
+            .expect("uid 3 tracked");
+        assert_eq!(work, 0.0);
+        assert!(count >= PERFORMANCE_MIN_SAMPLES);
     }
 
     #[test]

@@ -93,6 +93,7 @@ impl ValidatorLoop {
 
         if self.api_dslice_queue.is_empty()
             && self.stacked_dslice_queue.is_empty()
+            && self.dslice_plan.is_empty()
             && now.duration_since(self.timings.replenish) > Duration::from_secs(5)
         {
             self.replenish_dslice_queues().await;
@@ -139,6 +140,7 @@ impl ValidatorLoop {
                 rwr_queue = self.rwr_queue.len(),
                 api_dslice_queue = self.api_dslice_queue.len(),
                 stacked_dslice_queue = self.stacked_dslice_queue.len(),
+                dslice_plan = self.dslice_plan.len(),
                 active_runs = self.run_manager.active_count(),
                 queryable_neurons = queryable_count,
                 dsperse_circuits = dsperse_count,
@@ -199,6 +201,7 @@ impl ValidatorLoop {
                 .retain(|r| r.circuit.id != *circuit_id);
             self.stacked_dslice_queue
                 .retain(|r| r.circuit.id != *circuit_id);
+            self.dslice_plan.retain(|p| p.circuit.id != *circuit_id);
             let after = self.api_dslice_queue.len() + self.stacked_dslice_queue.len();
             if before != after {
                 info!(circuit = %circuit_id, drained = before - after, "drained queued dslice requests for deactivated circuit");
@@ -447,15 +450,15 @@ impl ValidatorLoop {
         if !tracked.is_empty() {
             let mut top: Vec<_> = tracked
                 .iter()
-                .map(|(&uid, &(rate, cap, _))| (uid, rate, cap, rate * cap as f64))
+                .map(|(&uid, &(work, cap, _))| (uid, work, cap))
                 .collect();
-            top.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+            top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             top.truncate(5);
             let adaptive_to = self.performance_tracker.adaptive_timeout();
             info!(
                 tracked = tracked.len(),
                 adaptive_timeout = format!("{adaptive_to:.1}s"),
-                top5 = ?top.iter().map(|(uid, r, c, t)| format!("uid={uid} rate={r:.2} cap={c} tput={t:.2}")).collect::<Vec<_>>(),
+                top5 = ?top.iter().map(|(uid, w, c)| format!("uid={uid} work={w:.1} cap={c}")).collect::<Vec<_>>(),
                 "throughput scoring"
             );
         }
