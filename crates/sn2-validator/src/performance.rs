@@ -7,8 +7,8 @@ use sn2_types::{
     BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
     CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD, CAPACITY_SATURATION_TOLERANCE,
     CAPACITY_UNIT_REFERENCE_PERCENTILE, CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS,
-    DELIVERED_WORK_BUCKET_SECS, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY,
-    PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
+    DELIVERED_WORK_BUCKET_SECS, FAILURE_DEBIT_MULTIPLIER, PERFORMANCE_MIN_SAMPLES,
+    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::{debug, warn};
 
@@ -112,6 +112,23 @@ fn evict_expired(window: &mut VecDeque<WindowEntry>) {
     }
     while window.len() > PERFORMANCE_WINDOW_SIZE {
         window.pop_front();
+    }
+}
+
+fn push_bucketed(buckets: &mut VecDeque<(Instant, f64)>, now: Instant, amount: f64) {
+    match buckets.back_mut() {
+        Some((start, sum)) if now.duration_since(*start).as_secs() < DELIVERED_WORK_BUCKET_SECS => {
+            *sum += amount;
+        }
+        _ => buckets.push_back((now, amount)),
+    }
+    let ttl = window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS);
+    while let Some((start, _)) = buckets.front() {
+        if now.duration_since(*start) > ttl {
+            buckets.pop_front();
+        } else {
+            break;
+        }
     }
 }
 
@@ -236,26 +253,7 @@ impl PerformanceTracker {
                     samples.push_back((now, rel));
                     evict_timed(samples, REL_SPEED_WINDOW);
 
-                    let ttl = window_ttl();
-                    let buckets = self.delivered_work.entry(uid).or_default();
-                    match buckets.back_mut() {
-                        Some((start, sum))
-                            if now.duration_since(*start).as_secs()
-                                < DELIVERED_WORK_BUCKET_SECS =>
-                        {
-                            *sum += reference;
-                        }
-                        _ => buckets.push_back((now, reference)),
-                    }
-                    while let Some((start, _)) = buckets.front() {
-                        if now.duration_since(*start)
-                            > ttl + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS)
-                        {
-                            buckets.pop_front();
-                        } else {
-                            break;
-                        }
-                    }
+                    push_bucketed(self.delivered_work.entry(uid).or_default(), now, reference);
                 }
             }
         }
@@ -272,9 +270,25 @@ impl PerformanceTracker {
     }
 
     pub fn record_reschedule(&mut self, uid: u16) {
+        self.record_reschedule_keyed(uid, "");
+    }
+
+    pub fn record_reschedule_keyed(&mut self, uid: u16, work_key: &str) {
+        let now = Instant::now();
         let window = self.windows.entry(uid).or_default();
-        window.push_back((Instant::now(), false, PERFORMANCE_RESCHEDULE_PENALTY));
+        window.push_back((now, false, PERFORMANCE_RESCHEDULE_PENALTY));
         evict_expired(window);
+
+        if !work_key.is_empty() {
+            let reference = self.cached_unit_reference(work_key);
+            if reference > 0.0 {
+                push_bucketed(
+                    self.delivered_work.entry(uid).or_default(),
+                    now,
+                    -(reference * FAILURE_DEBIT_MULTIPLIER),
+                );
+            }
+        }
     }
 
     pub fn adaptive_timeout(&self) -> f64 {
@@ -550,7 +564,8 @@ impl PerformanceTracker {
                 start.elapsed() <= ttl + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS)
             })
             .map(|(_, sum)| *sum)
-            .sum()
+            .sum::<f64>()
+            .max(0.0)
     }
 
     pub fn reset_uid(&mut self, uid: u16, hotkey: &str) {
@@ -1042,6 +1057,54 @@ mod tests {
             w1 > w2 * 1.5,
             "failures must not earn work credit: w1={w1}, w2={w2}"
         );
+    }
+
+    #[test]
+    fn failures_debit_referenced_work_only() {
+        let mut tracker = test_tracker();
+        for _ in 0..100 {
+            tracker.record_keyed(1, "a", true, 2.0, false, "A");
+            tracker.record_keyed(2, "b", true, 2.0, false, "A");
+        }
+        let before = tracker
+            .throughput_snapshot()
+            .get(&2)
+            .map(|&(w, _, _)| w)
+            .unwrap_or(0.0);
+        assert!(before > 0.0);
+
+        for _ in 0..10 {
+            tracker.record_reschedule_keyed(2, "B");
+        }
+        let after_unreferenced = tracker
+            .throughput_snapshot()
+            .get(&2)
+            .map(|&(w, _, _)| w)
+            .unwrap_or(0.0);
+        assert_eq!(before, after_unreferenced);
+
+        for _ in 0..10 {
+            tracker.record_reschedule_keyed(2, "A");
+        }
+        let after_referenced = tracker
+            .throughput_snapshot()
+            .get(&2)
+            .map(|&(w, _, _)| w)
+            .unwrap_or(0.0);
+        assert!(
+            after_referenced < after_unreferenced,
+            "referenced failures must debit: before={after_unreferenced}, after={after_referenced}"
+        );
+
+        for _ in 0..200 {
+            tracker.record_reschedule_keyed(2, "A");
+        }
+        let floored = tracker
+            .throughput_snapshot()
+            .get(&2)
+            .map(|&(w, _, _)| w)
+            .unwrap_or(f64::MIN);
+        assert_eq!(floored, 0.0);
     }
 
     #[test]

@@ -7,6 +7,15 @@ use crate::metrics_server as metrics;
 use crate::relay::{FRAME_PROOF_RESULT, FRAME_SUBMIT_RESULT};
 
 impl ValidatorLoop {
+    fn build_work_key(circuit_id: Option<&str>, slice: Option<&str>) -> String {
+        match (circuit_id, slice) {
+            (Some(id), Some(slice)) => format!("{id}:{slice}"),
+            (Some(id), None) => id.to_string(),
+            (None, Some(slice)) => format!("slice:{slice}"),
+            (None, None) => String::new(),
+        }
+    }
+
     pub(super) fn record_verified_score(
         &mut self,
         uid: u16,
@@ -16,12 +25,8 @@ impl ValidatorLoop {
         let elapsed = response.response_time;
         let hotkey = self.uid_hotkeys.get(&uid).cloned().unwrap_or_default();
         let circuit_id = response.circuit.as_ref().map(|c| c.id.as_str());
-        let work_key = match (circuit_id, response.dsperse_slice_num) {
-            (Some(id), Some(slice)) => format!("{id}:{slice}"),
-            (Some(id), None) => id.to_string(),
-            (None, Some(slice)) => format!("slice:{slice}"),
-            (None, None) => String::new(),
-        };
+        let slice = response.dsperse_slice_num.map(|n| n.to_string());
+        let work_key = Self::build_work_key(circuit_id, slice.as_deref());
         self.performance_tracker.record_keyed(
             uid,
             &hotkey,
@@ -350,7 +355,7 @@ impl ValidatorLoop {
         external_request_hash: Option<u32>,
         reason: &str,
     ) {
-        warn!(uid = uid, rtype = %request_type, retry = retry_count, error = reason, "miner query failed");
+        warn!(uid = uid, rtype = %request_type, retry = retry_count, run_uid = ?run_uid, slice = ?slice_num, tile = ?tile_idx, error = reason, "miner query failed");
 
         if !hotkey.is_empty()
             && (reason.contains("already in progress") || reason.contains("in backoff"))
@@ -378,7 +383,17 @@ impl ValidatorLoop {
             }
         }
 
-        self.performance_tracker.record_reschedule(uid);
+        let failed_circuit_id = match &retry_payload {
+            RetryPayload::DSlice(d) => Some(d.circuit.id.as_str()),
+            RetryPayload::Rwr(r) => Some(r.circuit_id.as_str()),
+            RetryPayload::None => None,
+        };
+        let slice_part = slice_num
+            .as_deref()
+            .map(|s| s.strip_prefix("slice_").unwrap_or(s));
+        let work_key = Self::build_work_key(failed_circuit_id, slice_part);
+        self.performance_tracker
+            .record_reschedule_keyed(uid, &work_key);
 
         let elapsed = 0.0;
         self.score_manager.update_score(
