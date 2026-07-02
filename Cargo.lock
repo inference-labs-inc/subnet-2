@@ -194,9 +194,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "anymap2"
@@ -885,9 +885,9 @@ dependencies = [
 
 [[package]]
 name = "btlightning"
-version = "0.2.11"
+version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25c718f61a3fe75d6abe79c02312b4ff196b819801a5b71d6427c9a9c92302be"
+checksum = "e0e4c3f2addbb7445a597e4e27d6f2797fc08bd31323566bcdc0b77b1aa0455b"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

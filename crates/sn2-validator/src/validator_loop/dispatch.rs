@@ -17,6 +17,7 @@ pub(crate) struct DispatchCache {
     pub capacities: HashMap<u16, usize>,
     pub adaptive_timeout: f64,
     pub api_eligible: HashSet<u16>,
+    pub authenticated: HashSet<String>,
     pub refreshed_at: Option<Instant>,
 }
 
@@ -26,6 +27,7 @@ impl DispatchCache {
             capacities: HashMap::new(),
             adaptive_timeout: CIRCUIT_TIMEOUT_SECONDS as f64,
             api_eligible: HashSet::new(),
+            authenticated: HashSet::new(),
             refreshed_at: None,
         }
     }
@@ -63,6 +65,9 @@ impl ValidatorLoop {
                         return false;
                     }
                 }
+                if !self.hotkey_reachable(&n.hotkey) {
+                    return false;
+                }
                 if let Some(targets) = &self.config.target_uids {
                     return targets.contains(&n.uid);
                 }
@@ -78,7 +83,7 @@ impl ValidatorLoop {
             .collect();
         queryable_uids.shuffle(&mut rand::rng());
 
-        self.refresh_dispatch_cache_if_stale(&queryable_uids);
+        self.refresh_dispatch_cache_if_stale(&queryable_uids).await;
         let adaptive_timeout = self.dispatch_cache.adaptive_timeout;
 
         for uid in queryable_uids {
@@ -164,7 +169,16 @@ impl ValidatorLoop {
         self.dispatch_cache.refreshed_at = None;
     }
 
-    fn refresh_dispatch_cache_if_stale(&mut self, queryable_uids: &[u16]) {
+    /// Whether a hotkey holds an authenticated connection binding, so dispatch
+    /// can actually route to it. Permissive while the cached set is empty
+    /// (startup / transient) so selection never stalls; routing itself is the
+    /// authoritative selector.
+    pub(super) fn hotkey_reachable(&self, hotkey: &str) -> bool {
+        let authenticated = &self.dispatch_cache.authenticated;
+        authenticated.is_empty() || authenticated.contains(hotkey)
+    }
+
+    async fn refresh_dispatch_cache_if_stale(&mut self, queryable_uids: &[u16]) {
         let fresh = self
             .dispatch_cache
             .refreshed_at
@@ -176,6 +190,10 @@ impl ValidatorLoop {
         self.dispatch_cache.capacities = self.performance_tracker.miner_capacities();
         self.dispatch_cache.adaptive_timeout = self.performance_tracker.adaptive_timeout();
         self.dispatch_cache.api_eligible = self.compute_api_eligible_from_uids(queryable_uids);
+        self.dispatch_cache.authenticated = {
+            let guard = self.miner_client.read().await;
+            guard.authenticated_hotkeys().await
+        };
         self.dispatch_cache.refreshed_at = Some(Instant::now());
     }
 
@@ -470,6 +488,9 @@ impl ValidatorLoop {
             .neurons
             .iter()
             .filter(|n| {
+                if !self.hotkey_reachable(&n.hotkey) {
+                    return false;
+                }
                 if let Some(targets) = &self.config.target_uids {
                     return targets.contains(&n.uid);
                 }
