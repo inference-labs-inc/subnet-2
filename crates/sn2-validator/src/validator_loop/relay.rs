@@ -266,6 +266,7 @@ impl ValidatorLoop {
         self.stacked_dslice_queue
             .retain(|req| req.run_uid != run_uid);
         self.api_dslice_queue.retain(|req| req.run_uid != run_uid);
+        self.dslice_plan.retain(|plan| plan.run_uid != run_uid);
         self.dslice_input_scales
             .retain(|(uid, _), _| uid != run_uid);
         self.relay_remove_pending(run_uid).await;

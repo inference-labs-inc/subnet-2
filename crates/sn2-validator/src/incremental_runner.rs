@@ -209,18 +209,24 @@ impl IncrementalRunManager {
         self.evicted.contains(run_uid)
     }
 
-    pub fn all_circuit_work(&self, run_uid: &str) -> anyhow::Result<Vec<SliceWork>> {
+    pub fn circuit_work_ids(&self, run_uid: &str) -> anyhow::Result<Vec<String>> {
+        Ok(self.combined_for(run_uid)?.circuit_work_ids())
+    }
+
+    pub fn circuit_work_for(&self, run_uid: &str, slice_id: &str) -> anyhow::Result<SliceWork> {
+        self.combined_for(run_uid)?
+            .circuit_work_for(slice_id)
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    fn combined_for(&self, run_uid: &str) -> anyhow::Result<&CombinedRun> {
         let run = self
             .runs
             .get(run_uid)
             .ok_or_else(|| anyhow::anyhow!("unknown run {run_uid}"))?;
-        let combined = run
-            .combined
+        run.combined
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("run {run_uid} has no CombinedRun"))?;
-        combined
-            .all_circuit_work()
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .ok_or_else(|| anyhow::anyhow!("run {run_uid} has no CombinedRun"))
     }
 
     pub fn init_tile_counter(

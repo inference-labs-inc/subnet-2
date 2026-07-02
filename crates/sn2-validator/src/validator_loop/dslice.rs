@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -43,27 +43,30 @@ impl TiledPayload {
     }
 }
 
-struct StagedWork {
-    requests: VecDeque<DSliceRequest>,
-    events: Vec<(String, String, usize)>,
+pub(crate) enum PlannedPayload {
+    Single,
+    Tiled {
+        tiling: dsperse::schema::tiling::TilingInfo,
+        indices: Vec<u32>,
+    },
+    DimSplit {
+        ds: dsperse::schema::tiling::DimSplitInfo,
+        indices: Vec<u32>,
+    },
 }
 
-impl StagedWork {
-    fn new() -> Self {
-        Self {
-            requests: VecDeque::new(),
-            events: Vec::new(),
-        }
-    }
-
-    fn stage_request(&mut self, request: DSliceRequest) {
-        self.requests.push_back(request);
-    }
-
-    fn total_queued(&self) -> usize {
-        self.requests.len()
-    }
+pub(crate) struct PlannedSliceWork {
+    pub run_uid: String,
+    pub circuit: Arc<Circuit>,
+    pub slice_id: String,
+    pub run_source: RunSource,
+    pub circuit_path: Option<String>,
+    pub onnx_path: Option<String>,
+    pub component_sha: Option<String>,
+    pub payload: PlannedPayload,
 }
+
+const PLAN_MATERIALIZE_BATCH: usize = 16;
 
 impl ValidatorLoop {
     pub(super) fn decode_submission_tensor(
@@ -201,7 +204,7 @@ impl ValidatorLoop {
         self.stacked_dslice_queue.clear();
         self.dsperse_benchmark_backoff_until = Instant::now() + Duration::from_secs(120);
 
-        self.enqueue_all_dslices(&run_uid, &circuit, RunSource::Api, submission.prove_pct)
+        self.plan_all_dslices(&run_uid, &circuit, RunSource::Api, submission.prove_pct)
             .await;
     }
 
@@ -421,24 +424,7 @@ impl ValidatorLoop {
         ExpectedInputs::Count(total)
     }
 
-    fn flush_staged(&mut self, staged: StagedWork) {
-        for request in staged.requests {
-            match request.run_source {
-                RunSource::Api => self.api_dslice_queue.push_back(request),
-                RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
-            }
-        }
-
-        for (uid, snum, count) in staged.events {
-            self.emit_event(move |ev| async move {
-                ev.emit_work_items_created(&uid, &snum, count).await;
-            });
-        }
-
-        self.dispatch_notify.notify_one();
-    }
-
-    pub(super) async fn enqueue_all_dslices(
+    pub(super) async fn plan_all_dslices(
         &mut self,
         run_uid: &str,
         circuit: &Arc<Circuit>,
@@ -450,8 +436,8 @@ impl ValidatorLoop {
         } else {
             prove_pct
         };
-        let work_items = match self.run_manager.all_circuit_work(run_uid) {
-            Ok(items) => items,
+        let slice_ids = match self.run_manager.circuit_work_ids(run_uid) {
+            Ok(ids) => ids,
             Err(e) => {
                 warn!(run_uid = %run_uid, error = %e, "failed to enumerate circuit work");
                 self.teardown_run(run_uid).await;
@@ -459,7 +445,7 @@ impl ValidatorLoop {
             }
         };
 
-        let work_items: Vec<_> = {
+        let slice_ids: Vec<String> = {
             let disabled: Option<HashSet<String>> =
                 self.disabled_slices.get(&circuit.id).map(|m| {
                     m.iter()
@@ -472,12 +458,12 @@ impl ValidatorLoop {
                 });
             match disabled {
                 Some(disabled) if !disabled.is_empty() => {
-                    let (kept, skipped): (Vec<_>, Vec<_>) = work_items
+                    let (kept, skipped): (Vec<_>, Vec<_>) = slice_ids
                         .into_iter()
-                        .partition(|w| !disabled.contains(&w.slice_id));
-                    for work in &skipped {
-                        self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
-                        self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
+                        .partition(|slice_id| !disabled.contains(slice_id));
+                    for slice_id in &skipped {
+                        self.run_manager.mark_slice_failed(run_uid, slice_id);
+                        self.run_manager.note_slice_skipped(run_uid, slice_id);
                     }
                     if !skipped.is_empty() {
                         info!(
@@ -489,176 +475,338 @@ impl ValidatorLoop {
                     }
                     kept
                 }
-                _ => work_items,
+                _ => slice_ids,
             }
         };
 
-        // Bundle preflight reads each slice's manifest.msgpack and (for WAI
-        // bundles) the slice's onnx graph; those are synchronous disk reads
-        // that must not run on the async reactor. Move the entire preflight
-        // loop into a blocking task and rejoin afterwards to drive
-        // run_manager updates from the async context.
-        let preflight_run_uid = run_uid.to_string();
-        let preflight = tokio::task::spawn_blocking(move || {
-            Self::preflight_work_items(&preflight_run_uid, work_items)
-        })
-        .await;
-        let PreflightOutcome {
-            kept: work_items,
-            failed: preflight_failed,
-            unsatisfiable,
-        } = match preflight {
-            Ok(outcome) => outcome,
-            Err(e) => {
-                warn!(run_uid = %run_uid, error = %e, "preflight task panicked");
-                self.teardown_run(run_uid).await;
-                return;
+        let mut planned_slices = 0usize;
+        let mut planned_units = 0usize;
+        let mut total_unsatisfiable = 0usize;
+
+        for chunk in slice_ids.chunks(PLAN_MATERIALIZE_BATCH) {
+            let mut works = Vec::with_capacity(chunk.len());
+            for slice_id in chunk {
+                match self.run_manager.circuit_work_for(run_uid, slice_id) {
+                    Ok(w) => works.push(w),
+                    Err(e) => {
+                        warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "failed to derive circuit work");
+                        self.run_manager.mark_slice_failed(run_uid, slice_id);
+                        self.run_manager.note_slice_skipped(run_uid, slice_id);
+                    }
+                }
             }
-        };
-        for slice_id in &preflight_failed {
-            self.run_manager.mark_slice_failed(run_uid, slice_id);
-            self.run_manager.note_slice_skipped(run_uid, slice_id);
+
+            // Bundle preflight reads each slice's manifest.msgpack and (for
+            // WAI bundles) the slice's onnx graph; those are synchronous disk
+            // reads that must not run on the async reactor. Move the
+            // preflight loop into a blocking task and rejoin afterwards to
+            // drive run_manager updates from the async context.
+            let preflight_run_uid = run_uid.to_string();
+            let preflight = tokio::task::spawn_blocking(move || {
+                Self::preflight_work_items(&preflight_run_uid, works)
+            })
+            .await;
+            let PreflightOutcome {
+                kept,
+                failed: preflight_failed,
+                unsatisfiable,
+            } = match preflight {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    warn!(run_uid = %run_uid, error = %e, "preflight task panicked");
+                    self.teardown_run(run_uid).await;
+                    return;
+                }
+            };
+            for slice_id in &preflight_failed {
+                self.run_manager.mark_slice_failed(run_uid, slice_id);
+                self.run_manager.note_slice_skipped(run_uid, slice_id);
+            }
+            total_unsatisfiable += unsatisfiable;
+
+            for work in kept {
+                let mut input_tensor = work.input;
+                let named_inputs = work.named_inputs;
+
+                if input_tensor.iter().any(|v| !v.is_finite()) {
+                    warn!(
+                        run_uid = %run_uid,
+                        slice = %work.slice_id,
+                        "circuit slice input contains non-finite values, aborting run"
+                    );
+                    self.teardown_run(run_uid).await;
+                    return;
+                }
+
+                self.normalize_tensor(run_uid, &work.slice_id, &mut input_tensor);
+
+                let comp_sha = self
+                    .circuit_store
+                    .component_sha(&circuit.id, &work.slice_id);
+
+                let planned = if let Some(ds) = work
+                    .dim_split
+                    .as_ref()
+                    .filter(|_| Self::dim_split_dispatch_enabled())
+                    .filter(|ds| Self::is_weight_bound_dim_split(ds))
+                {
+                    match Self::plan_dim_split_work(
+                        &mut self.run_manager,
+                        run_uid,
+                        &work.slice_id,
+                        work.onnx_path.as_deref(),
+                        ds,
+                        &input_tensor,
+                        run_source,
+                        clamped_prove_pct,
+                    ) {
+                        Some(payload) => payload,
+                        None => {
+                            self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
+                            self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
+                            continue;
+                        }
+                    }
+                } else if work.dim_split.is_some() {
+                    self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
+                    self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
+                    continue;
+                } else if let Some(ref tiling) = work.tiling {
+                    match Self::plan_tiled_work(
+                        &mut self.run_manager,
+                        run_uid,
+                        &work.slice_id,
+                        tiling,
+                        run_source,
+                        clamped_prove_pct,
+                        &input_tensor,
+                        &named_inputs,
+                    ) {
+                        Some(payload) => payload,
+                        None => {
+                            self.teardown_run(run_uid).await;
+                            return;
+                        }
+                    }
+                } else {
+                    (PlannedPayload::Single, 1)
+                };
+
+                let (payload, unit_count) = planned;
+                self.dslice_plan.push_back(PlannedSliceWork {
+                    run_uid: run_uid.to_string(),
+                    circuit: Arc::clone(circuit),
+                    slice_id: work.slice_id.clone(),
+                    run_source,
+                    circuit_path: work.circuit_path.clone(),
+                    onnx_path: work.onnx_path.clone(),
+                    component_sha: comp_sha.map(String::from),
+                    payload,
+                });
+                planned_slices += 1;
+                planned_units += unit_count;
+
+                let ev_run = run_uid.to_string();
+                let ev_slice = work.slice_id.clone();
+                self.emit_event(move |ev| async move {
+                    ev.emit_work_items_created(&ev_run, &ev_slice, unit_count)
+                        .await;
+                });
+            }
         }
-        if unsatisfiable > 0 {
+
+        if total_unsatisfiable > 0 {
             info!(
                 run_uid = %run_uid,
                 circuit_id = %circuit.id,
-                unsatisfiable,
+                unsatisfiable = total_unsatisfiable,
                 "preflight filtered slices due to mismatched activation sizes or invalid metadata"
             );
         }
 
-        if work_items.is_empty() {
+        if planned_slices == 0 {
             info!(run_uid = %run_uid, "no circuit slices to dispatch, completing run");
             self.finalize_combined_run(run_uid).await;
             return;
         }
 
-        let mut staged = StagedWork::new();
+        info!(
+            run_uid = %run_uid,
+            planned_slices,
+            planned_units,
+            "planned all circuit work items for combined run"
+        );
 
-        for work in work_items {
-            let mut input_tensor = work.input;
-            let named_inputs = work.named_inputs;
+        self.refill_dslice_queues();
+        self.dispatch_notify.notify_one();
+    }
 
-            if input_tensor.iter().any(|v| !v.is_finite()) {
-                warn!(
-                    run_uid = %run_uid,
-                    slice = %work.slice_id,
-                    "circuit slice input contains non-finite values, aborting run"
-                );
-                self.teardown_run(run_uid).await;
-                return;
-            }
-
-            self.normalize_tensor(run_uid, &work.slice_id, &mut input_tensor);
-
-            let comp_sha = self
-                .circuit_store
-                .component_sha(&circuit.id, &work.slice_id);
-
-            let queued = if let Some(ds) = work
-                .dim_split
-                .as_ref()
-                .filter(|_| Self::dim_split_dispatch_enabled())
-                .filter(|ds| Self::is_weight_bound_dim_split(ds))
-            {
-                match Self::stage_dim_split_work(
-                    &mut staged,
-                    &mut self.run_manager,
-                    run_uid,
-                    circuit,
-                    &work.slice_id,
-                    work.circuit_path.as_deref(),
-                    work.onnx_path.as_deref(),
-                    comp_sha,
-                    ds,
-                    &input_tensor,
-                    run_source,
-                    clamped_prove_pct,
-                ) {
-                    Some(n) => n,
-                    None => {
-                        self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
-                        self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
-                        continue;
-                    }
-                }
-            } else if work.dim_split.is_some() {
-                self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
-                self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
+    pub(super) fn refill_dslice_queues(&mut self) {
+        if self.dslice_plan.is_empty() {
+            return;
+        }
+        let queued = self.api_dslice_queue.len() + self.stacked_dslice_queue.len();
+        let caps_sum: usize = self
+            .performance_tracker
+            .miner_capacities()
+            .values()
+            .copied()
+            .sum();
+        let low = DSLICE_QUEUE_LOW_WATERMARK.max(caps_sum.saturating_mul(2));
+        if queued >= low {
+            return;
+        }
+        let high = low.saturating_mul(2);
+        let mut total = queued;
+        while total < high {
+            let Some(plan) = self.dslice_plan.pop_front() else {
+                break;
+            };
+            if !self.run_manager.has_run(&plan.run_uid) {
                 continue;
-            } else if let Some(ref tiling) = work.tiling {
-                match Self::stage_tiled_work(
-                    &mut staged,
-                    &mut self.run_manager,
-                    run_uid,
-                    circuit,
-                    &work.slice_id,
-                    work.circuit_path.as_deref(),
-                    comp_sha,
-                    tiling,
-                    input_tensor,
-                    &named_inputs,
-                    run_source,
-                    clamped_prove_pct,
-                ) {
-                    Some(n) => n,
-                    None => {
-                        self.teardown_run(run_uid).await;
-                        return;
+            }
+            match self.materialize_planned(&plan) {
+                Some(requests) if !requests.is_empty() => {
+                    total += requests.len();
+                    for request in requests {
+                        match plan.run_source {
+                            RunSource::Api => self.api_dslice_queue.push_back(request),
+                            RunSource::Benchmark => self.stacked_dslice_queue.push_back(request),
+                        }
                     }
                 }
-            } else {
+                _ => {
+                    warn!(
+                        run_uid = %plan.run_uid,
+                        slice = %plan.slice_id,
+                        "planned slice failed to materialize, marking failed"
+                    );
+                    self.run_manager
+                        .mark_slice_failed(&plan.run_uid, &plan.slice_id);
+                    self.run_manager
+                        .note_slice_skipped(&plan.run_uid, &plan.slice_id);
+                }
+            }
+        }
+    }
+
+    fn materialize_planned(&mut self, plan: &PlannedSliceWork) -> Option<Vec<DSliceRequest>> {
+        let work = match self
+            .run_manager
+            .circuit_work_for(&plan.run_uid, &plan.slice_id)
+        {
+            Ok(w) => w,
+            Err(e) => {
+                warn!(
+                    run_uid = %plan.run_uid,
+                    slice = %plan.slice_id,
+                    error = %e,
+                    "failed to re-derive circuit work at refill"
+                );
+                return None;
+            }
+        };
+        let mut input_tensor = work.input;
+        let named_inputs = work.named_inputs;
+
+        if let Some(&scale) = self
+            .dslice_input_scales
+            .get(&(plan.run_uid.clone(), plan.slice_id.clone()))
+        {
+            if scale > 1.0 {
+                input_tensor.mapv_inplace(|v| v / scale);
+            }
+        }
+
+        match &plan.payload {
+            PlannedPayload::Single => {
                 let inputs_bytes = crate::tensor::input_data_payload(&input_tensor);
-                staged.stage_request(DSliceRequest {
-                    circuit: Arc::clone(circuit),
+                Some(vec![DSliceRequest {
+                    circuit: Arc::clone(&plan.circuit),
                     inputs: inputs_bytes,
                     request_type: RequestType::DSlice,
-                    proof_system: circuit.proof_system,
-                    slice_num: work.slice_id.clone(),
-                    run_uid: run_uid.to_string(),
+                    proof_system: plan.circuit.proof_system,
+                    slice_num: plan.slice_id.clone(),
+                    run_uid: plan.run_uid.clone(),
                     outputs: None,
                     is_tile: false,
                     tile_idx: None,
                     task_id: None,
-                    run_source,
+                    run_source: plan.run_source,
                     retry_count: 0,
-                    circuit_path: work.circuit_path.clone(),
-                    component_sha: comp_sha.map(String::from),
-                });
-                1
-            };
-
-            staged
-                .events
-                .push((run_uid.to_string(), work.slice_id.clone(), queued));
+                    circuit_path: plan.circuit_path.clone(),
+                    component_sha: plan.component_sha.clone(),
+                }])
+            }
+            PlannedPayload::Tiled { tiling, indices } => {
+                let wanted: std::collections::HashSet<usize> =
+                    indices.iter().map(|&i| i as usize).collect();
+                let prepared = Self::tiled_payloads(
+                    &plan.run_uid,
+                    &plan.slice_id,
+                    tiling,
+                    &input_tensor,
+                    &named_inputs,
+                    &wanted,
+                )?;
+                Some(
+                    prepared
+                        .into_iter()
+                        .map(|(idx, tile_bytes)| {
+                            Self::build_tile_request(
+                                &plan.circuit,
+                                &plan.slice_id,
+                                &plan.run_uid,
+                                tile_bytes,
+                                idx as u32,
+                                plan.run_source,
+                                plan.circuit_path.as_deref(),
+                                plan.component_sha.as_deref(),
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            PlannedPayload::DimSplit { ds, indices } => {
+                let wanted: std::collections::HashSet<usize> =
+                    indices.iter().map(|&i| i as usize).collect();
+                let prepared = Self::dim_split_payloads(
+                    &plan.run_uid,
+                    &plan.slice_id,
+                    plan.onnx_path.as_deref(),
+                    ds,
+                    &input_tensor,
+                    &wanted,
+                )?;
+                Some(
+                    prepared
+                        .into_iter()
+                        .map(|(idx, unit_bytes)| {
+                            Self::build_tile_request(
+                                &plan.circuit,
+                                &plan.slice_id,
+                                &plan.run_uid,
+                                unit_bytes,
+                                idx as u32,
+                                plan.run_source,
+                                plan.circuit_path.as_deref(),
+                                plan.component_sha.as_deref(),
+                            )
+                        })
+                        .collect(),
+                )
+            }
         }
-
-        let total_queued = staged.total_queued();
-        self.flush_staged(staged);
-
-        info!(
-            run_uid = %run_uid,
-            total_queued,
-            "queued all circuit work items for combined run"
-        );
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn stage_tiled_work(
-        staged: &mut StagedWork,
-        run_manager: &mut crate::incremental_runner::IncrementalRunManager,
+    fn tiled_payloads(
         run_uid: &str,
-        circuit: &Arc<Circuit>,
         slice_id: &str,
-        circuit_path: Option<&str>,
-        component_sha: Option<&str>,
         tiling: &dsperse::schema::tiling::TilingInfo,
-        input_tensor: ndarray::ArrayD<f64>,
+        input_tensor: &ndarray::ArrayD<f64>,
         named_inputs: &[(String, ndarray::ArrayD<f64>)],
-        run_source: RunSource,
-        prove_pct: f64,
-    ) -> Option<usize> {
+        wanted: &std::collections::HashSet<usize>,
+    ) -> Option<Vec<(usize, bytes::Bytes)>> {
         let multi_input = named_inputs.len() > 1;
         let tiles_payload = if multi_input {
             match dsperse::pipeline::split_for_multi_input_dispatch(named_inputs, tiling) {
@@ -674,7 +822,7 @@ impl ValidatorLoop {
                 }
             }
         } else {
-            match dsperse::pipeline::split_for_tiling(&input_tensor, tiling) {
+            match dsperse::pipeline::split_for_tiling(input_tensor, tiling) {
                 Ok(t) => TiledPayload::SingleInput(t),
                 Err(e) => {
                     warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "split_for_tiling failed");
@@ -695,22 +843,11 @@ impl ValidatorLoop {
             return None;
         }
 
-        let sampled_indices =
-            Self::sample_tile_indices(num_tiles, prove_pct, run_source, run_uid, slice_id);
-        if sampled_indices.is_empty() {
-            warn!(
-                run_uid = %run_uid,
-                slice = %slice_id,
-                "prove_pct sampled zero tiles, aborting slice stage"
-            );
-            return None;
-        }
-
-        let mut prepared: Vec<(usize, bytes::Bytes)> = Vec::with_capacity(sampled_indices.len());
+        let mut prepared: Vec<(usize, bytes::Bytes)> = Vec::with_capacity(wanted.len());
         match tiles_payload {
             TiledPayload::SingleInput(tiles) => {
                 for (idx, tile) in tiles.into_iter().enumerate() {
-                    if !sampled_indices.contains(&idx) {
+                    if !wanted.contains(&idx) {
                         continue;
                     }
                     let tile_bytes = crate::tensor::input_data_payload(&tile.into_dyn());
@@ -719,7 +856,7 @@ impl ValidatorLoop {
             }
             TiledPayload::MultiInput(per_tile) => {
                 for (idx, flat) in per_tile.into_iter().enumerate() {
-                    if !sampled_indices.contains(&idx) {
+                    if !wanted.contains(&idx) {
                         continue;
                     }
                     let len = flat.len();
@@ -752,6 +889,39 @@ impl ValidatorLoop {
             return None;
         }
 
+        Some(prepared)
+    }
+
+    fn plan_tiled_work(
+        run_manager: &mut crate::incremental_runner::IncrementalRunManager,
+        run_uid: &str,
+        slice_id: &str,
+        tiling: &dsperse::schema::tiling::TilingInfo,
+        run_source: RunSource,
+        prove_pct: f64,
+        input_tensor: &ndarray::ArrayD<f64>,
+        named_inputs: &[(String, ndarray::ArrayD<f64>)],
+    ) -> Option<(PlannedPayload, usize)> {
+        let sampled_indices =
+            Self::sample_tile_indices(tiling.num_tiles, prove_pct, run_source, run_uid, slice_id);
+        if sampled_indices.is_empty() {
+            warn!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                "prove_pct sampled zero tiles, aborting slice stage"
+            );
+            return None;
+        }
+
+        let prepared = Self::tiled_payloads(
+            run_uid,
+            slice_id,
+            tiling,
+            input_tensor,
+            named_inputs,
+            &sampled_indices,
+        )?;
+
         let expected_indices: std::collections::HashSet<u32> =
             prepared.iter().map(|(idx, _)| *idx as u32).collect();
         if let Err(e) = run_manager.init_tile_counter(run_uid, slice_id, tiling, expected_indices) {
@@ -759,21 +929,16 @@ impl ValidatorLoop {
             return None;
         }
 
-        let staged_count = prepared.len();
-        for (idx, tile_bytes) in prepared {
-            staged.stage_request(Self::build_tile_request(
-                circuit,
-                slice_id,
-                run_uid,
-                tile_bytes,
-                idx as u32,
-                run_source,
-                circuit_path,
-                component_sha,
-            ));
-        }
-
-        Some(staged_count)
+        let count = prepared.len();
+        let mut indices: Vec<u32> = prepared.into_iter().map(|(idx, _)| idx as u32).collect();
+        indices.sort_unstable();
+        Some((
+            PlannedPayload::Tiled {
+                tiling: tiling.clone(),
+                indices,
+            },
+            count,
+        ))
     }
 
     fn dim_split_dispatch_enabled() -> bool {
@@ -789,21 +954,14 @@ impl ValidatorLoop {
         ds.weight_name.is_some() && ds.k_dim > 0 && ds.n_dim > 0
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn stage_dim_split_work(
-        staged: &mut StagedWork,
-        run_manager: &mut crate::incremental_runner::IncrementalRunManager,
+    fn dim_split_payloads(
         run_uid: &str,
-        circuit: &Arc<Circuit>,
         slice_id: &str,
-        circuit_path: Option<&str>,
         onnx_path: Option<&str>,
-        component_sha: Option<&str>,
         ds: &dsperse::schema::tiling::DimSplitInfo,
         input_tensor: &ndarray::ArrayD<f64>,
-        run_source: RunSource,
-        prove_pct: f64,
-    ) -> Option<usize> {
+        wanted: &std::collections::HashSet<usize>,
+    ) -> Option<Vec<(usize, bytes::Bytes)>> {
         let onnx_path = match onnx_path {
             Some(p) => p,
             None => {
@@ -828,13 +986,6 @@ impl ValidatorLoop {
             return None;
         }
 
-        let sampled_indices =
-            Self::sample_tile_indices(num_units, prove_pct, run_source, run_uid, slice_id);
-        if sampled_indices.is_empty() {
-            warn!(run_uid = %run_uid, slice = %slice_id, "prove_pct sampled zero dim-split units");
-            return None;
-        }
-
         let (full_weight, trans_b) = match dsperse::pipeline::dim_split_weight_and_transb(
             std::path::Path::new(onnx_path),
             ds,
@@ -855,8 +1006,18 @@ impl ValidatorLoop {
             })
             .collect();
 
-        let mut prepared: Vec<(usize, bytes::Bytes)> = Vec::with_capacity(sampled_indices.len());
-        for &idx in &sampled_indices {
+        let mut prepared: Vec<(usize, bytes::Bytes)> = Vec::with_capacity(wanted.len());
+        for &idx in wanted {
+            if idx >= num_units {
+                warn!(
+                    run_uid = %run_uid,
+                    slice = %slice_id,
+                    unit_idx = idx,
+                    num_units,
+                    "skipping dim-split unit: index out of range"
+                );
+                continue;
+            }
             let mut unit = activations[idx].clone();
             unit.extend_from_slice(&weight_chunks[idx % k_chunks]);
             let len = unit.len();
@@ -882,8 +1043,52 @@ impl ValidatorLoop {
             return None;
         }
 
+        prepared.sort_unstable_by_key(|(idx, _)| *idx);
+        Some(prepared)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn plan_dim_split_work(
+        run_manager: &mut crate::incremental_runner::IncrementalRunManager,
+        run_uid: &str,
+        slice_id: &str,
+        onnx_path: Option<&str>,
+        ds: &dsperse::schema::tiling::DimSplitInfo,
+        input_tensor: &ndarray::ArrayD<f64>,
+        run_source: RunSource,
+        prove_pct: f64,
+    ) -> Option<(PlannedPayload, usize)> {
+        if onnx_path.is_none() {
+            warn!(
+                run_uid = %run_uid,
+                slice = %slice_id,
+                "dim-split slice missing onnx_path, cannot bind chunk weights"
+            );
+            return None;
+        }
+        let activations = match dsperse::pipeline::split_for_dim_split_dispatch(input_tensor, ds) {
+            Ok(a) => a,
+            Err(e) => {
+                warn!(run_uid = %run_uid, slice = %slice_id, error = %e, "dim_split_bound_inputs failed");
+                return None;
+            }
+        };
+        let num_units = activations.len();
+        drop(activations);
+        if num_units == 0 {
+            warn!(run_uid = %run_uid, slice = %slice_id, "dim-split produced zero units");
+            return None;
+        }
+
+        let sampled_indices =
+            Self::sample_tile_indices(num_units, prove_pct, run_source, run_uid, slice_id);
+        if sampled_indices.is_empty() {
+            warn!(run_uid = %run_uid, slice = %slice_id, "prove_pct sampled zero dim-split units");
+            return None;
+        }
+
         let expected_indices: std::collections::HashSet<u32> =
-            prepared.iter().map(|(idx, _)| *idx as u32).collect();
+            sampled_indices.iter().map(|&idx| idx as u32).collect();
         if let Err(e) =
             run_manager.init_dim_split_counter(run_uid, slice_id, num_units, expected_indices)
         {
@@ -891,21 +1096,16 @@ impl ValidatorLoop {
             return None;
         }
 
-        let staged_count = prepared.len();
-        for (idx, unit_bytes) in prepared {
-            staged.stage_request(Self::build_tile_request(
-                circuit,
-                slice_id,
-                run_uid,
-                unit_bytes,
-                idx as u32,
-                run_source,
-                circuit_path,
-                component_sha,
-            ));
-        }
-
-        Some(staged_count)
+        let count = sampled_indices.len();
+        let mut indices: Vec<u32> = sampled_indices.into_iter().map(|idx| idx as u32).collect();
+        indices.sort_unstable();
+        Some((
+            PlannedPayload::DimSplit {
+                ds: ds.clone(),
+                indices,
+            },
+            count,
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1172,7 +1372,7 @@ impl ValidatorLoop {
         }
 
         let circuit = Arc::new(circuit.clone());
-        self.enqueue_all_dslices(&run_uid, &circuit, RunSource::Benchmark, 1.0)
+        self.plan_all_dslices(&run_uid, &circuit, RunSource::Benchmark, 1.0)
             .await;
     }
 }
