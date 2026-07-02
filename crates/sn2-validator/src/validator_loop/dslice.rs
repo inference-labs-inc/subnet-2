@@ -652,7 +652,9 @@ impl ValidatorLoop {
             .values()
             .copied()
             .sum();
-        let low = DSLICE_QUEUE_LOW_WATERMARK.max(caps_sum.saturating_mul(2));
+        let low = caps_sum
+            .saturating_mul(2)
+            .clamp(DSLICE_QUEUE_LOW_WATERMARK, DSLICE_QUEUE_LOW_WATERMARK_MAX);
         if queued >= low {
             return;
         }

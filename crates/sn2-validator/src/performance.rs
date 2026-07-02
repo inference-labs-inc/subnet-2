@@ -95,6 +95,8 @@ const REL_SPEED_WINDOW: usize = 64;
 
 const SLOWDOWN_WINDOW: usize = 64;
 
+const RESTORED_CAP_MAX: usize = 32;
+
 fn window_ttl() -> Duration {
     Duration::from_secs(VERIFICATION_WINDOW_BLOCKS * BLOCK_TIME_SECS)
 }
@@ -495,7 +497,7 @@ impl PerformanceTracker {
                     _ => continue,
                 };
                 let cap = match arr[0].as_u64() {
-                    Some(c) => c as usize,
+                    Some(c) => (c as usize).min(RESTORED_CAP_MAX),
                     None => continue,
                 };
                 let results: VecDeque<bool> = arr[1]
