@@ -5,7 +5,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
     BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
-    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD, CAPACITY_SATURATION_TOLERANCE,
+    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD,
+    CAPACITY_SATURATION_LATENCY_FLOOR_SECS, CAPACITY_SATURATION_TOLERANCE,
     CAPACITY_UNIT_REFERENCE_PERCENTILE, CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS,
     DELIVERED_WORK_BUCKET_SECS, FAILURE_DEBIT_MULTIPLIER, PERFORMANCE_MIN_SAMPLES,
     PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
@@ -262,7 +263,9 @@ impl PerformanceTracker {
             if own_best > 0.0 {
                 // Saturation: how far this miner's current latency has drifted
                 // above its own best. Drives the cap, self-referential.
-                let slowdown = (response_time / own_best).max(1.0);
+                let slowdown = (response_time.max(CAPACITY_SATURATION_LATENCY_FLOOR_SECS)
+                    / own_best.max(CAPACITY_SATURATION_LATENCY_FLOOR_SECS))
+                .max(1.0);
                 let trend = self.miner_slowdown.entry(uid).or_default();
                 trend.push_back((now, slowdown));
                 evict_timed(trend, SLOWDOWN_WINDOW);
@@ -1045,6 +1048,20 @@ mod tests {
         assert_eq!(
             fast, slow,
             "absolute speed must not affect capacity: fast={fast}, slow={slow}"
+        );
+    }
+
+    #[test]
+    fn sub_floor_latency_jitter_does_not_read_as_saturation() {
+        let mut tracker = test_tracker();
+        for i in 0..400 {
+            let rt = if i % 2 == 0 { 0.05 } else { 0.2 };
+            tracker.record(1, "fast", true, rt, true);
+        }
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            cap > 4,
+            "jitter below the latency floor must not block ramping: cap={cap}"
         );
     }
 
