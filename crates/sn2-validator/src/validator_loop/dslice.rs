@@ -259,11 +259,45 @@ impl ValidatorLoop {
                 .iter()
                 .map(|io| io.shape.iter().product::<usize>())
                 .sum();
-            let (primary, secondaries) = Self::group_dim_split_tensors(&work.named_inputs, ds)?;
-            let group_elems = primary.len() / ds.dim_size * ds.elements_per_group;
-            let secondary_elems: usize = secondaries.iter().map(|t| t.len()).sum();
-            let per_request_actual = secondary_elems + group_elems;
-            return if per_request_actual == bundle_expected {
+            let manifest_shapes: Vec<Vec<usize>> = work
+                .named_inputs
+                .iter()
+                .map(|(_, t)| t.shape().to_vec())
+                .collect();
+            let contract: Vec<(String, Vec<usize>)> = params
+                .inputs
+                .iter()
+                .map(|io| (io.name.clone(), io.shape.clone()))
+                .collect();
+            let per_request_actual =
+                match dsperse::pipeline::plan_group_payload(&manifest_shapes, ds, &contract) {
+                    Ok(plan) => plan
+                        .iter()
+                        .map(|part| match part {
+                            dsperse::pipeline::GroupPayloadPart::Whole(i) => {
+                                manifest_shapes[*i].iter().product::<usize>()
+                            }
+                            dsperse::pipeline::GroupPayloadPart::Split(i) => {
+                                manifest_shapes[*i].iter().product::<usize>() / ds.dim_size
+                                    * ds.elements_per_group
+                            }
+                        })
+                        .sum::<usize>(),
+                    Err(_) => 0,
+                };
+            let activation_expected: usize = contract
+                .iter()
+                .take_while(|(_, shape)| {
+                    let n: usize = shape.iter().product();
+                    manifest_shapes.iter().any(|m| {
+                        m.iter().product::<usize>() == n
+                            || m.iter().product::<usize>() / ds.dim_size * ds.elements_per_group
+                                == n
+                    })
+                })
+                .map(|(_, shape)| shape.iter().product::<usize>())
+                .sum();
+            return if per_request_actual > 0 && per_request_actual == activation_expected {
                 None
             } else {
                 Some(BundleDispatchMismatch {
@@ -830,9 +864,39 @@ impl ValidatorLoop {
             PlannedPayload::DimSplit { ds, indices } if ds.weight_name.is_none() => {
                 let wanted: std::collections::HashSet<usize> =
                     indices.iter().map(|&i| i as usize).collect();
-                let (primary, secondaries) = Self::group_dim_split_tensors(&named_inputs, ds)?;
+                let circuit_path = plan.circuit_path.as_deref()?;
+                let backend = dsperse::backend::jstprove::JstproveBackend::new();
+                let params = match backend.load_params(std::path::Path::new(circuit_path)) {
+                    Ok(Some(p)) => p,
+                    _ => {
+                        warn!(
+                            run_uid = %plan.run_uid,
+                            slice = %plan.slice_id,
+                            "group payload construction missing circuit params"
+                        );
+                        return None;
+                    }
+                };
+                let manifest_shapes: Vec<Vec<usize>> = named_inputs
+                    .iter()
+                    .map(|(_, t)| t.shape().to_vec())
+                    .collect();
+                let contract: Vec<(String, Vec<usize>)> = params
+                    .inputs
+                    .iter()
+                    .map(|io| (io.name.clone(), io.shape.clone()))
+                    .collect();
+                let tensors: Vec<&ndarray::ArrayD<f64>> =
+                    named_inputs.iter().map(|(_, t)| t).collect();
                 let payloads =
-                    match dsperse::pipeline::dim_split_group_payloads(primary, &secondaries, ds) {
+                    match dsperse::pipeline::plan_group_payload(&manifest_shapes, ds, &contract)
+                        .and_then(|payload_plan| {
+                            dsperse::pipeline::dim_split_group_payloads_planned(
+                                &tensors,
+                                &payload_plan,
+                                ds,
+                            )
+                        }) {
                         Ok(p) => p,
                         Err(e) => {
                             warn!(
@@ -1073,22 +1137,6 @@ impl ValidatorLoop {
         } else {
             None
         }
-    }
-
-    fn group_dim_split_tensors<'a>(
-        named_inputs: &'a [(String, ndarray::ArrayD<f64>)],
-        ds: &dsperse::schema::tiling::DimSplitInfo,
-    ) -> Option<(&'a ndarray::ArrayD<f64>, Vec<&'a ndarray::ArrayD<f64>>)> {
-        let primary = named_inputs
-            .iter()
-            .find(|(n, _)| n == &ds.input_name)
-            .map(|(_, t)| t)?;
-        let secondaries: Vec<&ndarray::ArrayD<f64>> = named_inputs
-            .iter()
-            .filter(|(n, _)| n != &ds.input_name)
-            .map(|(_, t)| t)
-            .collect();
-        Some((primary, secondaries))
     }
 
     fn dim_split_payloads(
