@@ -6,10 +6,11 @@ use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
     BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
     CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD,
-    CAPACITY_SATURATION_LATENCY_FLOOR_SECS, CAPACITY_SATURATION_TOLERANCE,
-    CAPACITY_UNIT_REFERENCE_PERCENTILE, CAPACITY_WINDOW_SIZE, CIRCUIT_TIMEOUT_SECONDS,
-    DELIVERED_WORK_BUCKET_SECS, FAILURE_DEBIT_MULTIPLIER, PERFORMANCE_MIN_SAMPLES,
-    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
+    CAPACITY_SATURATION_LATENCY_FLOOR_SECS, CAPACITY_SATURATION_RAMP_CEILING,
+    CAPACITY_SATURATION_TOLERANCE, CAPACITY_UNIT_REFERENCE_PERCENTILE, CAPACITY_WINDOW_SIZE,
+    CIRCUIT_TIMEOUT_SECONDS, DELIVERED_WORK_BUCKET_SECS, FAILURE_DEBIT_MULTIPLIER,
+    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE,
+    VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::{debug, warn};
 
@@ -732,10 +733,10 @@ impl PerformanceTracker {
                 }
                 return;
             }
-            if saturation <= CAPACITY_SATURATION_TOLERANCE {
+            if saturation <= CAPACITY_SATURATION_RAMP_CEILING {
                 *current += 1;
                 direction = Some(CapDirection::Ramp);
-            } else if *current > 1 {
+            } else if saturation > CAPACITY_SATURATION_TOLERANCE && *current > 1 {
                 *current -= 1;
                 direction = Some(CapDirection::Backoff);
             }
@@ -1059,6 +1060,29 @@ mod tests {
             cap > 4,
             "jitter below the latency floor must not block ramping: cap={cap}"
         );
+    }
+
+    #[test]
+    fn saturation_between_thresholds_holds_cap_steady() {
+        let mut tracker = test_tracker();
+        for _ in 0..300 {
+            tracker.record(1, "hk", true, 2.0, true);
+        }
+        assert!(tracker.cap_snapshot().get(&1).copied().unwrap_or(0) >= 4);
+        for _ in 0..128 {
+            tracker.record(1, "hk", true, 2.7, true);
+        }
+        let settled = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        tracker.cap_events.clear();
+        for _ in 0..(CAPACITY_MIN_AT_CAP * 4) {
+            tracker.record(1, "hk", true, 2.7, true);
+        }
+        assert_eq!(
+            tracker.cap_snapshot().get(&1).copied(),
+            Some(settled),
+            "saturation inside the deadband must neither ramp nor back off"
+        );
+        assert!(tracker.drain_cap_events().is_empty());
     }
 
     #[test]
