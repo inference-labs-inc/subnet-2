@@ -253,6 +253,27 @@ impl ValidatorLoop {
             _ => return None,
         };
 
+        if let Some(ds) = Self::group_dim_split(work) {
+            let bundle_expected: usize = params
+                .inputs
+                .iter()
+                .map(|io| io.shape.iter().product::<usize>())
+                .sum();
+            let (primary, secondaries) = Self::group_dim_split_tensors(&work.named_inputs, ds)?;
+            let group_elems = primary.len() / ds.dim_size * ds.elements_per_group;
+            let secondary_elems: usize = secondaries.iter().map(|t| t.len()).sum();
+            let per_request_actual = secondary_elems + group_elems;
+            return if per_request_actual == bundle_expected {
+                None
+            } else {
+                Some(BundleDispatchMismatch {
+                    bundle_expected,
+                    per_request_actual,
+                    strategy: "dim-split-group",
+                })
+            };
+        }
+
         if let Some(ds) = &work.dim_split {
             let bundle_expected: usize = params
                 .inputs
@@ -525,6 +546,7 @@ impl ValidatorLoop {
             total_unsatisfiable += unsatisfiable;
 
             for work in kept {
+                let group_ds = Self::group_dim_split(&work).cloned();
                 let mut input_tensor = work.input;
                 let named_inputs = work.named_inputs;
 
@@ -544,7 +566,43 @@ impl ValidatorLoop {
                     .circuit_store
                     .component_sha(&circuit.id, &work.slice_id);
 
-                let planned = if let Some(ds) = work
+                let planned = if let Some(ds) = group_ds.as_ref() {
+                    let sampled = Self::sample_tile_indices(
+                        ds.num_groups,
+                        clamped_prove_pct,
+                        run_source,
+                        run_uid,
+                        &work.slice_id,
+                    );
+                    if sampled.is_empty() {
+                        self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
+                        self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
+                        continue;
+                    }
+                    let expected: std::collections::HashSet<u32> =
+                        sampled.iter().map(|&i| i as u32).collect();
+                    if let Err(e) = self.run_manager.init_dim_split_counter(
+                        run_uid,
+                        &work.slice_id,
+                        ds.num_groups,
+                        expected,
+                    ) {
+                        warn!(run_uid = %run_uid, slice = %work.slice_id, error = %e, "init_dim_split_counter failed");
+                        self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
+                        self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
+                        continue;
+                    }
+                    let count = sampled.len();
+                    let mut indices: Vec<u32> = sampled.into_iter().map(|i| i as u32).collect();
+                    indices.sort_unstable();
+                    (
+                        PlannedPayload::DimSplit {
+                            ds: ds.clone(),
+                            indices,
+                        },
+                        count,
+                    )
+                } else if let Some(ds) = work
                     .dim_split
                     .as_ref()
                     .filter(|_| Self::dim_split_dispatch_enabled())
@@ -711,13 +769,13 @@ impl ValidatorLoop {
         let mut input_tensor = work.input;
         let named_inputs = work.named_inputs;
 
-        if let Some(&scale) = self
+        let norm_scale = self
             .dslice_input_scales
             .get(&(plan.run_uid.clone(), plan.slice_id.clone()))
-        {
-            if scale > 1.0 {
-                input_tensor.mapv_inplace(|v| v / scale);
-            }
+            .copied()
+            .filter(|&s| s > 1.0);
+        if let Some(scale) = norm_scale {
+            input_tensor.mapv_inplace(|v| v / scale);
         }
 
         match &plan.payload {
@@ -760,6 +818,51 @@ impl ValidatorLoop {
                                 &plan.slice_id,
                                 &plan.run_uid,
                                 tile_bytes,
+                                idx as u32,
+                                plan.run_source,
+                                plan.circuit_path.as_deref(),
+                                plan.component_sha.as_deref(),
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            PlannedPayload::DimSplit { ds, indices } if ds.weight_name.is_none() => {
+                let wanted: std::collections::HashSet<usize> =
+                    indices.iter().map(|&i| i as usize).collect();
+                let (primary, secondaries) = Self::group_dim_split_tensors(&named_inputs, ds)?;
+                let payloads =
+                    match dsperse::pipeline::dim_split_group_payloads(primary, &secondaries, ds) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!(
+                                run_uid = %plan.run_uid,
+                                slice = %plan.slice_id,
+                                error = %e,
+                                "group payload construction failed"
+                            );
+                            return None;
+                        }
+                    };
+                Some(
+                    payloads
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(idx, _)| wanted.contains(idx))
+                        .map(|(idx, mut unit)| {
+                            if let Some(scale) = norm_scale {
+                                for v in unit.iter_mut() {
+                                    *v /= scale;
+                                }
+                            }
+                            let len = unit.len();
+                            let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[len]), unit)
+                                .expect("1-D shape from vec");
+                            Self::build_tile_request(
+                                &plan.circuit,
+                                &plan.slice_id,
+                                &plan.run_uid,
+                                crate::tensor::input_data_payload(&arr),
                                 idx as u32,
                                 plan.run_source,
                                 plan.circuit_path.as_deref(),
@@ -954,6 +1057,38 @@ impl ValidatorLoop {
 
     fn is_weight_bound_dim_split(ds: &dsperse::schema::tiling::DimSplitInfo) -> bool {
         ds.weight_name.is_some() && ds.k_dim > 0 && ds.n_dim > 0
+    }
+
+    fn group_dim_split(
+        work: &dsperse::pipeline::SliceWork,
+    ) -> Option<&dsperse::schema::tiling::DimSplitInfo> {
+        let ds = work.slice_meta.dim_split.as_ref()?;
+        if work.named_inputs.len() > 1
+            && ds.weight_name.is_none()
+            && ds.num_groups > 0
+            && ds.elements_per_group > 0
+            && ds.num_groups * ds.elements_per_group == ds.dim_size
+        {
+            Some(ds)
+        } else {
+            None
+        }
+    }
+
+    fn group_dim_split_tensors<'a>(
+        named_inputs: &'a [(String, ndarray::ArrayD<f64>)],
+        ds: &dsperse::schema::tiling::DimSplitInfo,
+    ) -> Option<(&'a ndarray::ArrayD<f64>, Vec<&'a ndarray::ArrayD<f64>>)> {
+        let primary = named_inputs
+            .iter()
+            .find(|(n, _)| n == &ds.input_name)
+            .map(|(_, t)| t)?;
+        let secondaries: Vec<&ndarray::ArrayD<f64>> = named_inputs
+            .iter()
+            .filter(|(n, _)| n != &ds.input_name)
+            .map(|(_, t)| t)
+            .collect();
+        Some((primary, secondaries))
     }
 
     fn dim_split_payloads(
@@ -1397,6 +1532,61 @@ impl ValidatorLoop {
 mod tests {
     use super::ValidatorLoop;
     use dsperse::schema::tiling::{DimSplitInfo, DimSplitKind};
+
+    #[test]
+    fn group_dim_split_requires_multi_input_and_covering_groups() {
+        use dsperse::pipeline::SliceWork;
+        use dsperse::schema::metadata::RunSliceMetadata;
+
+        fn work(named: usize, ds: Option<DimSplitInfo>) -> SliceWork {
+            let named_inputs = (0..named)
+                .map(|i| {
+                    (
+                        format!("t{i}"),
+                        ndarray::ArrayD::from_elem(ndarray::IxDyn(&[4]), 1.0),
+                    )
+                })
+                .collect();
+            SliceWork {
+                slice_id: "slice_0".to_string(),
+                input: ndarray::ArrayD::from_elem(ndarray::IxDyn(&[4]), 1.0),
+                named_inputs,
+                backend: Default::default(),
+                use_circuit: true,
+                tiling: None,
+                channel_split: None,
+                dim_split: None,
+                circuit_path: None,
+                onnx_path: None,
+                slice_meta: RunSliceMetadata {
+                    dim_split: ds,
+                    ..Default::default()
+                },
+            }
+        }
+
+        let group = DimSplitInfo {
+            split_kind: DimSplitKind::BatchDim,
+            weight_name: None,
+            split_dim: 0,
+            dim_size: 4,
+            num_groups: 2,
+            elements_per_group: 2,
+            ..Default::default()
+        };
+        assert!(ValidatorLoop::group_dim_split(&work(2, Some(group.clone()))).is_some());
+        assert!(ValidatorLoop::group_dim_split(&work(1, Some(group.clone()))).is_none());
+        let weight_bound = DimSplitInfo {
+            weight_name: Some("w".to_string()),
+            ..group.clone()
+        };
+        assert!(ValidatorLoop::group_dim_split(&work(2, Some(weight_bound))).is_none());
+        let uncovered = DimSplitInfo {
+            num_groups: 3,
+            ..group
+        };
+        assert!(ValidatorLoop::group_dim_split(&work(2, Some(uncovered))).is_none());
+    }
 
     #[test]
     fn weight_bound_dim_split_requires_full_matmul_metadata() {
