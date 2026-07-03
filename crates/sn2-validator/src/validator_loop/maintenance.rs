@@ -40,6 +40,11 @@ impl ValidatorLoop {
                 self.timings.metagraph_sync = now;
             }
 
+            if now.duration_since(self.timings.miner_registry_refresh) > Duration::from_secs(60) {
+                self.refresh_miner_connections().await;
+                self.timings.miner_registry_refresh = now;
+            }
+
             if now.duration_since(self.timings.cooldown_prune) > Duration::from_secs(60) {
                 self.prune_expired_cooldowns();
                 self.timings.cooldown_prune = now;
@@ -381,6 +386,12 @@ impl ValidatorLoop {
             "metagraph synced"
         );
 
+        self.refresh_miner_connections().await;
+
+        Ok(())
+    }
+
+    pub(super) async fn refresh_miner_connections(&mut self) {
         let quic_miners: Vec<QuicAxonInfo> = self
             .config
             .metagraph
@@ -399,14 +410,12 @@ impl ValidatorLoop {
             let mut client = self.miner_client.write().await;
             if let Err(e) = client
                 .lightning_mut()
-                .update_miner_registry(quic_miners.clone())
+                .update_miner_registry(quic_miners)
                 .await
             {
                 warn!(error = %e, "updating QUIC miner connections");
             }
         }
-
-        Ok(())
     }
 
     async fn update_weights(&mut self) -> Result<()> {

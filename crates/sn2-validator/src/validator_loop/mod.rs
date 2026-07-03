@@ -85,6 +85,7 @@ pub(super) struct VerifyResult {
 
 pub(super) struct PeriodicTimings {
     pub(super) metagraph_sync: Instant,
+    pub(super) miner_registry_refresh: Instant,
     pub(super) weight_update: Instant,
     pub(super) score_save: Instant,
     pub(super) circuit_refresh: Instant,
@@ -99,6 +100,7 @@ impl PeriodicTimings {
     pub(super) fn new(now: Instant) -> Self {
         Self {
             metagraph_sync: now - Duration::from_secs(3601),
+            miner_registry_refresh: now,
             weight_update: now,
             score_save: now,
             circuit_refresh: now,
