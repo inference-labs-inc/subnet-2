@@ -97,8 +97,8 @@ impl ValidatorLoop {
         }
 
         if self.api_dslice_queue.is_empty()
-            && self.stacked_dslice_queue.is_empty()
-            && self.dslice_plan.is_empty()
+            && self.stacked_dslice_queue.len() + self.dslice_plan.len()
+                < sn2_types::DSLICE_QUEUE_LOW_WATERMARK
             && now.duration_since(self.timings.replenish) > Duration::from_secs(5)
         {
             self.replenish_dslice_queues().await;

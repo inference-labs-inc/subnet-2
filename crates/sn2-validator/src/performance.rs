@@ -41,7 +41,7 @@ fn parse_meminfo_avail_ratio(raw: &str) -> Option<f64> {
     }
 }
 
-fn cap_ramp_blocked_by_memory_pressure() -> bool {
+pub(crate) fn cap_ramp_blocked_by_memory_pressure() -> bool {
     host_memory_available_ratio()
         .map(|r| r < CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO)
         .unwrap_or(false)

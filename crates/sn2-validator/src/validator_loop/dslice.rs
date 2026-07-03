@@ -1263,8 +1263,21 @@ impl ValidatorLoop {
     }
 
     pub(super) async fn replenish_dslice_queues(&mut self) {
-        if self.config.disable_benchmark || self.run_manager.has_benchmark_runs() {
+        if self.config.disable_benchmark {
             return;
+        }
+        let benchmark_runs = self.run_manager.benchmark_run_uids().len();
+        if benchmark_runs >= MAX_CONCURRENT_BENCHMARK_RUNS {
+            return;
+        }
+        if benchmark_runs > 0 {
+            let supply = self.stacked_dslice_queue.len() + self.dslice_plan.len();
+            if supply >= DSLICE_QUEUE_LOW_WATERMARK {
+                return;
+            }
+            if crate::performance::cap_ramp_blocked_by_memory_pressure() {
+                return;
+            }
         }
         if !self.api_dslice_queue.is_empty() {
             return;

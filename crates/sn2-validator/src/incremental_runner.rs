@@ -508,12 +508,6 @@ impl IncrementalRunManager {
         self.runs.len()
     }
 
-    pub fn has_benchmark_runs(&self) -> bool {
-        self.runs
-            .values()
-            .any(|r| r.run_source == RunSource::Benchmark)
-    }
-
     pub fn benchmark_run_uids(&self) -> Vec<String> {
         self.runs
             .iter()
