@@ -740,12 +740,12 @@ impl CircuitStore {
                     if !comp_dir.exists() {
                         true
                     } else if comp.has_circuit {
-                        let has_circuit_bin = comp_dir
-                            .join("jstprove")
-                            .join("circuit.bundle")
-                            .join("circuit.bin")
-                            .exists();
-                        !has_circuit_bin
+                        info!(
+                            name = comp.name,
+                            sha = comp.sha,
+                            "component present without generation stamp, will re-download"
+                        );
+                        true
                     } else {
                         let payload_dir = comp_dir.join("payload");
                         let has_payload = match payload_dir.read_dir() {
@@ -833,9 +833,19 @@ impl CircuitStore {
             let filename = Self::sanitize_name(&wb.filename, "weight blob file")?;
             let dest = payload_dir.join(filename);
             if dest.exists() && !force {
-                continue;
+                let stamp_matches = std::fs::read_to_string(Self::sha_stamp_path(&dest))
+                    .map(|s| s.trim() == wb.sha)
+                    .unwrap_or(false);
+                if stamp_matches {
+                    continue;
+                }
+                info!(
+                    component = comp.name,
+                    sha = %wb.sha,
+                    "weight blob present without matching stamp, re-downloading"
+                );
             }
-            if force && dest.exists() {
+            if dest.exists() {
                 let _ = std::fs::remove_file(&dest);
                 let _ = std::fs::remove_file(Self::sha_stamp_path(&dest));
             }
