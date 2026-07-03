@@ -1275,8 +1275,9 @@ impl ValidatorLoop {
             if supply >= DSLICE_QUEUE_LOW_WATERMARK {
                 return;
             }
-            if crate::performance::cap_ramp_blocked_by_memory_pressure() {
-                return;
+            match crate::performance::host_memory_available_ratio() {
+                Some(r) if r >= EXTRA_RUN_MIN_AVAIL_MEM_RATIO => {}
+                _ => return,
             }
         }
         if !self.api_dslice_queue.is_empty() {

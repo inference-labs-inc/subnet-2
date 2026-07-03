@@ -14,13 +14,13 @@ use sn2_types::{
 use tracing::{debug, warn};
 
 #[cfg(target_os = "linux")]
-fn host_memory_available_ratio() -> Option<f64> {
+pub(crate) fn host_memory_available_ratio() -> Option<f64> {
     let raw = std::fs::read_to_string("/proc/meminfo").ok()?;
     parse_meminfo_avail_ratio(&raw)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn host_memory_available_ratio() -> Option<f64> {
+pub(crate) fn host_memory_available_ratio() -> Option<f64> {
     None
 }
 
