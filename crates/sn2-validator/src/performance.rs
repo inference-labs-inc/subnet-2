@@ -557,7 +557,7 @@ impl PerformanceTracker {
                     _ => continue,
                 };
                 let cap = match arr[0].as_u64() {
-                    Some(c) => (c as usize).min(RESTORED_CAP_MAX),
+                    Some(c) => (c as usize).clamp(1, RESTORED_CAP_MAX),
                     None => continue,
                 };
                 let results: VecDeque<bool> = arr[1]
@@ -803,7 +803,7 @@ impl PerformanceTracker {
             .collect();
         for uid in uids {
             let current = self.adaptive_caps.entry(uid).or_insert(1);
-            if *current == 0 {
+            if *current <= 1 {
                 continue;
             }
             let cap_from = *current;
@@ -814,12 +814,7 @@ impl PerformanceTracker {
                 r.clear();
             }
             let hotkey = uid_hotkeys.get(&uid).cloned().unwrap_or_default();
-            let direction = if cap_to == 0 {
-                self.pending_evictions.push((uid, hotkey.clone()));
-                CapDirection::Evict
-            } else {
-                CapDirection::Backoff
-            };
+            let direction = CapDirection::Backoff;
             self.cap_events.push(CapEvent {
                 uid,
                 hotkey,
@@ -838,6 +833,7 @@ impl PerformanceTracker {
     }
 
     pub fn rehabilitate(&mut self, uid: u16, hotkey: &str) {
+        self.at_cap_last_touched.insert(uid, Instant::now());
         let current = match self.adaptive_caps.get_mut(&uid) {
             Some(c) if *c == 0 => c,
             _ => return,
@@ -1299,6 +1295,40 @@ mod tests {
         run_at_cap_failures(&mut tracker, 7, "hk_dead", CAPACITY_MIN_AT_CAP);
         assert!(!tracker.drain_pending_evictions().is_empty());
         assert!(tracker.drain_pending_evictions().is_empty());
+    }
+
+    #[test]
+    fn restored_caps_floor_at_one() {
+        let dir = std::env::temp_dir().join(format!("sn2_perf_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("performance_tracker.json");
+        let mut tracker = PerformanceTracker::new_with_persistence(path.clone());
+        tracker.record_keyed(9, "hk", true, 2.0, false, "A");
+        tracker.adaptive_caps.insert(9, 0);
+        tracker.save();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        assert_eq!(
+            restored.adaptive_caps.get(&9).copied(),
+            Some(1),
+            "a persisted zero cap must revive as one, never a dispatch black hole"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn idle_decay_floors_at_one_without_eviction() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(3, 2);
+        let hotkeys: HashMap<u16, String> = [(3u16, "hk".to_string())].into_iter().collect();
+        assert_eq!(tracker.decay_idle_caps(&hotkeys), 1);
+        assert_eq!(tracker.adaptive_caps.get(&3).copied(), Some(1));
+        assert_eq!(tracker.decay_idle_caps(&hotkeys), 0);
+        assert_eq!(tracker.adaptive_caps.get(&3).copied(), Some(1));
+        assert!(tracker.drain_pending_evictions().is_empty());
+        assert!(!tracker
+            .drain_cap_events()
+            .iter()
+            .any(|e| matches!(e.direction, CapDirection::Evict)));
     }
 
     #[test]
