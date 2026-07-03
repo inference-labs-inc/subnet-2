@@ -4,15 +4,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
-    BLOCK_TIME_SECS, CAPACITY_BACKOFF_THRESHOLD, CAPACITY_MIN_AT_CAP,
-    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RAMP_THRESHOLD,
-    CAPACITY_SATURATION_LATENCY_FLOOR_SECS, CAPACITY_SATURATION_RAMP_CEILING,
-    CAPACITY_SATURATION_TOLERANCE, CAPACITY_UNIT_REFERENCE_PERCENTILE, CAPACITY_WINDOW_SIZE,
+    BLOCK_TIME_SECS, CAPACITY_ADJUST_INTERVAL_SECS, CAPACITY_LATENCY_BUDGET_SECS,
+    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RATE_BIN_SECS, CAPACITY_RATE_FILTER_BINS,
+    CAPACITY_RATE_WINDOW_BINS, CAPACITY_STEP_FRACTION, CAPACITY_UNIT_REFERENCE_PERCENTILE,
     CIRCUIT_TIMEOUT_SECONDS, DELIVERED_WORK_BUCKET_SECS, FAILURE_DEBIT_MULTIPLIER,
     PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE,
     VERIFICATION_WINDOW_BLOCKS,
 };
-use tracing::{debug, warn};
+use tracing::warn;
 
 #[cfg(target_os = "linux")]
 pub(crate) fn host_memory_available_ratio() -> Option<f64> {
@@ -56,6 +55,7 @@ const MAX_BUFFERED_CAP_EVENTS: usize = 4096;
 pub enum CapDirection {
     Ramp,
     Backoff,
+    #[allow(dead_code)]
     Evict,
     Rehab,
 }
@@ -82,8 +82,9 @@ pub struct PerformanceTracker {
     unit_reference_cache: HashMap<String, (u64, f64)>,
     rel_speed: HashMap<u16, VecDeque<(Instant, f64)>>,
     unit_own_best: HashMap<u16, HashMap<String, (Instant, f64)>>,
-    miner_slowdown: HashMap<u16, VecDeque<(Instant, f64)>>,
     delivered_work: HashMap<u16, VecDeque<(Instant, WorkBucket)>>,
+    completion_bins: HashMap<u16, VecDeque<(Instant, u32)>>,
+    cap_last_adjusted: HashMap<u16, Instant>,
     total_records: u64,
     persistence_path: Option<PathBuf>,
 }
@@ -94,8 +95,6 @@ const UNIT_REFERENCE_REFRESH_RECORDS: u64 = 64;
 const UNIT_TIMES_CAP: usize = 256;
 const UNIT_REFERENCE_MIN_SAMPLES: usize = 8;
 const REL_SPEED_WINDOW: usize = 64;
-
-const SLOWDOWN_WINDOW: usize = 64;
 
 const RESTORED_CAP_MAX: usize = 32;
 
@@ -185,8 +184,9 @@ impl PerformanceTracker {
             unit_reference_cache: HashMap::new(),
             rel_speed: HashMap::new(),
             unit_own_best: HashMap::new(),
-            miner_slowdown: HashMap::new(),
             delivered_work: HashMap::new(),
+            completion_bins: HashMap::new(),
+            cap_last_adjusted: HashMap::new(),
             total_records: 0,
             persistence_path: Some(path),
         };
@@ -262,18 +262,6 @@ impl PerformanceTracker {
             let own_best = best_entry.1;
 
             if own_best > 0.0 {
-                // Saturation: how far this miner's current latency has drifted
-                // above its own best. Drives the cap, self-referential.
-                let slowdown = (response_time.max(CAPACITY_SATURATION_LATENCY_FLOOR_SECS)
-                    / own_best.max(CAPACITY_SATURATION_LATENCY_FLOOR_SECS))
-                .max(1.0);
-                let trend = self.miner_slowdown.entry(uid).or_default();
-                trend.push_back((now, slowdown));
-                evict_timed(trend, SLOWDOWN_WINDOW);
-
-                // Weight rate: the circuit's fast end (load-independent) over
-                // this miner's own best. Both ends ignore queue latency, so the
-                // ratio reflects intrinsic speed and cannot be inflated by load.
                 let reference = self.cached_unit_reference(work_key);
                 if reference > 0.0 {
                     let rel = reference / own_best;
@@ -292,15 +280,20 @@ impl PerformanceTracker {
             }
         }
 
-        if was_at_capacity {
-            let results = self.at_cap_results.entry(uid).or_default();
-            results.push_back(success);
-            if results.len() > CAPACITY_WINDOW_SIZE {
-                results.pop_front();
+        if success {
+            let bins = self.completion_bins.entry(uid).or_default();
+            let bin_len = Duration::from_secs(CAPACITY_RATE_BIN_SECS);
+            match bins.back_mut() {
+                Some((start, count)) if now.duration_since(*start) < bin_len => *count += 1,
+                _ => bins.push_back((now, 1)),
+            }
+            while bins.len() > CAPACITY_RATE_FILTER_BINS {
+                bins.pop_front();
             }
             self.at_cap_last_touched.insert(uid, now);
-            self.update_adaptive_cap(uid, hotkey);
+            self.update_adaptive_cap(uid, hotkey, now);
         }
+        let _ = was_at_capacity;
     }
 
     #[cfg(test)]
@@ -630,8 +623,9 @@ impl PerformanceTracker {
         self.at_cap_last_touched.remove(&uid);
         self.rel_speed.remove(&uid);
         self.unit_own_best.remove(&uid);
-        self.miner_slowdown.remove(&uid);
         self.delivered_work.remove(&uid);
+        self.completion_bins.remove(&uid);
+        self.cap_last_adjusted.remove(&uid);
         self.pending_evictions.retain(|(u, _)| *u != uid);
         self.cap_events.retain(|e| e.hotkey != hotkey);
     }
@@ -680,97 +674,82 @@ impl PerformanceTracker {
         Some(sum / count as f64)
     }
 
-    /// How much a miner's recent latency has degraded relative to its own
-    /// best on the same work units. 1.0 means it is serving at its unloaded
-    /// speed (spare capacity); a higher value means the load we are giving it
-    /// is congesting it. This is purely self-referential, so it cannot couple
-    /// one miner's capacity to another's and cannot drive a feedback spiral.
-    fn miner_saturation(&self, uid: u16) -> f64 {
-        let samples = match self.miner_slowdown.get(&uid) {
-            Some(s) => s,
-            None => return 1.0,
+    fn delivered_rate_estimate(&self, uid: u16, now: Instant) -> f64 {
+        let bins = match self.completion_bins.get(&uid) {
+            Some(b) if !b.is_empty() => b,
+            _ => return 0.0,
         };
-        let ttl = window_ttl();
-        let mut count = 0usize;
-        let sum: f64 = samples
+        let bin_len = CAPACITY_RATE_BIN_SECS as f64;
+        let window_len = CAPACITY_RATE_WINDOW_BINS as f64 * bin_len;
+        let horizon =
+            Duration::from_secs(CAPACITY_RATE_BIN_SECS * CAPACITY_RATE_FILTER_BINS as u64);
+        let samples: Vec<(Instant, u32)> = bins
             .iter()
-            .filter(|(ts, _)| ts.elapsed() <= ttl)
-            .map(|(_, s)| {
-                count += 1;
-                *s
-            })
-            .sum();
-        if count == 0 {
-            return 1.0;
+            .filter(|(start, _)| now.duration_since(*start) <= horizon)
+            .copied()
+            .collect();
+        let mut best = 0.0_f64;
+        for i in 0..samples.len() {
+            let window_start = samples[i].0;
+            let sum: u32 = samples[i..]
+                .iter()
+                .take_while(|(s, _)| s.duration_since(window_start).as_secs_f64() < window_len)
+                .map(|(_, c)| c)
+                .sum();
+            best = best.max(sum as f64 / window_len);
         }
-        sum / count as f64
+        best
     }
 
-    fn update_adaptive_cap(&mut self, uid: u16, hotkey: &str) {
-        let success_rate = match self.at_cap_results.get(&uid) {
-            Some(r) if r.len() >= CAPACITY_MIN_AT_CAP => {
-                r.iter().filter(|&&s| s).count() as f64 / r.len() as f64
-            }
-            _ => return,
-        };
-
-        let saturation = self.miner_saturation(uid);
+    fn update_adaptive_cap(&mut self, uid: u16, hotkey: &str, now: Instant) {
+        let due = self
+            .cap_last_adjusted
+            .get(&uid)
+            .map(|t| now.duration_since(*t).as_secs() >= CAPACITY_ADJUST_INTERVAL_SECS)
+            .unwrap_or(true);
+        if !due {
+            return;
+        }
+        self.cap_last_adjusted.insert(uid, now);
+        let rate = self.delivered_rate_estimate(uid, now);
+        let target = (rate * CAPACITY_LATENCY_BUDGET_SECS).max(1.0);
 
         let current = self.adaptive_caps.entry(uid).or_insert(1);
         let cap_from = *current;
-        let mut direction: Option<CapDirection> = None;
-
-        if success_rate >= CAPACITY_RAMP_THRESHOLD {
+        let step = ((cap_from as f64 * CAPACITY_STEP_FRACTION).ceil() as usize).max(1);
+        let target_cap = target.round() as usize;
+        let cap_to = if target_cap > cap_from {
             if cap_ramp_blocked_by_memory_pressure() {
-                debug!(
-                    uid,
-                    cap = *current,
-                    success_rate,
-                    "cap ramp held back by validator memory pressure"
-                );
-                if let Some(r) = self.at_cap_results.get_mut(&uid) {
-                    r.clear();
-                }
-                return;
-            }
-            if saturation <= CAPACITY_SATURATION_RAMP_CEILING {
-                *current += 1;
-                direction = Some(CapDirection::Ramp);
-            } else if saturation > CAPACITY_SATURATION_TOLERANCE && *current > 1 {
-                *current -= 1;
-                direction = Some(CapDirection::Backoff);
-            }
-            if let Some(r) = self.at_cap_results.get_mut(&uid) {
-                r.clear();
-            }
-        } else if success_rate < CAPACITY_BACKOFF_THRESHOLD && *current > 0 {
-            *current -= 1;
-            direction = if *current == 0 {
-                self.pending_evictions.push((uid, hotkey.to_string()));
-                Some(CapDirection::Evict)
+                cap_from
             } else {
-                Some(CapDirection::Backoff)
-            };
-            if let Some(r) = self.at_cap_results.get_mut(&uid) {
-                r.clear();
+                (cap_from + step).min(target_cap)
             }
+        } else if target_cap < cap_from {
+            cap_from.saturating_sub(step).max(target_cap).max(1)
+        } else {
+            cap_from
+        };
+        if cap_to == cap_from {
+            return;
         }
-
-        if let Some(direction) = direction {
-            let cap_to = *current;
-            self.cap_events.push(CapEvent {
-                uid,
-                hotkey: hotkey.to_string(),
-                direction,
-                cap_from,
-                cap_to,
-                success_rate,
-                at: Instant::now(),
-            });
-            if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
-                let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
-                self.cap_events.drain(0..drop);
-            }
+        *current = cap_to;
+        let direction = if cap_to > cap_from {
+            CapDirection::Ramp
+        } else {
+            CapDirection::Backoff
+        };
+        self.cap_events.push(CapEvent {
+            uid,
+            hotkey: hotkey.to_string(),
+            direction,
+            cap_from,
+            cap_to,
+            success_rate: rate,
+            at: now,
+        });
+        if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
+            let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
+            self.cap_events.drain(0..drop);
         }
     }
 
@@ -878,8 +857,9 @@ mod tests {
             unit_reference_cache: HashMap::new(),
             rel_speed: HashMap::new(),
             unit_own_best: HashMap::new(),
-            miner_slowdown: HashMap::new(),
             delivered_work: HashMap::new(),
+            completion_bins: HashMap::new(),
+            cap_last_adjusted: HashMap::new(),
             total_records: 0,
             persistence_path: None,
         }
@@ -997,113 +977,24 @@ mod tests {
     #[test]
     fn cap_ramp_emits_event_with_from_to_and_rate() {
         let mut tracker = test_tracker();
-        for _ in 0..CAPACITY_MIN_AT_CAP {
-            tracker.record(1, "hk", true, 1.0, true);
-        }
+        let base = Instant::now();
+        drive_rate(&mut tracker, 1, 40, 120, base);
         let events = tracker.drain_cap_events();
-        assert_eq!(events.len(), 1);
+        assert!(!events.is_empty());
         assert_eq!(events[0].direction, CapDirection::Ramp);
-        assert_eq!(events[0].cap_from, 1);
-        assert_eq!(events[0].cap_to, 2);
-        assert!((events[0].success_rate - 1.0).abs() < f64::EPSILON);
+        assert!(events[0].cap_to > events[0].cap_from);
+        assert!(events[0].success_rate >= 0.0);
     }
 
     #[test]
-    fn cap_backoff_emits_event_when_already_above_one() {
+    fn cap_backoff_emits_event_when_rate_falls() {
         let mut tracker = test_tracker();
-        for _ in 0..CAPACITY_MIN_AT_CAP {
-            tracker.record(1, "hk", true, 1.0, true);
-        }
+        let base = Instant::now();
+        let mid = drive_rate(&mut tracker, 1, 40, 300, base);
         tracker.cap_events.clear();
-        for _ in 0..CAPACITY_MIN_AT_CAP {
-            tracker.record(1, "hk", false, 1.0, true);
-        }
+        drive_rate(&mut tracker, 1, 4, 900, mid + Duration::from_secs(1));
         let events = tracker.drain_cap_events();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].direction, CapDirection::Backoff);
-        assert_eq!(events[0].cap_from, 2);
-        assert_eq!(events[0].cap_to, 1);
-    }
-
-    #[test]
-    fn cap_reflects_sustainable_concurrency_not_absolute_speed() {
-        // Two miners, one 25x slower per proof, both with perfectly stable
-        // latency. Capacity tracks each miner's own saturation, not its speed,
-        // so a slow-but-stable miner is utilized just as fully as a fast one.
-        let mut tracker = test_tracker();
-        for _ in 0..400 {
-            tracker.record(1, "fast", true, 2.0, true);
-            tracker.record(2, "slow", true, 50.0, true);
-        }
-        let caps = tracker.cap_snapshot();
-        let fast = caps.get(&1).copied().unwrap_or(0);
-        let slow = caps.get(&2).copied().unwrap_or(0);
-        assert!(
-            fast > 4 && slow > 4,
-            "both should ramp: fast={fast}, slow={slow}"
-        );
-        assert_eq!(
-            fast, slow,
-            "absolute speed must not affect capacity: fast={fast}, slow={slow}"
-        );
-    }
-
-    #[test]
-    fn sub_floor_latency_jitter_does_not_read_as_saturation() {
-        let mut tracker = test_tracker();
-        for i in 0..400 {
-            let rt = if i % 2 == 0 { 0.05 } else { 0.2 };
-            tracker.record(1, "fast", true, rt, true);
-        }
-        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
-        assert!(
-            cap > 4,
-            "jitter below the latency floor must not block ramping: cap={cap}"
-        );
-    }
-
-    #[test]
-    fn saturation_between_thresholds_holds_cap_steady() {
-        let mut tracker = test_tracker();
-        for _ in 0..300 {
-            tracker.record(1, "hk", true, 2.0, true);
-        }
-        assert!(tracker.cap_snapshot().get(&1).copied().unwrap_or(0) >= 4);
-        for _ in 0..128 {
-            tracker.record(1, "hk", true, 2.7, true);
-        }
-        let settled = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
-        tracker.cap_events.clear();
-        for _ in 0..(CAPACITY_MIN_AT_CAP * 4) {
-            tracker.record(1, "hk", true, 2.7, true);
-        }
-        assert_eq!(
-            tracker.cap_snapshot().get(&1).copied(),
-            Some(settled),
-            "saturation inside the deadband must neither ramp nor back off"
-        );
-        assert!(tracker.drain_cap_events().is_empty());
-    }
-
-    #[test]
-    fn cap_backs_off_when_own_latency_degrades() {
-        // Ramp on stable latency, then degrade it relative to the miner's own
-        // best. The self-referential saturation signal must trim the cap.
-        let mut tracker = test_tracker();
-        for _ in 0..300 {
-            tracker.record(1, "hk", true, 2.0, true);
-        }
-        let high = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
-        assert!(high >= 4, "expected ramp-up before degradation, got {high}");
-        tracker.cap_events.clear();
-        for _ in 0..CAPACITY_MIN_AT_CAP {
-            tracker.record(1, "hk", true, 100.0, true);
-        }
-        let events = tracker.drain_cap_events();
-        assert!(
-            events.iter().any(|e| e.direction == CapDirection::Backoff),
-            "degrading own latency should trigger a backoff, got {events:?}"
-        );
+        assert!(events.iter().any(|e| e.direction == CapDirection::Backoff));
     }
 
     #[test]
@@ -1217,108 +1108,136 @@ mod tests {
         assert!(count >= PERFORMANCE_MIN_SAMPLES);
     }
 
+    fn drive_rate(
+        tracker: &mut PerformanceTracker,
+        uid: u16,
+        per_sec: usize,
+        secs: u64,
+        base: Instant,
+    ) -> Instant {
+        let mut now = base;
+        for s in 0..secs {
+            for i in 0..per_sec {
+                let jitter = 0.05 + ((s as usize + i) % 40) as f64 * 0.22;
+                now = base
+                    + Duration::from_millis(s * 1000 + (i as u64 * 1000 / per_sec.max(1) as u64));
+                tracker.record_with_time(uid, "hk", true, jitter, true, "A", now);
+            }
+        }
+        now
+    }
+
+    #[test]
+    fn cap_converges_to_delivered_rate_times_budget() {
+        let mut tracker = test_tracker();
+        let base = Instant::now();
+        drive_rate(&mut tracker, 1, 40, 600, base);
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        let target = (40.0 * CAPACITY_LATENCY_BUDGET_SECS) as usize;
+        assert!(
+            cap >= target * 8 / 10 && cap <= target * 15 / 10,
+            "cap {cap} should settle near rate*budget {target}"
+        );
+    }
+
+    #[test]
+    fn cap_tracks_rate_decrease() {
+        let mut tracker = test_tracker();
+        let base = Instant::now();
+        let mid = drive_rate(&mut tracker, 1, 40, 600, base);
+        let high = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        drive_rate(&mut tracker, 1, 8, 900, mid + Duration::from_secs(1));
+        let low = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            low < high / 2,
+            "cap must follow rate down: high={high} low={low}"
+        );
+    }
+
+    #[test]
+    fn latency_noise_does_not_cause_oscillation() {
+        let mut tracker = test_tracker();
+        let base = Instant::now();
+        drive_rate(&mut tracker, 1, 40, 300, base);
+        tracker.cap_events.clear();
+        drive_rate(&mut tracker, 1, 40, 600, base + Duration::from_secs(301));
+        let events = tracker.drain_cap_events();
+        let mut reversals = 0;
+        for w in events.windows(2) {
+            if w[0].direction != w[1].direction {
+                reversals += 1;
+            }
+        }
+        assert!(
+            reversals <= events.len() / 3 + 2,
+            "steady rate must not flap: {reversals} reversals in {} events",
+            events.len()
+        );
+    }
+
     #[test]
     fn drain_cap_events_clears_buffer() {
         let mut tracker = test_tracker();
-        for _ in 0..CAPACITY_MIN_AT_CAP {
-            tracker.record(1, "hk", true, 1.0, true);
-        }
-        assert_eq!(tracker.drain_cap_events().len(), 1);
+        let base = Instant::now();
+        drive_rate(&mut tracker, 1, 40, 120, base);
+        assert!(!tracker.drain_cap_events().is_empty());
         assert!(tracker.drain_cap_events().is_empty());
     }
 
     #[test]
     fn cap_event_buffer_is_bounded() {
         let mut tracker = test_tracker();
-        for _ in 0..(MAX_BUFFERED_CAP_EVENTS + 50) {
-            for _ in 0..CAPACITY_MIN_AT_CAP {
-                tracker.record(1, "hk", true, 1.0, true);
-            }
+        let base = Instant::now();
+        for i in 0..(MAX_BUFFERED_CAP_EVENTS + 50) {
+            tracker.cap_events.push(CapEvent {
+                uid: 1,
+                hotkey: "hk".to_string(),
+                direction: CapDirection::Ramp,
+                cap_from: i,
+                cap_to: i + 1,
+                success_rate: 1.0,
+                at: base,
+            });
         }
+        drive_rate(&mut tracker, 1, 40, 60, base);
+        assert!(tracker.cap_events.len() <= MAX_BUFFERED_CAP_EVENTS + 50);
+        drive_rate(&mut tracker, 1, 40, 60, base + Duration::from_secs(61));
         assert!(tracker.cap_events.len() <= MAX_BUFFERED_CAP_EVENTS);
     }
 
     #[test]
     fn reset_uid_purges_buffered_cap_events_for_that_hotkey() {
         let mut tracker = test_tracker();
-        for _ in 0..CAPACITY_MIN_AT_CAP {
-            tracker.record(1, "hk_a", true, 1.0, true);
-        }
-        for _ in 0..CAPACITY_MIN_AT_CAP {
-            tracker.record(2, "hk_b", true, 1.0, true);
-        }
-        assert_eq!(tracker.cap_events.len(), 2);
-        tracker.reset_uid(1, "hk_a");
+        let base = Instant::now();
+        drive_rate(&mut tracker, 1, 40, 120, base);
+        drive_rate(&mut tracker, 2, 40, 120, base);
+        tracker.cap_events.iter_mut().for_each(|e| {
+            if e.uid == 2 {
+                e.hotkey = "hk_b".to_string();
+            }
+        });
+        tracker.reset_uid(1, "hk");
         let remaining = tracker.drain_cap_events();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].hotkey, "hk_b");
+        assert!(!remaining.is_empty());
+        assert!(remaining.iter().all(|e| e.hotkey == "hk_b"));
     }
 
     #[test]
     fn reset_uid_purge_is_keyed_by_hotkey_not_uid_slot() {
         let mut tracker = test_tracker();
-        for _ in 0..CAPACITY_MIN_AT_CAP {
-            tracker.record(1, "hk_old", true, 1.0, true);
-        }
-        for _ in 0..CAPACITY_MIN_AT_CAP {
-            tracker.record(1, "hk_new", true, 1.0, true);
-        }
-        assert_eq!(tracker.cap_events.len(), 2);
-        tracker.reset_uid(1, "hk_old");
+        let base = Instant::now();
+        drive_rate(&mut tracker, 1, 40, 120, base);
+        let mid = tracker.cap_events.len();
+        assert!(mid > 0);
+        drive_rate(&mut tracker, 1, 40, 120, base + Duration::from_secs(121));
+        tracker
+            .cap_events
+            .iter_mut()
+            .skip(mid)
+            .for_each(|e| e.hotkey = "hk_new".to_string());
+        tracker.reset_uid(1, "hk");
         let remaining = tracker.drain_cap_events();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].hotkey, "hk_new");
-    }
-
-    fn run_at_cap_failures(tracker: &mut PerformanceTracker, uid: u16, hotkey: &str, n: usize) {
-        for _ in 0..n {
-            tracker.record(uid, hotkey, false, 1.0, true);
-        }
-    }
-
-    #[test]
-    fn cap_ratchets_below_one_to_zero_on_sustained_failure() {
-        let mut tracker = test_tracker();
-        // Ramp to a higher cap first by running successful at-cap windows.
-        for _ in 0..(CAPACITY_MIN_AT_CAP * 3) {
-            tracker.record(1, "hk", true, 1.0, true);
-        }
-        assert!(tracker.adaptive_caps.get(&1).copied().unwrap_or(0) >= 2);
-        // Now ratchet down with failure windows until we hit 0.
-        for _ in 0..30 {
-            run_at_cap_failures(&mut tracker, 1, "hk", CAPACITY_MIN_AT_CAP);
-            if tracker.adaptive_caps.get(&1).copied() == Some(0) {
-                break;
-            }
-        }
-        assert_eq!(tracker.adaptive_caps.get(&1).copied(), Some(0));
-    }
-
-    #[test]
-    fn cap_drop_to_zero_emits_evict_event_and_pending_eviction() {
-        let mut tracker = test_tracker();
-        // Force the at-cap window full of failures; cap starts at default 1.
-        run_at_cap_failures(&mut tracker, 7, "hk_dead", CAPACITY_MIN_AT_CAP);
-        assert_eq!(tracker.adaptive_caps.get(&7).copied(), Some(0));
-        let events = tracker.drain_cap_events();
-        let evict = events
-            .iter()
-            .find(|e| matches!(e.direction, CapDirection::Evict))
-            .expect("expected Evict event");
-        assert_eq!(evict.uid, 7);
-        assert_eq!(evict.hotkey, "hk_dead");
-        assert_eq!(evict.cap_from, 1);
-        assert_eq!(evict.cap_to, 0);
-        let evicted = tracker.drain_pending_evictions();
-        assert_eq!(evicted, vec![(7, "hk_dead".to_string())]);
-    }
-
-    #[test]
-    fn drain_pending_evictions_clears() {
-        let mut tracker = test_tracker();
-        run_at_cap_failures(&mut tracker, 7, "hk_dead", CAPACITY_MIN_AT_CAP);
-        assert!(!tracker.drain_pending_evictions().is_empty());
-        assert!(tracker.drain_pending_evictions().is_empty());
+        assert!(remaining.iter().all(|e| e.hotkey == "hk_new"));
     }
 
     #[test]
@@ -1358,20 +1277,13 @@ mod tests {
     #[test]
     fn rehabilitate_restores_cap_from_zero_to_one() {
         let mut tracker = test_tracker();
-        run_at_cap_failures(&mut tracker, 7, "hk_dead", CAPACITY_MIN_AT_CAP);
-        let _ = tracker.drain_cap_events();
+        tracker.adaptive_caps.insert(7, 0);
         tracker.rehabilitate(7, "hk_dead");
         assert_eq!(tracker.adaptive_caps.get(&7).copied(), Some(1));
         let events = tracker.drain_cap_events();
         assert!(events
             .iter()
             .any(|e| matches!(e.direction, CapDirection::Rehab)));
-        // at-cap window cleared so the next probe doesn't carry old failures.
-        assert!(tracker
-            .at_cap_results
-            .get(&7)
-            .map(|r| r.is_empty())
-            .unwrap_or(true));
     }
 
     #[test]
