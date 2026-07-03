@@ -81,7 +81,7 @@ pub struct PerformanceTracker {
     rel_speed: HashMap<u16, VecDeque<(Instant, f64)>>,
     unit_own_best: HashMap<u16, HashMap<String, (Instant, f64)>>,
     miner_slowdown: HashMap<u16, VecDeque<(Instant, f64)>>,
-    delivered_work: HashMap<u16, VecDeque<(Instant, f64)>>,
+    delivered_work: HashMap<u16, VecDeque<(Instant, WorkBucket)>>,
     total_records: u64,
     persistence_path: Option<PathBuf>,
 }
@@ -115,12 +115,36 @@ fn evict_expired(window: &mut VecDeque<WindowEntry>) {
     }
 }
 
-fn push_bucketed(buckets: &mut VecDeque<(Instant, f64)>, now: Instant, amount: f64) {
+#[derive(Default, Clone, Copy)]
+pub struct WorkBucket {
+    pub credit: f64,
+    pub debit: f64,
+    pub uncredited_failures: u64,
+}
+
+fn push_bucketed(
+    buckets: &mut VecDeque<(Instant, WorkBucket)>,
+    now: Instant,
+    credit: f64,
+    debit: f64,
+    uncredited: u64,
+) {
     match buckets.back_mut() {
-        Some((start, sum)) if now.duration_since(*start).as_secs() < DELIVERED_WORK_BUCKET_SECS => {
-            *sum += amount;
+        Some((start, bucket))
+            if now.duration_since(*start).as_secs() < DELIVERED_WORK_BUCKET_SECS =>
+        {
+            bucket.credit += credit;
+            bucket.debit += debit;
+            bucket.uncredited_failures += uncredited;
         }
-        _ => buckets.push_back((now, amount)),
+        _ => buckets.push_back((
+            now,
+            WorkBucket {
+                credit,
+                debit,
+                uncredited_failures: uncredited,
+            },
+        )),
     }
     let ttl = window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS);
     while let Some((start, _)) = buckets.front() {
@@ -253,7 +277,13 @@ impl PerformanceTracker {
                     samples.push_back((now, rel));
                     evict_timed(samples, REL_SPEED_WINDOW);
 
-                    push_bucketed(self.delivered_work.entry(uid).or_default(), now, reference);
+                    push_bucketed(
+                        self.delivered_work.entry(uid).or_default(),
+                        now,
+                        reference,
+                        0.0,
+                        0,
+                    );
                 }
             }
         }
@@ -280,15 +310,27 @@ impl PerformanceTracker {
         window.push_back((now, false, PERFORMANCE_RESCHEDULE_PENALTY));
         evict_expired(window);
 
-        if !work_key.is_empty() {
-            let reference = self.cached_unit_reference(work_key);
-            if reference > 0.0 {
-                push_bucketed(
-                    self.delivered_work.entry(uid).or_default(),
-                    now,
-                    -(reference * FAILURE_DEBIT_MULTIPLIER),
-                );
-            }
+        let reference = if work_key.is_empty() {
+            0.0
+        } else {
+            self.cached_unit_reference(work_key)
+        };
+        if reference > 0.0 {
+            push_bucketed(
+                self.delivered_work.entry(uid).or_default(),
+                now,
+                0.0,
+                reference * FAILURE_DEBIT_MULTIPLIER,
+                0,
+            );
+        } else {
+            push_bucketed(
+                self.delivered_work.entry(uid).or_default(),
+                now,
+                0.0,
+                0.0,
+                1,
+            );
         }
     }
 
@@ -554,19 +596,27 @@ impl PerformanceTracker {
     }
 
     fn miner_delivered_work(&self, uid: u16) -> f64 {
+        let (credit, debit, _) = self.delivered_breakdown(uid);
+        (credit - debit).max(0.0)
+    }
+
+    pub fn delivered_breakdown(&self, uid: u16) -> (f64, f64, u64) {
         let buckets = match self.delivered_work.get(&uid) {
             Some(b) => b,
-            None => return 0.0,
+            None => return (0.0, 0.0, 0),
         };
-        let ttl = window_ttl();
-        buckets
-            .iter()
-            .filter(|(start, _)| {
-                start.elapsed() <= ttl + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS)
-            })
-            .map(|(_, sum)| *sum)
-            .sum::<f64>()
-            .max(0.0)
+        let ttl = window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS);
+        let mut credit = 0.0;
+        let mut debit = 0.0;
+        let mut uncredited = 0u64;
+        for (start, bucket) in buckets {
+            if start.elapsed() <= ttl {
+                credit += bucket.credit;
+                debit += bucket.debit;
+                uncredited += bucket.uncredited_failures;
+            }
+        }
+        (credit, debit, uncredited)
     }
 
     pub fn reset_uid(&mut self, uid: u16, hotkey: &str) {
