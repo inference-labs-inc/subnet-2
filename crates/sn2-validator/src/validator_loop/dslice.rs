@@ -52,6 +52,7 @@ pub(crate) enum PlannedPayload {
     DimSplit {
         ds: dsperse::schema::tiling::DimSplitInfo,
         indices: Vec<u32>,
+        group_plan: Option<Vec<dsperse::pipeline::GroupPayloadPart>>,
     },
 }
 
@@ -243,6 +244,29 @@ impl ValidatorLoop {
     /// onnx initializers; the activation prefix length is
     /// `params.inputs.len() - initializers.len()`. The sum of shape products
     /// over that prefix is what the witness solver enforces.
+    fn plan_group_contract(
+        work: &dsperse::pipeline::SliceWork,
+    ) -> Option<Vec<dsperse::pipeline::GroupPayloadPart>> {
+        let ds = Self::group_dim_split(work)?;
+        let circuit_path = work.circuit_path.as_ref()?;
+        let backend = dsperse::backend::jstprove::JstproveBackend::new();
+        let params = match backend.load_params(std::path::Path::new(circuit_path)) {
+            Ok(Some(p)) => p,
+            _ => return None,
+        };
+        let manifest_shapes: Vec<Vec<usize>> = work
+            .named_inputs
+            .iter()
+            .map(|(_, t)| t.shape().to_vec())
+            .collect();
+        let contract: Vec<(String, Vec<usize>)> = params
+            .inputs
+            .iter()
+            .map(|io| (io.name.clone(), io.shape.clone()))
+            .collect();
+        dsperse::pipeline::plan_group_payload(&manifest_shapes, ds, &contract).ok()
+    }
+
     fn bundle_dispatch_mismatch(
         work: &dsperse::pipeline::SliceWork,
     ) -> Option<BundleDispatchMismatch> {
@@ -581,6 +605,11 @@ impl ValidatorLoop {
 
             for work in kept {
                 let group_ds = Self::group_dim_split(&work).cloned();
+                let group_contract_plan = if group_ds.is_some() {
+                    Self::plan_group_contract(&work)
+                } else {
+                    None
+                };
                 let mut input_tensor = work.input;
                 let named_inputs = work.named_inputs;
 
@@ -626,6 +655,15 @@ impl ValidatorLoop {
                         self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
                         continue;
                     }
+                    let group_plan = match group_contract_plan.clone() {
+                        Some(payload_plan) => payload_plan,
+                        None => {
+                            warn!(run_uid = %run_uid, slice = %work.slice_id, "group contract planning failed");
+                            self.run_manager.mark_slice_failed(run_uid, &work.slice_id);
+                            self.run_manager.note_slice_skipped(run_uid, &work.slice_id);
+                            continue;
+                        }
+                    };
                     let count = sampled.len();
                     let mut indices: Vec<u32> = sampled.into_iter().map(|i| i as u32).collect();
                     indices.sort_unstable();
@@ -633,6 +671,7 @@ impl ValidatorLoop {
                         PlannedPayload::DimSplit {
                             ds: ds.clone(),
                             indices,
+                            group_plan: Some(group_plan),
                         },
                         count,
                     )
@@ -861,53 +900,31 @@ impl ValidatorLoop {
                         .collect(),
                 )
             }
-            PlannedPayload::DimSplit { ds, indices } if ds.weight_name.is_none() => {
+            PlannedPayload::DimSplit {
+                ds,
+                indices,
+                group_plan: Some(payload_plan),
+            } if ds.weight_name.is_none() => {
                 let wanted: std::collections::HashSet<usize> =
                     indices.iter().map(|&i| i as usize).collect();
-                let circuit_path = plan.circuit_path.as_deref()?;
-                let backend = dsperse::backend::jstprove::JstproveBackend::new();
-                let params = match backend.load_params(std::path::Path::new(circuit_path)) {
-                    Ok(Some(p)) => p,
-                    _ => {
+                let tensors: Vec<&ndarray::ArrayD<f64>> =
+                    named_inputs.iter().map(|(_, t)| t).collect();
+                let payloads = match dsperse::pipeline::dim_split_group_payloads_planned(
+                    &tensors,
+                    payload_plan,
+                    ds,
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
                         warn!(
                             run_uid = %plan.run_uid,
                             slice = %plan.slice_id,
-                            "group payload construction missing circuit params"
+                            error = %e,
+                            "group payload construction failed"
                         );
                         return None;
                     }
                 };
-                let manifest_shapes: Vec<Vec<usize>> = named_inputs
-                    .iter()
-                    .map(|(_, t)| t.shape().to_vec())
-                    .collect();
-                let contract: Vec<(String, Vec<usize>)> = params
-                    .inputs
-                    .iter()
-                    .map(|io| (io.name.clone(), io.shape.clone()))
-                    .collect();
-                let tensors: Vec<&ndarray::ArrayD<f64>> =
-                    named_inputs.iter().map(|(_, t)| t).collect();
-                let payloads =
-                    match dsperse::pipeline::plan_group_payload(&manifest_shapes, ds, &contract)
-                        .and_then(|payload_plan| {
-                            dsperse::pipeline::dim_split_group_payloads_planned(
-                                &tensors,
-                                &payload_plan,
-                                ds,
-                            )
-                        }) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            warn!(
-                                run_uid = %plan.run_uid,
-                                slice = %plan.slice_id,
-                                error = %e,
-                                "group payload construction failed"
-                            );
-                            return None;
-                        }
-                    };
                 Some(
                     payloads
                         .into_iter()
@@ -936,7 +953,7 @@ impl ValidatorLoop {
                         .collect(),
                 )
             }
-            PlannedPayload::DimSplit { ds, indices } => {
+            PlannedPayload::DimSplit { ds, indices, .. } => {
                 let wanted: std::collections::HashSet<usize> =
                     indices.iter().map(|&i| i as usize).collect();
                 let prepared = Self::dim_split_payloads(
@@ -1288,6 +1305,7 @@ impl ValidatorLoop {
             PlannedPayload::DimSplit {
                 ds: ds.clone(),
                 indices,
+                group_plan: None,
             },
             count,
         ))
