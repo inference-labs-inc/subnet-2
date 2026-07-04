@@ -248,11 +248,24 @@ impl ValidatorLoop {
         work: &dsperse::pipeline::SliceWork,
     ) -> Option<Vec<dsperse::pipeline::GroupPayloadPart>> {
         let ds = Self::group_dim_split(work)?;
-        let circuit_path = work.circuit_path.as_ref()?;
+        let circuit_path = match work.circuit_path.as_ref() {
+            Some(p) => p,
+            None => {
+                warn!(slice = %work.slice_id, "group contract planning: no circuit path");
+                return None;
+            }
+        };
         let backend = dsperse::backend::jstprove::JstproveBackend::new();
         let params = match backend.load_params(std::path::Path::new(circuit_path)) {
             Ok(Some(p)) => p,
-            _ => return None,
+            Ok(None) => {
+                warn!(slice = %work.slice_id, circuit_path, "group contract planning: bundle has no params");
+                return None;
+            }
+            Err(e) => {
+                warn!(slice = %work.slice_id, circuit_path, error = %e, "group contract planning: params load failed");
+                return None;
+            }
         };
         let manifest_shapes: Vec<Vec<usize>> = work
             .named_inputs
@@ -264,7 +277,13 @@ impl ValidatorLoop {
             .iter()
             .map(|io| (io.name.clone(), io.shape.clone()))
             .collect();
-        dsperse::pipeline::plan_group_payload(&manifest_shapes, ds, &contract).ok()
+        match dsperse::pipeline::plan_group_payload(&manifest_shapes, ds, &contract) {
+            Ok(plan) => Some(plan),
+            Err(e) => {
+                warn!(slice = %work.slice_id, error = %e, "group contract planning: contract match failed");
+                None
+            }
+        }
     }
 
     fn bundle_dispatch_mismatch(
