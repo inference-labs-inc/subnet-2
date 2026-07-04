@@ -21,6 +21,10 @@ use crate::protocol::{StoreResponse, VerifyAndStoreRequest, VerifyRequest, Verif
 use crate::store::{StoredTile, TileStore};
 
 /// Evict cached bundles whose canonical path starts with the given prefix.
+pub fn evict_idle_bundles(ttl_secs: u64) -> usize {
+    BACKEND.evict_idle(std::time::Duration::from_secs(ttl_secs))
+}
+
 pub fn evict_circuit_cache(path_prefix: &str) {
     EVICTION_GENERATION.fetch_add(1, Ordering::SeqCst);
     BACKEND.evict_cache_by_prefix(std::path::Path::new(path_prefix));

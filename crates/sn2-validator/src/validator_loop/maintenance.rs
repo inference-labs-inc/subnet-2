@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use btlightning::QuicAxonInfo;
+use sn2_types::BUNDLE_CACHE_IDLE_TTL_SECS;
 use sn2_types::*;
 use tracing::{debug, info, warn};
 
@@ -43,6 +44,14 @@ impl ValidatorLoop {
             if now.duration_since(self.timings.miner_registry_refresh) > Duration::from_secs(60) {
                 self.refresh_miner_connections().await;
                 self.timings.miner_registry_refresh = now;
+            }
+
+            if now.duration_since(self.timings.bundle_cache_sweep) > Duration::from_secs(60) {
+                let evicted = sn2_verify::evict_idle_bundles(BUNDLE_CACHE_IDLE_TTL_SECS);
+                if evicted > 0 {
+                    debug!(evicted, "evicted idle compiled bundles");
+                }
+                self.timings.bundle_cache_sweep = now;
             }
 
             if now.duration_since(self.timings.cooldown_prune) > Duration::from_secs(60) {
