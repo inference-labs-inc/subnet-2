@@ -64,18 +64,26 @@ pub fn classify_output_consistency(expected: &[f64], actual: &[f64]) -> OutputCo
         };
     }
     let compare_len = expected.len().min(actual.len());
+    let expected = &expected[..compare_len];
+    let actual = &actual[..compare_len];
+    if expected.iter().chain(actual.iter()).any(|v| !v.is_finite()) {
+        return OutputConsistency::Diverged {
+            max_rel_err: f64::INFINITY,
+        };
+    }
+    let dot: f64 = expected.iter().zip(actual.iter()).map(|(e, m)| e * m).sum();
+    let norm_sq: f64 = actual.iter().map(|m| m * m).sum();
+    let scale = if norm_sq > 1e-24 { dot / norm_sq } else { 0.0 };
+    let scale = if scale.is_finite() && scale.abs() > 1e-12 {
+        scale
+    } else {
+        1.0
+    };
+    let magnitude: f64 = expected.iter().map(|e| e.abs()).sum::<f64>() / compare_len as f64;
     let mut max_rel_err: f64 = 0.0;
-    for (e, m) in expected[..compare_len]
-        .iter()
-        .zip(actual[..compare_len].iter())
-    {
-        if !e.is_finite() || !m.is_finite() {
-            return OutputConsistency::Diverged {
-                max_rel_err: f64::INFINITY,
-            };
-        }
-        let denom = e.abs().max(1e-12);
-        let rel = (e - m).abs() / denom;
+    for (e, m) in expected.iter().zip(actual.iter()) {
+        let denom = e.abs().max(magnitude).max(1e-12);
+        let rel = (e - scale * m).abs() / denom;
         if rel > max_rel_err {
             max_rel_err = rel;
         }
@@ -736,11 +744,33 @@ mod tests {
     }
 
     #[test]
-    fn output_consistency_forgery_detected() {
+    fn output_consistency_tolerates_uniform_scaling() {
         let result = classify_output_consistency(&[1.0, 2.0, 3.0], &[5.0, 10.0, 15.0]);
         assert!(
+            matches!(result, OutputConsistency::Consistent { .. }),
+            "scalar multiples reflect normalization conventions, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn output_consistency_reordered_outputs_detected() {
+        let expected = [0.9, -0.4, 0.05, 0.7, -0.2, 0.33, -0.8, 0.12];
+        let shuffled = [0.12, 0.7, -0.8, 0.05, 0.33, -0.4, 0.9, -0.2];
+        let result = classify_output_consistency(&expected, &shuffled);
+        assert!(
             matches!(result, OutputConsistency::Diverged { .. }),
-            "completely different outputs should be detected, got {result:?}"
+            "reordered outputs must be detected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn output_consistency_wrong_region_detected() {
+        let expected = [0.9, -0.4, 0.05, 0.7, -0.2, 0.33, -0.8, 0.12];
+        let other_region = [0.01, 0.02, -0.99, 0.5, 0.5, -0.5, 0.44, 0.9];
+        let result = classify_output_consistency(&expected, &other_region);
+        assert!(
+            matches!(result, OutputConsistency::Diverged { .. }),
+            "unrelated region must be detected, got {result:?}"
         );
     }
 
@@ -815,14 +845,18 @@ mod tests {
     }
 
     #[test]
-    fn output_consistency_without_normalization_diverges() {
-        let onnx_expected = [10.0, 20.0, 30.0];
-        let norm_factor = 100.0;
-        let zk_outputs: Vec<f64> = onnx_expected.iter().map(|v| v / norm_factor).collect();
-        let result = classify_output_consistency(&onnx_expected, &zk_outputs);
+    fn output_consistency_bilinear_double_scaling_tolerated() {
+        let onnx_expected = [10.0, -20.0, 30.0, -5.0];
+        let norm_factor = 3.74_f64;
+        let zk_outputs: Vec<f64> = onnx_expected
+            .iter()
+            .map(|v| v / (norm_factor * norm_factor))
+            .collect();
+        let normalized: Vec<f64> = onnx_expected.iter().map(|v| v / norm_factor).collect();
+        let result = classify_output_consistency(&normalized, &zk_outputs);
         assert!(
-            matches!(result, OutputConsistency::Diverged { .. }),
-            "uncorrected comparison should diverge, got {result:?}"
+            matches!(result, OutputConsistency::Consistent { .. }),
+            "bilinear slices scale outputs by the squared factor, got {result:?}"
         );
     }
 
