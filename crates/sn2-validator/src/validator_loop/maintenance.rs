@@ -49,7 +49,7 @@ impl ValidatorLoop {
             if now.duration_since(self.timings.bundle_cache_sweep) > Duration::from_secs(60) {
                 let evicted = sn2_verify::evict_idle_bundles(BUNDLE_CACHE_IDLE_TTL_SECS);
                 if evicted > 0 {
-                    debug!(evicted, "evicted idle compiled bundles");
+                    info!(evicted, "evicted idle compiled bundles");
                 }
                 self.timings.bundle_cache_sweep = now;
             }
