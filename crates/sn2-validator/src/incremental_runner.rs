@@ -24,6 +24,38 @@ pub enum OutputConsistency {
 
 const OUTPUT_CONSISTENCY_THRESHOLD: f64 = 0.10;
 
+pub fn group_expected_region(
+    arrays: &[ndarray::ArrayD<f64>],
+    concat_axis: usize,
+    num_groups: usize,
+    tile_idx: u32,
+) -> Option<Vec<f64>> {
+    if num_groups == 0 {
+        return None;
+    }
+    let mut flat = Vec::new();
+    for arr in arrays {
+        if concat_axis >= arr.ndim() || arr.shape()[concat_axis] % num_groups != 0 {
+            return None;
+        }
+        let extent = arr.shape()[concat_axis] / num_groups;
+        let start = tile_idx as usize * extent;
+        if start + extent > arr.shape()[concat_axis] {
+            return None;
+        }
+        let region = arr.slice_axis(
+            ndarray::Axis(concat_axis),
+            ndarray::Slice::from(start..start + extent),
+        );
+        flat.extend(region.as_standard_layout().iter());
+    }
+    if flat.is_empty() {
+        None
+    } else {
+        Some(flat)
+    }
+}
+
 pub fn classify_output_consistency(expected: &[f64], actual: &[f64]) -> OutputConsistency {
     if expected.is_empty() || actual.is_empty() {
         return OutputConsistency::LengthMismatch {
@@ -183,6 +215,7 @@ impl IncrementalRunManager {
         miner_outputs: &[f64],
         input_norm_factor: Option<f64>,
         circuit_output_names: &[String],
+        group_tile: Option<(&dsperse::schema::tiling::DimSplitInfo, u32)>,
     ) -> OutputConsistency {
         let run = match self.runs.get(run_uid) {
             Some(r) => r,
@@ -192,9 +225,21 @@ impl IncrementalRunManager {
             Some(c) => c,
             None => return OutputConsistency::NoExpected,
         };
-        let expected = match combined.outputs_for_names(circuit_output_names) {
-            Some(e) => e,
-            None => return OutputConsistency::NoExpected,
+        let expected = match group_tile {
+            Some((ds, tile_idx)) => {
+                let arrays = match combined.output_arrays_for_names(circuit_output_names) {
+                    Some(a) => a,
+                    None => return OutputConsistency::NoExpected,
+                };
+                match group_expected_region(&arrays, ds.concat_axis, ds.num_groups, tile_idx) {
+                    Some(flat) => flat,
+                    None => return OutputConsistency::NoExpected,
+                }
+            }
+            None => match combined.outputs_for_names(circuit_output_names) {
+                Some(e) => e,
+                None => return OutputConsistency::NoExpected,
+            },
         };
         match input_norm_factor {
             Some(k) if k > 1.0 => {
@@ -203,6 +248,23 @@ impl IncrementalRunManager {
             }
             _ => classify_output_consistency(&expected, miner_outputs),
         }
+    }
+
+    pub fn group_dim_split_meta(
+        &self,
+        run_uid: &str,
+        slice_id: &str,
+    ) -> Option<dsperse::schema::tiling::DimSplitInfo> {
+        let run = self.runs.get(run_uid)?;
+        let combined = run.combined.as_ref()?;
+        let index: usize = slice_id.strip_prefix("slice_")?.parse().ok()?;
+        combined
+            .model_meta()
+            .slices
+            .iter()
+            .find(|s| s.index == index)
+            .and_then(|s| s.dim_split.clone())
+            .filter(|ds| ds.weight_name.is_none())
     }
 
     pub fn is_evicted(&self, run_uid: &str) -> bool {
@@ -567,6 +629,48 @@ impl IncrementalRunManager {
 mod tests {
     use super::*;
 
+    #[test]
+    fn group_region_slices_each_output_along_concat_axis() {
+        let a = ndarray::ArrayD::from_shape_vec(
+            ndarray::IxDyn(&[2, 4, 3]),
+            (0..24).map(|v| v as f64).collect(),
+        )
+        .unwrap();
+        let b = ndarray::ArrayD::from_shape_vec(
+            ndarray::IxDyn(&[1, 4, 2]),
+            (100..108).map(|v| v as f64).collect(),
+        )
+        .unwrap();
+        let region = group_expected_region(&[a.clone(), b.clone()], 1, 2, 1).unwrap();
+        assert_eq!(region.len(), 12 + 4);
+        assert_eq!(region[0], 6.0);
+        assert_eq!(region[12], 104.0);
+        let full: Vec<f64> = group_expected_region(&[a.clone(), b.clone()], 1, 2, 0)
+            .unwrap()
+            .into_iter()
+            .chain(group_expected_region(&[a, b], 1, 2, 1).unwrap())
+            .collect();
+        assert_eq!(full.len(), 32);
+    }
+
+    #[test]
+    fn group_region_rejects_unmappable_shapes() {
+        let a = ndarray::ArrayD::from_shape_vec(
+            ndarray::IxDyn(&[2, 5, 3]),
+            (0..30).map(|v| v as f64).collect(),
+        )
+        .unwrap();
+        assert!(group_expected_region(std::slice::from_ref(&a), 1, 2, 0).is_none());
+        assert!(group_expected_region(std::slice::from_ref(&a), 9, 2, 0).is_none());
+        assert!(group_expected_region(&[a], 1, 0, 0).is_none());
+        let b = ndarray::ArrayD::from_shape_vec(
+            ndarray::IxDyn(&[2, 4, 3]),
+            (0..24).map(|v| v as f64).collect(),
+        )
+        .unwrap();
+        assert!(group_expected_region(&[b], 1, 2, 5).is_none());
+    }
+
     fn make_manager_with_run(run_uid: &str) -> IncrementalRunManager {
         let mut mgr = IncrementalRunManager::new();
         mgr.start_run(
@@ -583,14 +687,14 @@ mod tests {
     #[test]
     fn output_consistency_no_run() {
         let mgr = IncrementalRunManager::new();
-        let result = mgr.verify_output_consistency("nonexistent", &[1.0, 2.0], None, &[]);
+        let result = mgr.verify_output_consistency("nonexistent", &[1.0, 2.0], None, &[], None);
         assert!(matches!(result, OutputConsistency::NoRun));
     }
 
     #[test]
     fn output_consistency_no_combined() {
         let mgr = make_manager_with_run("run-1");
-        let result = mgr.verify_output_consistency("run-1", &[1.0, 2.0], None, &[]);
+        let result = mgr.verify_output_consistency("run-1", &[1.0, 2.0], None, &[], None);
         assert!(matches!(result, OutputConsistency::NoExpected));
     }
 

@@ -257,47 +257,62 @@ impl ValidatorLoop {
                         .dslice_input_scales
                         .get(&(run_uid.clone(), slice_num.clone()))
                         .copied();
-                    match self.run_manager.verify_output_consistency(
-                        &run_uid,
-                        &miner_outputs,
-                        norm_factor,
-                        &circuit_output_names,
-                    ) {
-                        OutputConsistency::Consistent { max_rel_err } => {
-                            tracing::debug!(
-                                uid = response.uid,
-                                run_uid = %run_uid,
-                                slice = %slice_num,
-                                max_rel_err,
-                                "output consistency verified"
-                            );
+                    let group_ds = tile_idx
+                        .and_then(|_| self.run_manager.group_dim_split_meta(&run_uid, &slice_num));
+                    let group_tile = match (group_ds.as_ref(), tile_idx) {
+                        (Some(ds), Some(idx)) => Some((ds, idx)),
+                        _ => None,
+                    };
+                    if tile_idx.is_some() && group_tile.is_none() {
+                        tracing::debug!(
+                            uid = response.uid,
+                            slice = %slice_num,
+                            "skipping output consistency: tile without group region mapping"
+                        );
+                    } else {
+                        match self.run_manager.verify_output_consistency(
+                            &run_uid,
+                            &miner_outputs,
+                            norm_factor,
+                            &circuit_output_names,
+                            group_tile,
+                        ) {
+                            OutputConsistency::Consistent { max_rel_err } => {
+                                tracing::debug!(
+                                    uid = response.uid,
+                                    run_uid = %run_uid,
+                                    slice = %slice_num,
+                                    max_rel_err,
+                                    "output consistency verified"
+                                );
+                            }
+                            OutputConsistency::Diverged { max_rel_err } => {
+                                let zk_sample: Vec<f64> =
+                                    miner_outputs.iter().copied().take(5).collect();
+                                warn!(
+                                    uid = response.uid,
+                                    run_uid = %run_uid,
+                                    slice = %slice_num,
+                                    max_rel_err,
+                                    norm_factor = ?norm_factor,
+                                    num_outputs = circuit_output_names.len(),
+                                    zk_len = miner_outputs.len(),
+                                    zk_sample = ?zk_sample,
+                                    "output consistency check failed: miner outputs diverge"
+                                );
+                            }
+                            OutputConsistency::LengthMismatch { expected, actual } => {
+                                warn!(
+                                    uid = response.uid,
+                                    run_uid = %run_uid,
+                                    slice = %slice_num,
+                                    expected,
+                                    actual,
+                                    "output consistency check failed: empty outputs"
+                                );
+                            }
+                            OutputConsistency::NoExpected | OutputConsistency::NoRun => {}
                         }
-                        OutputConsistency::Diverged { max_rel_err } => {
-                            let zk_sample: Vec<f64> =
-                                miner_outputs.iter().copied().take(5).collect();
-                            warn!(
-                                uid = response.uid,
-                                run_uid = %run_uid,
-                                slice = %slice_num,
-                                max_rel_err,
-                                norm_factor = ?norm_factor,
-                                num_outputs = circuit_output_names.len(),
-                                zk_len = miner_outputs.len(),
-                                zk_sample = ?zk_sample,
-                                "output consistency check failed: miner outputs diverge"
-                            );
-                        }
-                        OutputConsistency::LengthMismatch { expected, actual } => {
-                            warn!(
-                                uid = response.uid,
-                                run_uid = %run_uid,
-                                slice = %slice_num,
-                                expected,
-                                actual,
-                                "output consistency check failed: empty outputs"
-                            );
-                        }
-                        OutputConsistency::NoExpected | OutputConsistency::NoRun => {}
                     }
                 }
             }
