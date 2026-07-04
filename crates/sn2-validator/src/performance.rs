@@ -6,10 +6,10 @@ use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
     BLOCK_TIME_SECS, CAPACITY_ADJUST_INTERVAL_SECS, CAPACITY_LATENCY_BUDGET_SECS,
     CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RATE_BIN_SECS, CAPACITY_RATE_FILTER_BINS,
-    CAPACITY_RATE_WINDOW_BINS, CAPACITY_STEP_FRACTION, CAPACITY_UNIT_REFERENCE_PERCENTILE,
-    CIRCUIT_TIMEOUT_SECONDS, DELIVERED_WORK_BUCKET_SECS, FAILURE_DEBIT_MULTIPLIER,
-    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE,
-    VERIFICATION_WINDOW_BLOCKS,
+    CAPACITY_RATE_WINDOW_BINS, CAPACITY_SATURATED_UTILIZATION, CAPACITY_STEP_FRACTION,
+    CAPACITY_UNIT_REFERENCE_PERCENTILE, CIRCUIT_TIMEOUT_SECONDS, DELIVERED_WORK_BUCKET_SECS,
+    FAILURE_DEBIT_MULTIPLIER, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY,
+    PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::warn;
 
@@ -701,6 +701,24 @@ impl PerformanceTracker {
         best
     }
 
+    fn median_service_time(&self, uid: u16) -> f64 {
+        let window = match self.windows.get(&uid) {
+            Some(w) if !w.is_empty() => w,
+            _ => return 0.0,
+        };
+        let mut times: Vec<f64> = window
+            .iter()
+            .filter(|(_, success, _)| *success)
+            .map(|(_, _, t)| *t)
+            .filter(|t| *t > 0.0)
+            .collect();
+        if times.is_empty() {
+            return 0.0;
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        times[times.len() / 2]
+    }
+
     fn update_adaptive_cap(&mut self, uid: u16, hotkey: &str, now: Instant) {
         let due = self
             .cap_last_adjusted
@@ -710,20 +728,27 @@ impl PerformanceTracker {
         if !due {
             return;
         }
+        if cap_ramp_blocked_by_memory_pressure() {
+            return;
+        }
         self.cap_last_adjusted.insert(uid, now);
         let rate = self.delivered_rate_estimate(uid, now);
         let target = (rate * CAPACITY_LATENCY_BUDGET_SECS).max(1.0);
+        let service_time = self.median_service_time(uid);
 
         let current = self.adaptive_caps.entry(uid).or_insert(1);
         let cap_from = *current;
         let step = ((cap_from as f64 * CAPACITY_STEP_FRACTION).ceil() as usize).max(1);
+        let cap_limited = if service_time > 0.0 && rate > 0.0 {
+            rate * service_time >= cap_from as f64 * CAPACITY_SATURATED_UTILIZATION
+        } else {
+            false
+        };
         let target_cap = target.round() as usize;
-        let cap_to = if target_cap > cap_from {
-            if cap_ramp_blocked_by_memory_pressure() {
-                cap_from
-            } else {
-                (cap_from + step).min(target_cap)
-            }
+        let cap_to = if cap_limited {
+            cap_from + step
+        } else if target_cap > cap_from {
+            (cap_from + step).min(target_cap)
         } else if target_cap < cap_from {
             cap_from.saturating_sub(step).max(target_cap).max(1)
         } else {
@@ -1118,13 +1143,68 @@ mod tests {
         let mut now = base;
         for s in 0..secs {
             for i in 0..per_sec {
-                let jitter = 0.05 + ((s as usize + i) % 40) as f64 * 0.22;
+                let jitter = 0.005 + ((s as usize + i) % 40) as f64 * 0.001;
                 now = base
                     + Duration::from_millis(s * 1000 + (i as u64 * 1000 / per_sec.max(1) as u64));
                 tracker.record_with_time(uid, "hk", true, jitter, true, "A", now);
             }
         }
         now
+    }
+
+    fn drive_closed_loop(
+        tracker: &mut PerformanceTracker,
+        uid: u16,
+        service_time: f64,
+        demand_per_sec: usize,
+        secs: u64,
+        base: Instant,
+    ) -> Instant {
+        let mut now = base;
+        for s in 0..secs {
+            let cap = tracker
+                .cap_snapshot()
+                .get(&uid)
+                .copied()
+                .unwrap_or(1)
+                .max(1);
+            let deliverable = ((cap as f64 / service_time) as usize)
+                .min(demand_per_sec)
+                .max(1);
+            for i in 0..deliverable {
+                now =
+                    base + Duration::from_millis(s * 1000 + (i as u64 * 1000 / deliverable as u64));
+                tracker.record_with_time(uid, "hk", true, service_time, true, "A", now);
+            }
+        }
+        now
+    }
+
+    #[test]
+    fn closed_loop_escapes_floor_when_rate_is_cap_limited() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 1);
+        let base = Instant::now();
+        drive_closed_loop(&mut tracker, 1, 0.5, 1000, 900, base);
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            cap >= 20,
+            "cap-limited miner must ramp out of the floor: cap={cap}"
+        );
+    }
+
+    #[test]
+    fn closed_loop_settles_at_demand_when_supply_limited() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 64);
+        let base = Instant::now();
+        drive_closed_loop(&mut tracker, 1, 0.05, 8, 900, base);
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            cap < 32,
+            "supply-limited miner must not hold inflated cap: cap={cap}"
+        );
+        assert!(cap >= 1, "cap never drops below floor");
     }
 
     #[test]
