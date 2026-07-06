@@ -4,7 +4,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
-    BLOCK_TIME_SECS, CAPACITY_ADJUST_INTERVAL_SECS, CAPACITY_LATENCY_BUDGET_SECS,
+    BLOCK_TIME_SECS, CAPACITY_ADJUST_INTERVAL_SECS, CAPACITY_COMMIT_KEEP_FRACTION,
+    CAPACITY_LATENCY_BUDGET_SECS, CAPACITY_PROBE_AT_CAP_FRACTION, CAPACITY_PROBE_COOLDOWN_SECS,
+    CAPACITY_PROBE_EVAL_SECS, CAPACITY_PROBE_RATE_GAIN, CAPACITY_PROBE_STEP_FRACTION,
     CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RATE_BIN_SECS, CAPACITY_RATE_FILTER_BINS,
     CAPACITY_RATE_WINDOW_BINS, CAPACITY_STEP_FRACTION, CAPACITY_TARGET_DEADBAND,
     CAPACITY_TARGET_HEADROOM, CAPACITY_UNIT_REFERENCE_PERCENTILE, CIRCUIT_TIMEOUT_SECONDS,
@@ -72,6 +74,19 @@ pub struct CapEvent {
     pub at: Instant,
 }
 
+/// Rate-plateau probe lifecycle for one miner. A probe raises the cap above
+/// the estimator's equilibrium and keeps it only if the delivered rate
+/// follows; a plateau reverts the raise and rests the miner.
+#[derive(Clone, Copy)]
+enum ProbeState {
+    Cooldown(Instant),
+    Active {
+        cap_before: usize,
+        rate_before: f64,
+        started: Instant,
+    },
+}
+
 pub struct PerformanceTracker {
     windows: HashMap<u16, VecDeque<WindowEntry>>,
     adaptive_caps: HashMap<u16, usize>,
@@ -90,6 +105,10 @@ pub struct PerformanceTracker {
     min_service: HashMap<u16, VecDeque<(Instant, f64)>>,
     delivered_work: HashMap<u16, VecDeque<(Instant, WorkBucket)>>,
     completion_bins: HashMap<u16, VecDeque<(Instant, u32)>>,
+    probe_state: HashMap<u16, ProbeState>,
+    // Probe-committed (cap, rate at commit): a measured knee floor, held
+    // while the delivered rate stays near the rate that justified it.
+    probe_committed: HashMap<u16, (usize, f64)>,
     cap_last_adjusted: HashMap<u16, Instant>,
     total_records: u64,
     persistence_path: Option<PathBuf>,
@@ -109,6 +128,7 @@ const UNIT_REFERENCE_MIN_SAMPLES: usize = 8;
 /// start floor, used before any work anywhere has been priced.
 const DELIVERED_WORK_FALLBACK_FLOOR: f64 = 1.0;
 const REL_SPEED_WINDOW: usize = 64;
+const AT_CAP_WINDOW: usize = 64;
 
 const RESTORED_CAP_MAX: usize = 32;
 
@@ -202,6 +222,8 @@ impl PerformanceTracker {
             min_service: HashMap::new(),
             delivered_work: HashMap::new(),
             completion_bins: HashMap::new(),
+            probe_state: HashMap::new(),
+            probe_committed: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
             total_records: 0,
             persistence_path: Some(path),
@@ -319,10 +341,14 @@ impl PerformanceTracker {
             while bins.len() > CAPACITY_RATE_FILTER_BINS {
                 bins.pop_front();
             }
+            let results = self.at_cap_results.entry(uid).or_default();
+            results.push_back(was_at_capacity);
+            while results.len() > AT_CAP_WINDOW {
+                results.pop_front();
+            }
             self.at_cap_last_touched.insert(uid, now);
             self.update_adaptive_cap(uid, hotkey, now);
         }
-        let _ = was_at_capacity;
     }
 
     #[cfg(test)]
@@ -664,6 +690,8 @@ impl PerformanceTracker {
         self.min_service.remove(&uid);
         self.delivered_work.remove(&uid);
         self.completion_bins.remove(&uid);
+        self.probe_state.remove(&uid);
+        self.probe_committed.remove(&uid);
         self.cap_last_adjusted.remove(&uid);
         self.pending_evictions.retain(|(u, _)| *u != uid);
         self.cap_events.retain(|e| e.hotkey != hotkey);
@@ -794,6 +822,56 @@ impl PerformanceTracker {
         times[times.len() / 2]
     }
 
+    /// Delivered completion rate measured over whole bins since `since`,
+    /// anchored on the first bin inside the window so both sides of a probe
+    /// comparison are bin-aligned and neither is diluted by a partial bin.
+    fn rate_since(&self, uid: u16, since: Instant, now: Instant) -> f64 {
+        let bins = match self.completion_bins.get(&uid) {
+            Some(b) if !b.is_empty() => b,
+            _ => return 0.0,
+        };
+        let mut anchor: Option<Instant> = None;
+        let mut sum = 0u32;
+        for (start, count) in bins {
+            if *start >= since {
+                if anchor.is_none() {
+                    anchor = Some(*start);
+                }
+                sum += count;
+            }
+        }
+        match anchor {
+            Some(a) => {
+                let elapsed = now.duration_since(a).as_secs_f64();
+                if elapsed < 1.0 {
+                    0.0
+                } else {
+                    sum as f64 / elapsed
+                }
+            }
+            None => 0.0,
+        }
+    }
+
+    /// Fraction of this miner's recent completions whose dispatch filled the
+    /// last free slot under its cap. Dispatch refills freed slots as they
+    /// open, so a miner pinned at its cap accumulates at-capacity refills
+    /// while a supply-limited one almost never does.
+    fn at_cap_fraction(&self, uid: u16) -> f64 {
+        match self.at_cap_results.get(&uid) {
+            Some(r) if r.len() >= 8 => r.iter().filter(|b| **b).count() as f64 / r.len() as f64,
+            _ => 0.0,
+        }
+    }
+
+    fn push_cap_event(&mut self, event: CapEvent) {
+        self.cap_events.push(event);
+        if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
+            let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
+            self.cap_events.drain(0..drop);
+        }
+    }
+
     fn update_adaptive_cap(&mut self, uid: u16, hotkey: &str, now: Instant) {
         let due = self
             .cap_last_adjusted
@@ -810,6 +888,51 @@ impl PerformanceTracker {
         let rate = self.delivered_rate_estimate(uid, now);
         let uncongested = self.uncongested_service_time(uid);
 
+        // An active probe holds all other adjustment: the raised cap is a
+        // measurement in progress. On expiry, commit if the delivered rate
+        // followed the cap (below the knee), else revert and rest.
+        if let Some(ProbeState::Active {
+            cap_before,
+            rate_before,
+            started,
+        }) = self.probe_state.get(&uid).copied()
+        {
+            if now.duration_since(started).as_secs() < CAPACITY_PROBE_EVAL_SECS {
+                return;
+            }
+            let probe_rate = self.rate_since(uid, started, now);
+            let cap_now = self.adaptive_caps.get(&uid).copied().unwrap_or(1);
+            if rate_before > 0.0 && probe_rate >= rate_before * (1.0 + CAPACITY_PROBE_RATE_GAIN) {
+                // The rate followed: the knee is above this cap. Commit it
+                // as a measured floor and stay eligible to probe again
+                // immediately, climbing until the rate stops following.
+                self.probe_committed.insert(uid, (cap_now, probe_rate));
+                self.probe_state.remove(&uid);
+            } else {
+                // Plateau: the extra depth bought no throughput. Revert
+                // (never above where a concurrent pressure trim left the
+                // cap) and rest before probing this miner again.
+                let revert_to = cap_before.min(cap_now).max(1);
+                if revert_to != cap_now {
+                    self.adaptive_caps.insert(uid, revert_to);
+                    self.push_cap_event(CapEvent {
+                        uid,
+                        hotkey: hotkey.to_string(),
+                        direction: CapDirection::Backoff,
+                        cap_from: cap_now,
+                        cap_to: revert_to,
+                        success_rate: probe_rate,
+                        at: now,
+                    });
+                }
+                self.probe_state.insert(
+                    uid,
+                    ProbeState::Cooldown(now + Duration::from_secs(CAPACITY_PROBE_COOLDOWN_SECS)),
+                );
+            }
+            return;
+        }
+
         // Little's law at the throughput knee: sustaining the delivered rate
         // requires rate x uncongested-service-time units in flight. Below the
         // knee the delivered rate rises with the cap, so the target is
@@ -818,16 +941,29 @@ impl PerformanceTracker {
         // hold, so the target pins. Self-raising holds only while the
         // headroom exceeds the workload's typical-to-minimum service spread
         // (see CAPACITY_TARGET_HEADROOM); the estimate here is a minimum by
-        // construction. The latency-budget term keeps a queueing floor for
-        // sub-budget service times, where a depth of rate x budget costs no
-        // measurable latency.
+        // construction, which is why probing above the estimate exists at
+        // all. The latency-budget term keeps a queueing floor for sub-budget
+        // service times, where a depth of rate x budget costs no measurable
+        // latency.
         let knee_depth = rate * uncongested;
-        let target = (knee_depth * CAPACITY_TARGET_HEADROOM)
+        let floor = (knee_depth * CAPACITY_TARGET_HEADROOM)
             .max(rate * CAPACITY_LATENCY_BUDGET_SECS)
             .max(1.0);
 
-        let current = self.adaptive_caps.entry(uid).or_insert(1);
-        let cap_from = *current;
+        // A probe-committed cap is a measured knee floor: hold it while the
+        // delivered rate stays near the rate that earned it, release it when
+        // demand genuinely falls so the cap can track back down.
+        let committed_floor = match self.probe_committed.get(&uid).copied() {
+            Some((cap, r)) if rate >= r * CAPACITY_COMMIT_KEEP_FRACTION => cap as f64,
+            Some(_) => {
+                self.probe_committed.remove(&uid);
+                0.0
+            }
+            None => 0.0,
+        };
+        let target = floor.max(committed_floor);
+
+        let cap_from = self.adaptive_caps.get(&uid).copied().unwrap_or(1);
         let step = ((cap_from as f64 * CAPACITY_STEP_FRACTION).ceil() as usize).max(1);
         // Ceil, not round: when the self-raising ratio is modest (headroom
         // barely above the service spread), rounding truncates the target
@@ -841,27 +977,67 @@ impl PerformanceTracker {
         } else {
             cap_from
         };
-        if cap_to == cap_from {
+        if cap_to != cap_from {
+            self.adaptive_caps.insert(uid, cap_to);
+            let direction = if cap_to > cap_from {
+                CapDirection::Ramp
+            } else {
+                CapDirection::Backoff
+            };
+            self.push_cap_event(CapEvent {
+                uid,
+                hotkey: hotkey.to_string(),
+                direction,
+                cap_from,
+                cap_to,
+                success_rate: rate,
+                at: now,
+            });
             return;
         }
-        *current = cap_to;
-        let direction = if cap_to > cap_from {
-            CapDirection::Ramp
-        } else {
-            CapDirection::Backoff
+
+        // Equilibrium: the estimator has nothing more to say, but it is a
+        // latency-derived inference, and a miner can be far more capable
+        // than any inference admits. If dispatch is pinning this miner at
+        // its cap, measure instead of inferring: raise the cap and keep it
+        // only if the delivered rate follows.
+        let cooldown_over = match self.probe_state.get(&uid) {
+            Some(ProbeState::Cooldown(until)) => now >= *until,
+            Some(ProbeState::Active { .. }) => false,
+            None => true,
         };
-        self.cap_events.push(CapEvent {
-            uid,
-            hotkey: hotkey.to_string(),
-            direction,
-            cap_from,
-            cap_to,
-            success_rate: rate,
-            at: now,
-        });
-        if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
-            let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
-            self.cap_events.drain(0..drop);
+        if cooldown_over
+            && rate > 0.0
+            && self.at_cap_fraction(uid) >= CAPACITY_PROBE_AT_CAP_FRACTION
+        {
+            let baseline_since = now.checked_sub(Duration::from_secs(CAPACITY_PROBE_EVAL_SECS));
+            let baseline = match baseline_since {
+                Some(since) => self.rate_since(uid, since, now),
+                None => 0.0,
+            };
+            if baseline > 0.0 {
+                let raise =
+                    ((cap_from as f64 * CAPACITY_PROBE_STEP_FRACTION).ceil() as usize).max(2);
+                let cap_to = cap_from + raise;
+                self.adaptive_caps.insert(uid, cap_to);
+                self.probe_state.insert(
+                    uid,
+                    ProbeState::Active {
+                        cap_before: cap_from,
+                        rate_before: baseline,
+                        started: now,
+                    },
+                );
+                self.push_cap_event(CapEvent {
+                    uid,
+                    hotkey: hotkey.to_string(),
+                    direction: CapDirection::Ramp,
+                    cap_from,
+                    cap_to,
+                    success_rate: baseline,
+                    at: now,
+                });
+            }
         }
     }
 
@@ -973,6 +1149,8 @@ mod tests {
             min_service: HashMap::new(),
             delivered_work: HashMap::new(),
             completion_bins: HashMap::new(),
+            probe_state: HashMap::new(),
+            probe_committed: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
             total_records: 0,
             persistence_path: None,
@@ -1475,6 +1653,85 @@ mod tests {
         assert!(
             cap <= 75,
             "cap {cap} must stay bounded by headroom x own-best depth"
+        );
+    }
+
+    #[test]
+    fn probe_discovers_knee_beyond_latency_estimate() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 1);
+        let base = Instant::now();
+        // 5x spread: fastest completion 0.5s, typical 2.5s. The estimator
+        // floor is then 0.6x the sustaining depth at every cap, so the
+        // static target alone stalls far below the knee of 100. Probing
+        // must climb by measurement: raise, observe the rate follow,
+        // commit, repeat — and stop when the rate plateaus at the knee.
+        drive_spread_closed_loop(&mut tracker, 1, 0.5, 2.5, 100, 3600, base);
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            cap >= 85,
+            "cap {cap} must climb by rate-plateau probing to the knee depth of 100"
+        );
+        assert!(
+            cap <= 160,
+            "cap {cap} must stop climbing once the delivered rate plateaus"
+        );
+    }
+
+    #[test]
+    fn probe_reverts_when_rate_does_not_follow() {
+        let mut tracker = test_tracker();
+        let base = Instant::now();
+        // Open loop: delivery is fixed at 40/s regardless of the cap, so
+        // every probe sees a plateau and must revert to the estimator
+        // equilibrium instead of ratcheting upward.
+        drive_rate(&mut tracker, 1, 40, 1800, base);
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        let target = (40.0 * CAPACITY_LATENCY_BUDGET_SECS) as usize;
+        assert!(
+            cap <= target * 15 / 10,
+            "cap {cap} must not ratchet on reverted probes (equilibrium {target})"
+        );
+    }
+
+    #[test]
+    fn probe_does_not_fire_when_cap_is_not_binding() {
+        let mut tracker = test_tracker();
+        let base = Instant::now();
+        // Same open-loop delivery but never dispatched at capacity: the
+        // miner is supply-limited, so there is nothing to discover and no
+        // probe should raise the cap above the estimator target.
+        for s in 0..1800u64 {
+            for i in 0..40u64 {
+                let jitter = 0.005 + ((s + i) % 40) as f64 * 0.001;
+                let now = base + Duration::from_millis(s * 1000 + i * 25);
+                tracker.record_with_time(1, "hk", true, jitter, false, "A", now);
+            }
+        }
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        let target = (40.0 * CAPACITY_LATENCY_BUDGET_SECS).ceil() as usize;
+        assert!(
+            cap <= target,
+            "cap {cap} must hold at the estimator target {target} without probing"
+        );
+    }
+
+    #[test]
+    fn committed_cap_releases_when_rate_falls() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 1);
+        let base = Instant::now();
+        let mid = drive_spread_closed_loop(&mut tracker, 1, 0.5, 2.5, 100, 3600, base);
+        let discovered = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(discovered >= 85, "precondition: knee discovered");
+        // Demand collapses to 2/s: once the old rate ages out of the
+        // filter horizon, the committed floor must release and the cap
+        // track demand back down rather than holding the stale knee.
+        drive_rate(&mut tracker, 1, 2, 1200, mid + Duration::from_secs(1));
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            cap < 20,
+            "cap {cap} must release the committed floor when the rate that earned it is gone"
         );
     }
 

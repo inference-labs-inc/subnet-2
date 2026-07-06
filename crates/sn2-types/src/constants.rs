@@ -74,6 +74,27 @@ pub const CAPACITY_TARGET_HEADROOM: f64 = 3.0;
 /// the cap flaps one step up and down around the target every adjustment
 /// interval, spamming capacity events at equilibrium.
 pub const CAPACITY_TARGET_DEADBAND: f64 = 0.25;
+/// Fraction by which a rate-plateau probe raises the cap above equilibrium.
+pub const CAPACITY_PROBE_STEP_FRACTION: f64 = 0.25;
+/// How long a probe holds the raised cap while measuring whether the
+/// delivered rate follows. Spans several rate bins so the comparison is
+/// bin-aligned on both sides.
+pub const CAPACITY_PROBE_EVAL_SECS: u64 = 120;
+/// Minimum fractional delivered-rate gain required to commit a probe. Set
+/// well below the probe step so a genuine below-knee response commits
+/// despite measurement noise, and well above zero so a plateau reverts.
+pub const CAPACITY_PROBE_RATE_GAIN: f64 = 0.10;
+/// Rest period after a reverted probe before probing the same miner again.
+pub const CAPACITY_PROBE_COOLDOWN_SECS: u64 = 600;
+/// Fraction of recent completions dispatched at the cap for the cap to
+/// count as binding. Dispatch refills freed slots in small batches and
+/// marks only the batch's last slot as at-capacity, so a saturated miner
+/// shows a modest fraction, while a supply-limited one shows near zero.
+pub const CAPACITY_PROBE_AT_CAP_FRACTION: f64 = 0.10;
+/// A probe-committed cap is held only while the delivered rate stays above
+/// this fraction of the rate measured at commit; below it the commitment
+/// is released and the cap tracks demand back down.
+pub const CAPACITY_COMMIT_KEEP_FRACTION: f64 = 0.7;
 pub const BUNDLE_CACHE_IDLE_TTL_SECS: u64 = 120;
 pub const CAPACITY_ADJUST_INTERVAL_SECS: u64 = 15;
 pub const CAPACITY_UNIT_REFERENCE_PERCENTILE: f64 = 0.1;
