@@ -815,9 +815,12 @@ impl PerformanceTracker {
         // knee the delivered rate rises with the cap, so the target is
         // self-raising and doubles as the probe out of a cap-limited
         // measurement; at the knee the rate plateaus while own-best latencies
-        // hold, so the target pins. The latency-budget term keeps a queueing
-        // floor for sub-budget service times, where a depth of rate x budget
-        // costs no measurable latency.
+        // hold, so the target pins. Self-raising holds only while the
+        // headroom exceeds the workload's typical-to-minimum service spread
+        // (see CAPACITY_TARGET_HEADROOM); the estimate here is a minimum by
+        // construction. The latency-budget term keeps a queueing floor for
+        // sub-budget service times, where a depth of rate x budget costs no
+        // measurable latency.
         let knee_depth = rate * uncongested;
         let target = (knee_depth * CAPACITY_TARGET_HEADROOM)
             .max(rate * CAPACITY_LATENCY_BUDGET_SECS)
@@ -826,7 +829,11 @@ impl PerformanceTracker {
         let current = self.adaptive_caps.entry(uid).or_insert(1);
         let cap_from = *current;
         let step = ((cap_from as f64 * CAPACITY_STEP_FRACTION).ceil() as usize).max(1);
-        let target_cap = target.round() as usize;
+        // Ceil, not round: when the self-raising ratio is modest (headroom
+        // barely above the service spread), rounding truncates the target
+        // back onto the current cap at small values and the ramp never
+        // leaves the floor.
+        let target_cap = target.ceil() as usize;
         let cap_to = if target_cap > cap_from {
             (cap_from + step).min(target_cap)
         } else if (cap_from as f64) > target * (1.0 + CAPACITY_TARGET_DEADBAND) {
@@ -1382,8 +1389,8 @@ mod tests {
         drive_queued_closed_loop(&mut tracker, 1, 0.5, 10, 1800, base);
         let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
         assert!(
-            (12..=25).contains(&cap),
-            "cap {cap} must pin near the knee depth of 10, neither collapsing nor running away"
+            (24..=45).contains(&cap),
+            "cap {cap} must pin at headroom x knee depth of 10, neither collapsing nor running away"
         );
     }
 
@@ -1399,8 +1406,75 @@ mod tests {
         drive_queued_closed_loop(&mut tracker, 1, 5.0, 100, 3600, base);
         let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
         assert!(
-            (120..=200).contains(&cap),
+            (240..=400).contains(&cap),
             "cap {cap} must sustain the knee depth of 100, not track the budget floor of 15"
+        );
+    }
+
+    /// Closed loop where per-unit latency varies around its mean while
+    /// throughput is set by the mean: completions cycle through a fast, a
+    /// typical, and a slow latency whose average is `mean_service` and whose
+    /// minimum is `min_service`. Own-best latches onto the fast completions,
+    /// so the knee estimate underestimates the sustaining depth by the
+    /// spread ratio — the regime where a too-small headroom stalls the ramp
+    /// at any cap.
+    #[allow(clippy::too_many_arguments)]
+    fn drive_spread_closed_loop(
+        tracker: &mut PerformanceTracker,
+        uid: u16,
+        min_service: f64,
+        mean_service: f64,
+        concurrency: usize,
+        secs: u64,
+        base: Instant,
+    ) -> Instant {
+        let mut now = base;
+        let mut carry = 0.0_f64;
+        let mut completions = 0u64;
+        let pattern = [min_service, mean_service, 2.0 * mean_service - min_service];
+        for s in 0..secs {
+            let cap = tracker
+                .cap_snapshot()
+                .get(&uid)
+                .copied()
+                .unwrap_or(1)
+                .max(1);
+            let in_flight = cap as f64;
+            let overcommit = (in_flight / concurrency as f64).max(1.0);
+            let deliver_f = in_flight.min(concurrency as f64) / mean_service + carry;
+            let deliverable = deliver_f as usize;
+            carry = deliver_f - deliverable as f64;
+            for i in 0..deliverable {
+                let observed = pattern[(completions % 3) as usize] * overcommit;
+                completions += 1;
+                now =
+                    base + Duration::from_millis(s * 1000 + (i as u64 * 1000 / deliverable as u64));
+                tracker.record_with_time(uid, "hk", true, observed, true, "A", now);
+            }
+        }
+        now
+    }
+
+    #[test]
+    fn latency_spread_does_not_stall_ramp() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 1);
+        let base = Instant::now();
+        // Fastest completion at 1s, typical at 2.5s: the knee estimate reads
+        // 0.4x the sustaining depth. Below the knee the target is then
+        // headroom x 0.4 x cap, so any headroom under 2.5 freezes the ramp
+        // at whatever cap it starts from — the fleet-wide stall observed on
+        // 14.12.10. Concurrency 40 at mean 2.5s puts the knee at 40 in
+        // flight; the cap must climb out and sustain it, bounded above.
+        drive_spread_closed_loop(&mut tracker, 1, 1.0, 2.5, 40, 2400, base);
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            cap >= 40,
+            "cap {cap} must escape the spread stall and sustain the knee depth of 40"
+        );
+        assert!(
+            cap <= 75,
+            "cap {cap} must stay bounded by headroom x own-best depth"
         );
     }
 

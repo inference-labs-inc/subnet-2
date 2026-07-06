@@ -56,10 +56,20 @@ pub const CAPACITY_RATE_WINDOW_BINS: usize = 6;
 pub const CAPACITY_RATE_FILTER_BINS: usize = 40;
 pub const CAPACITY_STEP_FRACTION: f64 = 0.10;
 /// Multiple of the knee in-flight depth (delivered rate x uncongested
-/// service time) the cap targets. Above 1.0 so the miner always has queued
-/// work to start the moment a unit completes; the excess is bounded so
-/// measured latencies stay near the uncongested floor.
-pub const CAPACITY_TARGET_HEADROOM: f64 = 1.5;
+/// service time) the cap targets.
+///
+/// This must exceed the workload's typical-to-minimum service time spread,
+/// not merely 1.0. The knee estimator uses per-unit own-best latencies so
+/// congestion cannot inflate it, but that makes it a minimum: below the
+/// knee the delivered rate is cap / typical_service, so the target is
+/// headroom x (min_service / typical_service) x cap, and the self-raising
+/// ramp stalls at any cap unless headroom x min_service > typical_service.
+/// Network jitter and host load routinely put the fastest completion at a
+/// third of the typical one, which froze fleet-wide caps at 1.5. Overshoot
+/// past the knee stays bounded at headroom x knee because own-best cannot
+/// rise under congestion, so a larger headroom costs bounded queueing
+/// latency rather than reintroducing unbounded ramp.
+pub const CAPACITY_TARGET_HEADROOM: f64 = 3.0;
 /// Fractional band above the target inside which the cap holds. Without it
 /// the cap flaps one step up and down around the target every adjustment
 /// interval, spamming capacity events at equilibrium.
