@@ -393,31 +393,35 @@ impl ValidatorLoop {
             }
         }
 
-        // Transport-gated failures never left the validator: the miner saw no
-        // request, so there is no performance to debit. Everything that did
-        // reach (or could have reached) the miner still counts against it.
-        if !transport_failure {
-            let failed_circuit_id = match &retry_payload {
-                RetryPayload::DSlice(d) => Some(d.circuit.id.as_str()),
-                RetryPayload::Rwr(r) => Some(r.circuit_id.as_str()),
-                RetryPayload::None => None,
-            };
-            let slice_part = slice_num
-                .as_deref()
-                .map(|s| s.strip_prefix("slice_").unwrap_or(s));
-            let work_key = Self::build_work_key(failed_circuit_id, slice_part);
-            self.performance_tracker
-                .record_reschedule_keyed(uid, &work_key);
+        // A non-delivery is a non-delivery. The validator does not model why a
+        // valid proof failed to arrive: a dead connection, a refused stream, a
+        // timeout, and a bad witness are all the same absence of service and
+        // all debit the failed work. Classification gates only dispatch
+        // efficiency (the reconnect hold above), never scoring, so a miner
+        // cannot launder shed load into an exempt failure class by resetting
+        // streams before the payload is read. Honest restarts are made
+        // painless by recency decay of delivered work, not by exempting the
+        // failures a restart produces.
+        let failed_circuit_id = match &retry_payload {
+            RetryPayload::DSlice(d) => Some(d.circuit.id.as_str()),
+            RetryPayload::Rwr(r) => Some(r.circuit_id.as_str()),
+            RetryPayload::None => None,
+        };
+        let slice_part = slice_num
+            .as_deref()
+            .map(|s| s.strip_prefix("slice_").unwrap_or(s));
+        let work_key = Self::build_work_key(failed_circuit_id, slice_part);
+        self.performance_tracker
+            .record_reschedule_keyed(uid, &work_key);
 
-            self.score_manager.update_score(
-                uid,
-                false,
-                0.0,
-                VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
-                0.0,
-                self.config.metagraph.n,
-            );
-        }
+        self.score_manager.update_score(
+            uid,
+            false,
+            0.0,
+            VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
+            0.0,
+            self.config.metagraph.n,
+        );
         metrics::record_response(false, 0.0);
 
         let max_retries = match (&request_type, &retry_payload) {
@@ -462,25 +466,14 @@ impl ValidatorLoop {
     }
 }
 
-/// Whether a query failure was raised by the validator-side transport before
-/// any request reached the miner: dial and handshake failures, reconnect
-/// gating (in backoff, contention, attempts exhausted), a missing
-/// authenticated route, an uninitialized endpoint, or a stream that could not
-/// be opened. All of these surface as btlightning `Connection` or `Handshake`
-/// errors under the "QUIC query" context added in `query_miner_quic`, so the
-/// anyhow chain starts with one of the two prefixes below. Failures that can
-/// postdate delivery keep other variants — query timeouts are `transport
-/// error`, mid-stream aborts are `stream error`, and miner-reported errors
-/// are `handler error` with the miner's text *after* the prefix — so a miner
-/// cannot spoof this classification, and genuine miner faults are never
-/// misattributed to the transport.
-///
-/// A restarting miner makes these failures unavoidable: its old connection is
-/// dead for up to the QUIC idle timeout while its hotkey remains in the
-/// authenticated set, so every dispatch in that window fails inside the
-/// transport. Treating those as miner faults previously cost the miner a
-/// full-tempo dispatch cooldown (which also zeroed its weight through the
-/// skiplist path) plus delivered-work debits for requests it never received.
+/// Whether a query failure was raised by the validator-side transport: dial
+/// and handshake failures, reconnect gating, a missing authenticated route,
+/// an uninitialized endpoint, or a stream that could not be opened. Used only
+/// to place the hotkey on a short dispatch hold so a demonstrably unreachable
+/// peer is not re-hammered every cycle; it does not affect scoring. Every
+/// non-delivery debits the failed work regardless of this classification, so
+/// a miner cannot avoid a debit by failing early, and the hold is a pure
+/// efficiency measure rather than a punishment or an exemption.
 fn is_transport_dispatch_failure(reason: &str) -> bool {
     reason.starts_with("QUIC query: connection error:")
         || reason.starts_with("QUIC query: handshake error:")
