@@ -42,7 +42,15 @@ pub const CAPACITY_RATE_BIN_SECS: u64 = 15;
 pub const CAPACITY_RATE_WINDOW_BINS: usize = 6;
 pub const CAPACITY_RATE_FILTER_BINS: usize = 40;
 pub const CAPACITY_STEP_FRACTION: f64 = 0.10;
-pub const CAPACITY_SATURATED_UTILIZATION: f64 = 0.5;
+/// Multiple of the knee in-flight depth (delivered rate x uncongested
+/// service time) the cap targets. Above 1.0 so the miner always has queued
+/// work to start the moment a unit completes; the excess is bounded so
+/// measured latencies stay near the uncongested floor.
+pub const CAPACITY_TARGET_HEADROOM: f64 = 1.5;
+/// Fractional band above the target inside which the cap holds. Without it
+/// the cap flaps one step up and down around the target every adjustment
+/// interval, spamming capacity events at equilibrium.
+pub const CAPACITY_TARGET_DEADBAND: f64 = 0.25;
 pub const BUNDLE_CACHE_IDLE_TTL_SECS: u64 = 120;
 pub const CAPACITY_ADJUST_INTERVAL_SECS: u64 = 15;
 pub const CAPACITY_UNIT_REFERENCE_PERCENTILE: f64 = 0.1;

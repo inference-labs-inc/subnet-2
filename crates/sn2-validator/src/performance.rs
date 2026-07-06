@@ -6,10 +6,10 @@ use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
     BLOCK_TIME_SECS, CAPACITY_ADJUST_INTERVAL_SECS, CAPACITY_LATENCY_BUDGET_SECS,
     CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RATE_BIN_SECS, CAPACITY_RATE_FILTER_BINS,
-    CAPACITY_RATE_WINDOW_BINS, CAPACITY_SATURATED_UTILIZATION, CAPACITY_STEP_FRACTION,
-    CAPACITY_UNIT_REFERENCE_PERCENTILE, CIRCUIT_TIMEOUT_SECONDS, DELIVERED_WORK_BUCKET_SECS,
-    FAILURE_DEBIT_MULTIPLIER, PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY,
-    PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
+    CAPACITY_RATE_WINDOW_BINS, CAPACITY_STEP_FRACTION, CAPACITY_TARGET_DEADBAND,
+    CAPACITY_TARGET_HEADROOM, CAPACITY_UNIT_REFERENCE_PERCENTILE, CIRCUIT_TIMEOUT_SECONDS,
+    DELIVERED_WORK_BUCKET_SECS, FAILURE_DEBIT_MULTIPLIER, PERFORMANCE_MIN_SAMPLES,
+    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::warn;
 
@@ -82,6 +82,10 @@ pub struct PerformanceTracker {
     unit_reference_cache: HashMap<String, (u64, f64)>,
     rel_speed: HashMap<u16, VecDeque<(Instant, f64)>>,
     unit_own_best: HashMap<u16, HashMap<String, (Instant, f64)>>,
+    // Per-completion samples of the miner's own-best latency for the unit
+    // just completed. The median over this window is the miner's uncongested
+    // service time weighted by the work mix it is actually being sent.
+    min_service: HashMap<u16, VecDeque<(Instant, f64)>>,
     delivered_work: HashMap<u16, VecDeque<(Instant, WorkBucket)>>,
     completion_bins: HashMap<u16, VecDeque<(Instant, u32)>>,
     cap_last_adjusted: HashMap<u16, Instant>,
@@ -184,6 +188,7 @@ impl PerformanceTracker {
             unit_reference_cache: HashMap::new(),
             rel_speed: HashMap::new(),
             unit_own_best: HashMap::new(),
+            min_service: HashMap::new(),
             delivered_work: HashMap::new(),
             completion_bins: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
@@ -260,6 +265,12 @@ impl PerformanceTracker {
                 *best_entry = (now, response_time);
             }
             let own_best = best_entry.1;
+
+            if own_best > 0.0 {
+                let min_samples = self.min_service.entry(uid).or_default();
+                min_samples.push_back((now, own_best));
+                evict_timed(min_samples, REL_SPEED_WINDOW);
+            }
 
             if own_best > 0.0 {
                 let reference = self.cached_unit_reference(work_key);
@@ -623,6 +634,7 @@ impl PerformanceTracker {
         self.at_cap_last_touched.remove(&uid);
         self.rel_speed.remove(&uid);
         self.unit_own_best.remove(&uid);
+        self.min_service.remove(&uid);
         self.delivered_work.remove(&uid);
         self.completion_bins.remove(&uid);
         self.cap_last_adjusted.remove(&uid);
@@ -701,16 +713,23 @@ impl PerformanceTracker {
         best
     }
 
-    fn median_service_time(&self, uid: u16) -> f64 {
-        let window = match self.windows.get(&uid) {
-            Some(w) if !w.is_empty() => w,
+    /// The miner's uncongested service time, weighted by the work mix it is
+    /// actually completing: the median of per-completion own-best latencies.
+    /// Window medians cannot serve here — observed response times include
+    /// miner-side queueing, so by Little's law `rate x median` tracks
+    /// whatever depth the validator itself keeps in flight and would confirm
+    /// any cap. Own-best latencies are pinned per unit for a full window and
+    /// do not inflate while the validator is congesting the miner.
+    fn uncongested_service_time(&self, uid: u16) -> f64 {
+        let samples = match self.min_service.get(&uid) {
+            Some(s) if !s.is_empty() => s,
             _ => return 0.0,
         };
-        let mut times: Vec<f64> = window
+        let ttl = window_ttl();
+        let mut times: Vec<f64> = samples
             .iter()
-            .filter(|(_, success, _)| *success)
-            .map(|(_, _, t)| *t)
-            .filter(|t| *t > 0.0)
+            .filter(|(ts, _)| ts.elapsed() <= ttl)
+            .map(|(_, t)| *t)
             .collect();
         if times.is_empty() {
             return 0.0;
@@ -733,23 +752,28 @@ impl PerformanceTracker {
         }
         self.cap_last_adjusted.insert(uid, now);
         let rate = self.delivered_rate_estimate(uid, now);
-        let target = (rate * CAPACITY_LATENCY_BUDGET_SECS).max(1.0);
-        let service_time = self.median_service_time(uid);
+        let uncongested = self.uncongested_service_time(uid);
+
+        // Little's law at the throughput knee: sustaining the delivered rate
+        // requires rate x uncongested-service-time units in flight. Below the
+        // knee the delivered rate rises with the cap, so the target is
+        // self-raising and doubles as the probe out of a cap-limited
+        // measurement; at the knee the rate plateaus while own-best latencies
+        // hold, so the target pins. The latency-budget term keeps a queueing
+        // floor for sub-budget service times, where a depth of rate x budget
+        // costs no measurable latency.
+        let knee_depth = rate * uncongested;
+        let target = (knee_depth * CAPACITY_TARGET_HEADROOM)
+            .max(rate * CAPACITY_LATENCY_BUDGET_SECS)
+            .max(1.0);
 
         let current = self.adaptive_caps.entry(uid).or_insert(1);
         let cap_from = *current;
         let step = ((cap_from as f64 * CAPACITY_STEP_FRACTION).ceil() as usize).max(1);
-        let cap_limited = if service_time > 0.0 && rate > 0.0 {
-            rate * service_time >= cap_from as f64 * CAPACITY_SATURATED_UTILIZATION
-        } else {
-            false
-        };
         let target_cap = target.round() as usize;
-        let cap_to = if cap_limited {
-            cap_from + step
-        } else if target_cap > cap_from {
+        let cap_to = if target_cap > cap_from {
             (cap_from + step).min(target_cap)
-        } else if target_cap < cap_from {
+        } else if (cap_from as f64) > target * (1.0 + CAPACITY_TARGET_DEADBAND) {
             cap_from.saturating_sub(step).max(target_cap).max(1)
         } else {
             cap_from
@@ -882,6 +906,7 @@ mod tests {
             unit_reference_cache: HashMap::new(),
             rel_speed: HashMap::new(),
             unit_own_best: HashMap::new(),
+            min_service: HashMap::new(),
             delivered_work: HashMap::new(),
             completion_bins: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
@@ -1178,6 +1203,94 @@ mod tests {
             }
         }
         now
+    }
+
+    /// Closed loop with miner-side queueing, the regime the constant-latency
+    /// drivers cannot express: the validator keeps the cap full, the miner
+    /// completes at most `concurrency / base_service` units per second, and
+    /// observed latency inflates by the overcommit ratio per Little's law.
+    /// Response times above the knee therefore rise with the cap itself,
+    /// which is exactly the feedback that made a window-median utilization
+    /// signal self-confirming.
+    fn drive_queued_closed_loop(
+        tracker: &mut PerformanceTracker,
+        uid: u16,
+        base_service: f64,
+        concurrency: usize,
+        secs: u64,
+        base: Instant,
+    ) -> Instant {
+        let mut now = base;
+        let mut carry = 0.0_f64;
+        for s in 0..secs {
+            let cap = tracker
+                .cap_snapshot()
+                .get(&uid)
+                .copied()
+                .unwrap_or(1)
+                .max(1);
+            let in_flight = cap as f64;
+            let overcommit = (in_flight / concurrency as f64).max(1.0);
+            let observed = base_service * overcommit;
+            let deliver_f = in_flight.min(concurrency as f64) / base_service + carry;
+            let deliverable = deliver_f as usize;
+            carry = deliver_f - deliverable as f64;
+            for i in 0..deliverable {
+                now =
+                    base + Duration::from_millis(s * 1000 + (i as u64 * 1000 / deliverable as u64));
+                tracker.record_with_time(uid, "hk", true, observed, true, "A", now);
+            }
+        }
+        now
+    }
+
+    #[test]
+    fn saturated_miner_cap_pins_at_knee_without_runaway() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 1);
+        let base = Instant::now();
+        // Knee depth = concurrency = 10. The cap must settle at
+        // headroom x knee and stay there, not ramp without bound on the
+        // congestion-inflated utilization signal.
+        drive_queued_closed_loop(&mut tracker, 1, 0.5, 10, 1800, base);
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            (12..=25).contains(&cap),
+            "cap {cap} must pin near the knee depth of 10, neither collapsing nor running away"
+        );
+    }
+
+    #[test]
+    fn slow_service_cap_holds_knee_depth_not_budget_floor() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 1);
+        let base = Instant::now();
+        // Five-second units at concurrency 100: mu = 20/s, knee depth = 100.
+        // A fixed latency-budget target of rate x budget = 15 sits an order
+        // of magnitude below the sustaining depth; tracking it starves the
+        // miner. The cap must hold the knee, bounded above by headroom.
+        drive_queued_closed_loop(&mut tracker, 1, 5.0, 100, 3600, base);
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            (120..=200).contains(&cap),
+            "cap {cap} must sustain the knee depth of 100, not track the budget floor of 15"
+        );
+    }
+
+    #[test]
+    fn saturated_steady_state_emits_no_capacity_events() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 1);
+        let base = Instant::now();
+        let mid = drive_queued_closed_loop(&mut tracker, 1, 0.5, 10, 1200, base);
+        tracker.cap_events.clear();
+        drive_queued_closed_loop(&mut tracker, 1, 0.5, 10, 600, mid + Duration::from_secs(1));
+        let events = tracker.drain_cap_events();
+        assert!(
+            events.len() <= 2,
+            "converged steady state must be silent, got {} events",
+            events.len()
+        );
     }
 
     #[test]
