@@ -66,6 +66,9 @@ impl ValidatorLoop {
                         return false;
                     }
                 }
+                if self.rsv.is_skiplisted(&n.hotkey, current_block) {
+                    return false;
+                }
                 if !self.hotkey_reachable(&n.hotkey) {
                     return false;
                 }

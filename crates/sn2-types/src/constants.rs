@@ -32,6 +32,13 @@ pub const MAX_CONCURRENT_BENCHMARK_RUNS: usize = 8;
 pub const EXTRA_RUN_MIN_AVAIL_MEM_RATIO: f64 = 0.35;
 pub const DSLICE_QUEUE_LOW_WATERMARK_MAX: usize = 4096;
 
+/// Tempos a hotkey is skiplisted when the validator finds it not connected.
+/// A miner that cannot be reached delivers no proof, and the validator does
+/// not inspect why the connection is gone: an honest restart and a deliberate
+/// disconnect are scored identically, ignored and weighted zero for one epoch,
+/// then retried. One tempo is a Bittensor epoch.
+pub const DISCONNECT_SKIPLIST_TEMPOS: u64 = 1;
+
 pub const VERIFICATION_SAMPLES_PER_TEMPO: u64 = 20;
 pub const VERIFICATION_STRIKES_REQUIRED: u32 = 1;
 pub const VERIFICATION_STRIKES_WINDOW_BLOCKS: u64 = 7200;

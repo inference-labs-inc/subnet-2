@@ -386,14 +386,21 @@ impl ValidatorLoop {
             }
         }
 
-        // A non-delivery is a non-delivery. The validator never models why a
-        // valid proof failed to arrive: a dead connection, a refused stream, a
-        // timeout, and a bad witness are the same absence of service and debit
-        // the failed work identically. There is no failure taxonomy, no hold,
-        // and no exempt class to shape traffic into, so a miner cannot lower
-        // its debit exposure by choosing how a request fails. Honest restarts
-        // are absorbed by recency decay of delivered work, not by inspecting
-        // the failure.
+        // A miner the validator cannot reach delivered no proof, and the reason
+        // it is unreachable is exactly what a miner would lie about, so the
+        // validator does not ask. Any connection-level failure skiplists the
+        // hotkey for one epoch: ignored and weighted zero, then retried. This
+        // is the punishing counterpart to a debit, not an exemption, so a miner
+        // that drops its connection to shed load is scored worse, never better.
+        if is_disconnect_failure(reason) && !hotkey.is_empty() {
+            self.rsv
+                .skiplist_disconnect(hotkey, self.current_block, self.blocks_per_tempo);
+        }
+
+        // Every non-delivery also debits the failed work. Reaching the miner and
+        // getting a bad or absent proof is priced the same as any other failure;
+        // classification here only adds the epoch skiplist above for the not
+        // connected case, and never removes a debit.
         let failed_circuit_id = match &retry_payload {
             RetryPayload::DSlice(d) => Some(d.circuit.id.as_str()),
             RetryPayload::Rwr(r) => Some(r.circuit_id.as_str()),
@@ -454,6 +461,57 @@ impl ValidatorLoop {
                 }),
             )
             .await;
+        }
+    }
+}
+
+/// Whether a query failure means the validator could not reach the miner: the
+/// connection could not be established, maintained, or opened, or the handshake
+/// found no route. These surface under the "QUIC query" context as `connection`
+/// or `handshake` errors. A query timeout and a handler error both mean the
+/// miner was reached and answered, so they are not disconnects; they debit but
+/// do not skiplist. The validator's own uninitialized endpoint is excluded so a
+/// validator-side startup hiccup cannot skiplist the whole fleet at once.
+fn is_disconnect_failure(reason: &str) -> bool {
+    if reason.contains("QUIC endpoint not initialized") {
+        return false;
+    }
+    reason.starts_with("QUIC query: connection error:")
+        || reason.starts_with("QUIC query: handshake error:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_disconnect_failure;
+
+    #[test]
+    fn unreachable_miner_failures_are_disconnects() {
+        for msg in [
+            "QUIC query: connection error: Reconnection attempts exhausted for 1.2.3.4:8080 (5/5), awaiting registry refresh",
+            "QUIC query: connection error: Reconnection to 1.2.3.4:8080 in backoff, next retry in 900ms",
+            "QUIC query: connection error: Failed to open stream: connection lost",
+            "QUIC query: handshake error: no authenticated route for hk1 at 1.2.3.4:8080",
+        ] {
+            assert!(is_disconnect_failure(msg), "must be a disconnect: {msg}");
+        }
+    }
+
+    #[test]
+    fn reached_miner_failures_are_not_disconnects() {
+        // The miner answered (handler error, spoof attempt) or was reached and
+        // ran out of time (timeout); none of these are a lost connection, and a
+        // validator-side endpoint fault must never skiplist a miner.
+        for msg in [
+            "handler error: request processing failed",
+            "QUIC query: transport error: query timed out",
+            "verification failed",
+            "QUIC query: connection error: QUIC endpoint not initialized",
+            "handler error: QUIC query: connection error: Reconnection to 1.2.3.4:8080 in backoff",
+        ] {
+            assert!(
+                !is_disconnect_failure(msg),
+                "must not be a disconnect: {msg}"
+            );
         }
     }
 }
