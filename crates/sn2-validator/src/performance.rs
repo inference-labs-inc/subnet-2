@@ -1650,9 +1650,17 @@ mod tests {
             cap >= 40,
             "cap {cap} must escape the spread stall and sustain the knee depth of 40"
         );
+        // Upper bound derived from the invariant under test: the target is
+        // headroom x own-best depth (16 x 1.0s at the 16/s knee rate), and
+        // the cap may legitimately sit anywhere inside the deadband hold
+        // region above it.
+        let own_best_depth = (40.0 / 2.5) * 1.0;
+        let headroom_bound =
+            (own_best_depth * CAPACITY_TARGET_HEADROOM * (1.0 + CAPACITY_TARGET_DEADBAND)).ceil()
+                as usize;
         assert!(
-            cap <= 75,
-            "cap {cap} must stay bounded by headroom x own-best depth"
+            cap <= headroom_bound,
+            "cap {cap} must stay bounded by the headroom target's hold band ({headroom_bound})"
         );
     }
 
