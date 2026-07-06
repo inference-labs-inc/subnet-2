@@ -19,6 +19,12 @@ pub const BATCHED_PROOF_OF_WEIGHTS_MODEL_ID: &str =
 pub const PERFORMANCE_WINDOW_SIZE: usize = 2000;
 pub const PERFORMANCE_CURVE_POWER: f64 = 1.3;
 pub const PERFORMANCE_MIN_SAMPLES: usize = 100;
+/// Half-life of the recency decay applied to delivered-work buckets when
+/// computing the weight input. Recent verified delivery props the score up;
+/// a miner that stops delivering sees its effective work halve every
+/// half-life instead of coasting on the flat window sum, while brief
+/// restarts cost nothing measurable.
+pub const DELIVERED_WORK_HALF_LIFE_SECS: u64 = 2 * 3600;
 pub const DELIVERED_WORK_BUCKET_SECS: u64 = 3600;
 pub const FAILURE_DEBIT_MULTIPLIER: f64 = 2.0;
 pub const DSLICE_QUEUE_LOW_WATERMARK: usize = 512;

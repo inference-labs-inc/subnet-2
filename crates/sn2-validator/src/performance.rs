@@ -8,8 +8,9 @@ use sn2_types::{
     CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RATE_BIN_SECS, CAPACITY_RATE_FILTER_BINS,
     CAPACITY_RATE_WINDOW_BINS, CAPACITY_STEP_FRACTION, CAPACITY_TARGET_DEADBAND,
     CAPACITY_TARGET_HEADROOM, CAPACITY_UNIT_REFERENCE_PERCENTILE, CIRCUIT_TIMEOUT_SECONDS,
-    DELIVERED_WORK_BUCKET_SECS, FAILURE_DEBIT_MULTIPLIER, PERFORMANCE_MIN_SAMPLES,
-    PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
+    DELIVERED_WORK_BUCKET_SECS, DELIVERED_WORK_HALF_LIFE_SECS, FAILURE_DEBIT_MULTIPLIER,
+    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE,
+    VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::warn;
 
@@ -604,8 +605,21 @@ impl PerformanceTracker {
     }
 
     fn miner_delivered_work(&self, uid: u16) -> f64 {
-        let (credit, debit, _) = self.delivered_breakdown(uid);
-        (credit - debit).max(0.0)
+        let buckets = match self.delivered_work.get(&uid) {
+            Some(b) => b,
+            None => return 0.0,
+        };
+        let ttl = window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS);
+        let half_life = DELIVERED_WORK_HALF_LIFE_SECS as f64;
+        let mut work = 0.0;
+        for (start, bucket) in buckets {
+            let age = start.elapsed();
+            if age <= ttl {
+                let decay = 0.5_f64.powf(age.as_secs_f64() / half_life);
+                work += (bucket.credit - bucket.debit) * decay;
+            }
+        }
+        work.max(0.0)
     }
 
     pub fn delivered_breakdown(&self, uid: u16) -> (f64, f64, u64) {
@@ -1110,7 +1124,10 @@ mod tests {
             .get(&2)
             .map(|&(w, _, _)| w)
             .unwrap_or(0.0);
-        assert_eq!(before, after_unreferenced);
+        assert!(
+            (before - after_unreferenced).abs() < before * 1e-4,
+            "unreferenced debit must not change work: {before} vs {after_unreferenced}"
+        );
 
         for _ in 0..10 {
             tracker.record_reschedule_keyed(2, "A");
@@ -1156,6 +1173,50 @@ mod tests {
             .expect("uid 3 tracked");
         assert_eq!(work, 0.0);
         assert!(count >= PERFORMANCE_MIN_SAMPLES);
+    }
+
+    #[test]
+    fn delivered_work_decays_when_delivery_stops() {
+        let mut tracker = test_tracker();
+        let now = Instant::now();
+        let old = now.checked_sub(Duration::from_secs(3 * 3600)).unwrap();
+        for (uid, at) in [(1u16, old), (2u16, now)] {
+            for _ in 0..50 {
+                tracker.record_with_time(uid, "hk", true, 1.0, false, "A", at);
+            }
+        }
+        let stale = tracker.miner_delivered_work(1);
+        let fresh = tracker.miner_delivered_work(2);
+        assert!(fresh > 0.0);
+        assert!(
+            stale < fresh * 0.5,
+            "3h-old work must decay well below fresh work: stale={stale} fresh={fresh}"
+        );
+        assert!(
+            stale > fresh * 0.1,
+            "decay is a curve, not a cliff: stale={stale} fresh={fresh}"
+        );
+    }
+
+    #[test]
+    fn steady_delivery_props_up_score() {
+        let mut tracker = test_tracker();
+        let now = Instant::now();
+        for h in 0..6u64 {
+            let at = now.checked_sub(Duration::from_secs(h * 3600)).unwrap();
+            for _ in 0..10 {
+                tracker.record_with_time(3, "hk", true, 1.0, false, "A", at);
+            }
+        }
+        let continuous = tracker.miner_delivered_work(3);
+        for _ in 0..10 {
+            tracker.record_with_time(4, "hk", true, 1.0, false, "A", now);
+        }
+        let single_hour = tracker.miner_delivered_work(4);
+        assert!(
+            continuous > single_hour * 2.0,
+            "sustained delivery must outscore a single fresh burst: continuous={continuous} single={single_hour}"
+        );
     }
 
     fn drive_rate(
