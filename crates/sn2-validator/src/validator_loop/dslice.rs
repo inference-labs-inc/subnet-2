@@ -886,6 +886,7 @@ impl ValidatorLoop {
                     task_id: None,
                     run_source: plan.run_source,
                     retry_count: 0,
+                    last_failed_uid: None,
                     circuit_path: plan.circuit_path.clone(),
                     component_sha: plan.component_sha.clone(),
                 }])
@@ -1354,6 +1355,7 @@ impl ValidatorLoop {
             task_id: None,
             run_source,
             retry_count: 0,
+            last_failed_uid: None,
             circuit_path: circuit_path.map(String::from),
             component_sha: component_sha.map(String::from),
         }
