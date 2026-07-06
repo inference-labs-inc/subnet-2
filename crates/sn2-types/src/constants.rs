@@ -71,16 +71,6 @@ pub const IP_REGION_CAP_FRACTION: f64 = 0.25;
 /// recovered miner re-enters dispatch within the same scoring window.
 pub const REHAB_BLOCKS: u64 = 360;
 
-/// Block-height hold applied to a hotkey whose dispatch failed inside the
-/// validator-side transport (reconnect gating, missing authenticated route)
-/// before any request reached the miner. Sized to the 60-second miner
-/// registry refresh cadence that prunes dead connections and resets
-/// reconnect backoff: by the time the hold expires, the transport has
-/// either re-established the route or removed the peer from the
-/// authenticated set. Unlike dispatch cooldowns, these holds gate dispatch
-/// only and never feed the weight skiplist.
-pub const RECONNECT_HOLD_BLOCKS: u64 = 5;
-
 pub const MAX_POW_QUEUE_SIZE: usize = 1024;
 pub const POW_OUTPUT_STRIDE: usize = MAX_POW_QUEUE_SIZE;
 pub const POW_SCORES_OFFSET: usize = 0;

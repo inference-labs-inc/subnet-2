@@ -370,14 +370,7 @@ impl ValidatorLoop {
         external_request_hash: Option<u32>,
         reason: &str,
     ) {
-        let transport_failure = is_transport_dispatch_failure(reason);
-        warn!(uid = uid, rtype = %request_type, retry = retry_count, run_uid = ?run_uid, slice = ?slice_num, tile = ?tile_idx, transport = transport_failure, error = reason, "miner query failed");
-
-        if !hotkey.is_empty() && transport_failure {
-            let until = self.current_block.saturating_add(RECONNECT_HOLD_BLOCKS);
-            let hold = self.reconnect_holds.entry(hotkey.to_string()).or_insert(0);
-            *hold = (*hold).max(until);
-        }
+        warn!(uid = uid, rtype = %request_type, retry = retry_count, run_uid = ?run_uid, slice = ?slice_num, tile = ?tile_idx, error = reason, "miner query failed");
 
         let is_verification_failure = reason.starts_with("verification failed")
             && matches!(
@@ -393,15 +386,14 @@ impl ValidatorLoop {
             }
         }
 
-        // A non-delivery is a non-delivery. The validator does not model why a
+        // A non-delivery is a non-delivery. The validator never models why a
         // valid proof failed to arrive: a dead connection, a refused stream, a
-        // timeout, and a bad witness are all the same absence of service and
-        // all debit the failed work. Classification gates only dispatch
-        // efficiency (the reconnect hold above), never scoring, so a miner
-        // cannot launder shed load into an exempt failure class by resetting
-        // streams before the payload is read. Honest restarts are made
-        // painless by recency decay of delivered work, not by exempting the
-        // failures a restart produces.
+        // timeout, and a bad witness are the same absence of service and debit
+        // the failed work identically. There is no failure taxonomy, no hold,
+        // and no exempt class to shape traffic into, so a miner cannot lower
+        // its debit exposure by choosing how a request fails. Honest restarts
+        // are absorbed by recency decay of delivered work, not by inspecting
+        // the failure.
         let failed_circuit_id = match &retry_payload {
             RetryPayload::DSlice(d) => Some(d.circuit.id.as_str()),
             RetryPayload::Rwr(r) => Some(r.circuit_id.as_str()),
@@ -462,76 +454,6 @@ impl ValidatorLoop {
                 }),
             )
             .await;
-        }
-    }
-}
-
-/// Whether a query failure was raised by the validator-side transport: dial
-/// and handshake failures, reconnect gating, a missing authenticated route,
-/// an uninitialized endpoint, or a stream that could not be opened. Used only
-/// to place the hotkey on a short dispatch hold so a demonstrably unreachable
-/// peer is not re-hammered every cycle; it does not affect scoring. Every
-/// non-delivery debits the failed work regardless of this classification, so
-/// a miner cannot avoid a debit by failing early, and the hold is a pure
-/// efficiency measure rather than a punishment or an exemption.
-fn is_transport_dispatch_failure(reason: &str) -> bool {
-    reason.starts_with("QUIC query: connection error:")
-        || reason.starts_with("QUIC query: handshake error:")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_transport_dispatch_failure;
-
-    #[test]
-    fn reconnect_gating_errors_classify_as_transport() {
-        // Exact btlightning reconnect-path messages, wrapped the way
-        // query_miner surfaces them through the anyhow chain.
-        for msg in [
-            "QUIC query: connection error: Reconnection to 1.2.3.4:8080 in backoff, next retry in 900ms",
-            "QUIC query: connection error: Reconnection to 1.2.3.4:8080 already in progress",
-            "QUIC query: connection error: Reconnection attempts exhausted for 1.2.3.4:8080 (5/5), awaiting registry refresh",
-            "QUIC query: connection error: Reconnection to 1.2.3.4:8080 timed out",
-            "QUIC query: handshake error: no authenticated route for hk1 at 1.2.3.4:8080",
-            "QUIC query: connection error: QUIC endpoint not initialized",
-        ] {
-            assert!(
-                is_transport_dispatch_failure(msg),
-                "must classify as transport: {msg}"
-            );
-        }
-    }
-
-    #[test]
-    fn miner_attributable_failures_are_not_transport() {
-        for msg in [
-            "verification failed",
-            "QUIC query: transport error: query timed out",
-            "QUIC query: stream error: server aborted mid-chunk",
-            "handler error: witness generation failed",
-            "deserializing QUIC payload: invalid type",
-            "decoding miner response value: unsupported msgpack value",
-        ] {
-            assert!(
-                !is_transport_dispatch_failure(msg),
-                "must not classify as transport: {msg}"
-            );
-        }
-    }
-
-    #[test]
-    fn miner_cannot_spoof_transport_classification() {
-        // Miner-reported errors surface as LightningError::Handler with the
-        // miner's text after the "handler error: " prefix, so embedded
-        // transport markers never reach position zero of the chain.
-        for msg in [
-            "handler error: QUIC query: connection error: Reconnection to 1.2.3.4:8080 in backoff",
-            "handler error: connection error: Reconnection already in progress",
-        ] {
-            assert!(
-                !is_transport_dispatch_failure(msg),
-                "spoofed marker must not classify as transport: {msg}"
-            );
         }
     }
 }

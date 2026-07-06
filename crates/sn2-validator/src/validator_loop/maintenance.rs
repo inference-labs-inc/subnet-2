@@ -249,9 +249,6 @@ impl ValidatorLoop {
     }
 
     pub(super) fn prune_expired_cooldowns(&mut self) {
-        let current_block = self.current_block;
-        self.reconnect_holds
-            .retain(|_, until| current_block < *until);
         let cooldowns_before = self.dispatch_cooldowns.len();
         let expired_hotkeys: Vec<String> = self
             .dispatch_cooldowns

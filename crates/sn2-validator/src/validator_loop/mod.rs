@@ -187,12 +187,6 @@ pub struct ValidatorLoop {
     pub(super) consecutive_metagraph_failures: u32,
     pub(super) dispatch_cache: dispatch::DispatchCache,
     pub(super) dispatch_cooldowns: HashMap<String, u64>,
-    // Short dispatch-only holds for hotkeys whose queries failed inside the
-    // validator-side transport before reaching the miner (reconnect backoff,
-    // reconnect contention, missing authenticated route). Kept separate from
-    // dispatch_cooldowns because those feed the weight skiplist: a miner must
-    // not lose emission weight over the validator's own dead connection.
-    pub(super) reconnect_holds: HashMap<String, u64>,
 }
 
 pub(super) const METAGRAPH_FAILURE_RECONNECT_THRESHOLD: u32 = 3;
@@ -404,7 +398,6 @@ impl ValidatorLoop {
             consecutive_metagraph_failures: 0,
             dispatch_cache: dispatch::DispatchCache::new(),
             dispatch_cooldowns: HashMap::new(),
-            reconnect_holds: HashMap::new(),
         })
     }
 
