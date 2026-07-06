@@ -477,8 +477,8 @@ impl ValidatorLoop {
                 tracked = tracked.len(),
                 adaptive_timeout = format!("{adaptive_to:.1}s"),
                 top5 = ?top.iter().map(|(uid, w, c)| {
-                    let (credit, debit, uncredited) = self.performance_tracker.delivered_breakdown(*uid);
-                    format!("uid={uid} work={w:.1} credit={credit:.1} debit={debit:.1} uncredited_fails={uncredited} cap={c}")
+                    let (credit, debit, fallback) = self.performance_tracker.delivered_breakdown(*uid);
+                    format!("uid={uid} work={w:.1} credit={credit:.1} debit={debit:.1} fallback_priced={fallback} cap={c}")
                 }).collect::<Vec<_>>(),
                 "throughput scoring"
             );

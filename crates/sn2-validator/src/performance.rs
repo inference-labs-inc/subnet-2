@@ -81,6 +81,7 @@ pub struct PerformanceTracker {
     at_cap_last_touched: HashMap<u16, Instant>,
     unit_times: HashMap<String, VecDeque<(Instant, f64)>>,
     unit_reference_cache: HashMap<String, (u64, f64)>,
+    global_reference_cache: Option<(u64, f64)>,
     rel_speed: HashMap<u16, VecDeque<(Instant, f64)>>,
     unit_own_best: HashMap<u16, HashMap<String, (Instant, f64)>>,
     // Per-completion samples of the miner's own-best latency for the unit
@@ -99,6 +100,14 @@ const CAP_DECAY_IDLE_SECS: u64 = 600;
 const UNIT_REFERENCE_REFRESH_RECORDS: u64 = 64;
 const UNIT_TIMES_CAP: usize = 256;
 const UNIT_REFERENCE_MIN_SAMPLES: usize = 8;
+
+/// Price used for a unit of work that has not yet accumulated enough
+/// successful completions to be priced from its own observed times. The median
+/// of all currently priced work substitutes, so that delivering unpriced work
+/// still earns and a non-delivery of it still debits: no work item can sit in
+/// an unpriced tier where dropping it is free. This constant is only the cold
+/// start floor, used before any work anywhere has been priced.
+const DELIVERED_WORK_FALLBACK_FLOOR: f64 = 1.0;
 const REL_SPEED_WINDOW: usize = 64;
 
 const RESTORED_CAP_MAX: usize = 32;
@@ -125,7 +134,7 @@ fn evict_expired(window: &mut VecDeque<WindowEntry>) {
 pub struct WorkBucket {
     pub credit: f64,
     pub debit: f64,
-    pub uncredited_failures: u64,
+    pub fallback_priced: u64,
 }
 
 fn push_bucketed(
@@ -133,7 +142,7 @@ fn push_bucketed(
     now: Instant,
     credit: f64,
     debit: f64,
-    uncredited: u64,
+    fallback: u64,
 ) {
     match buckets.back_mut() {
         Some((start, bucket))
@@ -141,14 +150,14 @@ fn push_bucketed(
         {
             bucket.credit += credit;
             bucket.debit += debit;
-            bucket.uncredited_failures += uncredited;
+            bucket.fallback_priced += fallback;
         }
         _ => buckets.push_back((
             now,
             WorkBucket {
                 credit,
                 debit,
-                uncredited_failures: uncredited,
+                fallback_priced: fallback,
             },
         )),
     }
@@ -187,6 +196,7 @@ impl PerformanceTracker {
             at_cap_last_touched: HashMap::new(),
             unit_times: HashMap::new(),
             unit_reference_cache: HashMap::new(),
+            global_reference_cache: None,
             rel_speed: HashMap::new(),
             unit_own_best: HashMap::new(),
             min_service: HashMap::new(),
@@ -280,13 +290,20 @@ impl PerformanceTracker {
                     let samples = self.rel_speed.entry(uid).or_default();
                     samples.push_back((now, rel));
                     evict_timed(samples, REL_SPEED_WINDOW);
-
+                }
+                let priced = reference > 0.0;
+                let effective = if priced {
+                    reference
+                } else {
+                    self.global_reference_fallback()
+                };
+                if effective > 0.0 {
                     push_bucketed(
                         self.delivered_work.entry(uid).or_default(),
                         now,
-                        reference,
+                        effective,
                         0.0,
-                        0,
+                        if priced { 0 } else { 1 },
                     );
                 }
             }
@@ -324,23 +341,19 @@ impl PerformanceTracker {
         } else {
             self.cached_unit_reference(work_key)
         };
-        if reference > 0.0 {
-            push_bucketed(
-                self.delivered_work.entry(uid).or_default(),
-                now,
-                0.0,
-                reference * FAILURE_DEBIT_MULTIPLIER,
-                0,
-            );
+        let priced = reference > 0.0;
+        let effective = if priced {
+            reference
         } else {
-            push_bucketed(
-                self.delivered_work.entry(uid).or_default(),
-                now,
-                0.0,
-                0.0,
-                1,
-            );
-        }
+            self.global_reference_fallback()
+        };
+        push_bucketed(
+            self.delivered_work.entry(uid).or_default(),
+            now,
+            0.0,
+            effective * FAILURE_DEBIT_MULTIPLIER,
+            if priced { 0 } else { 1 },
+        );
     }
 
     pub fn adaptive_timeout(&self) -> f64 {
@@ -630,15 +643,15 @@ impl PerformanceTracker {
         let ttl = window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS);
         let mut credit = 0.0;
         let mut debit = 0.0;
-        let mut uncredited = 0u64;
+        let mut fallback = 0u64;
         for (start, bucket) in buckets {
             if start.elapsed() <= ttl {
                 credit += bucket.credit;
                 debit += bucket.debit;
-                uncredited += bucket.uncredited_failures;
+                fallback += bucket.fallback_priced;
             }
         }
-        (credit, debit, uncredited)
+        (credit, debit, fallback)
     }
 
     pub fn reset_uid(&mut self, uid: u16, hotkey: &str) {
@@ -679,6 +692,35 @@ impl PerformanceTracker {
             self.unit_reference_cache
                 .insert(work_key.to_string(), (self.total_records, reference));
         }
+        reference
+    }
+
+    fn global_reference_fallback(&mut self) -> f64 {
+        if let Some((at, reference)) = self.global_reference_cache {
+            if self.total_records.saturating_sub(at) < UNIT_REFERENCE_REFRESH_RECORDS {
+                return reference;
+            }
+        }
+        let percentile_idx = |len: usize| {
+            ((len as f64 * CAPACITY_UNIT_REFERENCE_PERCENTILE) as usize).min(len.saturating_sub(1))
+        };
+        let mut references: Vec<f64> = self
+            .unit_times
+            .values()
+            .filter(|samples| samples.len() >= UNIT_REFERENCE_MIN_SAMPLES)
+            .map(|samples| {
+                let mut times: Vec<f64> = samples.iter().map(|(_, t)| *t).collect();
+                times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                times[percentile_idx(times.len())]
+            })
+            .collect();
+        let reference = if references.is_empty() {
+            DELIVERED_WORK_FALLBACK_FLOOR
+        } else {
+            references.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            references[references.len() / 2]
+        };
+        self.global_reference_cache = Some((self.total_records, reference));
         reference
     }
 
@@ -918,6 +960,7 @@ mod tests {
             at_cap_last_touched: HashMap::new(),
             unit_times: HashMap::new(),
             unit_reference_cache: HashMap::new(),
+            global_reference_cache: None,
             rel_speed: HashMap::new(),
             unit_own_best: HashMap::new(),
             min_service: HashMap::new(),
@@ -1103,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_debit_referenced_work_only() {
+    fn failures_debit_all_work_including_unpriced() {
         let mut tracker = test_tracker();
         for _ in 0..100 {
             tracker.record_keyed(1, "a", true, 2.0, false, "A");
@@ -1119,30 +1162,30 @@ mod tests {
         for _ in 0..10 {
             tracker.record_reschedule_keyed(2, "B");
         }
-        let after_unreferenced = tracker
+        let after_unpriced = tracker
             .throughput_snapshot()
             .get(&2)
             .map(|&(w, _, _)| w)
             .unwrap_or(0.0);
         assert!(
-            (before - after_unreferenced).abs() < before * 1e-4,
-            "unreferenced debit must not change work: {before} vs {after_unreferenced}"
+            after_unpriced < before,
+            "a non-delivery of unpriced work must still debit via the fallback price: {before} vs {after_unpriced}"
         );
 
         for _ in 0..10 {
             tracker.record_reschedule_keyed(2, "A");
         }
-        let after_referenced = tracker
+        let after_priced = tracker
             .throughput_snapshot()
             .get(&2)
             .map(|&(w, _, _)| w)
             .unwrap_or(0.0);
         assert!(
-            after_referenced < after_unreferenced,
-            "referenced failures must debit: before={after_unreferenced}, after={after_referenced}"
+            after_priced < after_unpriced,
+            "a non-delivery of priced work must debit: before={after_unpriced}, after={after_priced}"
         );
 
-        for _ in 0..200 {
+        for _ in 0..400 {
             tracker.record_reschedule_keyed(2, "A");
         }
         let floored = tracker
@@ -1151,6 +1194,29 @@ mod tests {
             .map(|&(w, _, _)| w)
             .unwrap_or(f64::MIN);
         assert_eq!(floored, 0.0);
+    }
+
+    #[test]
+    fn unpriced_delivery_earns_fallback_credit() {
+        let mut tracker = test_tracker();
+        // Price a reference from a body of work so the global fallback is
+        // non-trivial, then deliver a work item that never reaches the sample
+        // threshold. It must still accrue credit rather than earn nothing.
+        for _ in 0..100 {
+            tracker.record_keyed(1, "a", true, 2.0, false, "PRICED");
+        }
+        for _ in 0..(UNIT_REFERENCE_MIN_SAMPLES - 2) {
+            tracker.record_keyed(2, "b", true, 2.0, false, "RARE");
+        }
+        let (credit, _, fallback) = tracker.delivered_breakdown(2);
+        assert!(
+            credit > 0.0,
+            "delivering unpriced work must earn fallback credit, got {credit}"
+        );
+        assert!(
+            fallback > 0,
+            "unpriced deliveries must be counted as fallback priced, got {fallback}"
+        );
     }
 
     #[test]
