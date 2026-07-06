@@ -91,9 +91,27 @@ impl ValidatorLoop {
         self.refresh_dispatch_cache_if_stale(&queryable_uids).await;
         let adaptive_timeout = self.dispatch_cache.adaptive_timeout;
 
-        // With a single dispatchable miner there is nowhere else to route a
-        // retry, so the avoidance below would starve the request instead.
-        let avoid_last_failed = queryable_uids.len() > 1;
+        // A retry is only steered away from the miner that failed it while
+        // some other miner can actually take work this round. Registry
+        // eligibility alone is too broad a guard: with every alternative at
+        // capacity, deferring the retry buys nothing but latency, since the
+        // failed miner is the only one with a free slot. The avoidance
+        // check fires inside the failed miner's own slot loop, so requiring
+        // more than one uid with free capacity guarantees an alternative.
+        let uids_with_free_slots = queryable_uids
+            .iter()
+            .filter(|uid| {
+                let cap = self
+                    .dispatch_cache
+                    .capacities
+                    .get(uid)
+                    .copied()
+                    .unwrap_or(1);
+                let active = self.miner_active_count.get(uid).copied().unwrap_or(0);
+                active < cap
+            })
+            .count();
+        let avoid_last_failed = uids_with_free_slots > 1;
 
         for uid in queryable_uids {
             if dispatch_budget == 0 {
