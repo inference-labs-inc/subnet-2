@@ -370,18 +370,13 @@ impl ValidatorLoop {
         external_request_hash: Option<u32>,
         reason: &str,
     ) {
-        warn!(uid = uid, rtype = %request_type, retry = retry_count, run_uid = ?run_uid, slice = ?slice_num, tile = ?tile_idx, error = reason, "miner query failed");
+        let transport_failure = is_transport_dispatch_failure(reason);
+        warn!(uid = uid, rtype = %request_type, retry = retry_count, run_uid = ?run_uid, slice = ?slice_num, tile = ?tile_idx, transport = transport_failure, error = reason, "miner query failed");
 
-        if !hotkey.is_empty()
-            && (reason.contains("already in progress") || reason.contains("in backoff"))
-        {
-            let bpt = if self.blocks_per_tempo == 0 {
-                360
-            } else {
-                self.blocks_per_tempo
-            };
-            let until = self.current_block + bpt;
-            self.dispatch_cooldowns.insert(hotkey.to_string(), until);
+        if !hotkey.is_empty() && transport_failure {
+            let until = self.current_block.saturating_add(RECONNECT_HOLD_BLOCKS);
+            let hold = self.reconnect_holds.entry(hotkey.to_string()).or_insert(0);
+            *hold = (*hold).max(until);
         }
 
         let is_verification_failure = reason.starts_with("verification failed")
@@ -398,28 +393,32 @@ impl ValidatorLoop {
             }
         }
 
-        let failed_circuit_id = match &retry_payload {
-            RetryPayload::DSlice(d) => Some(d.circuit.id.as_str()),
-            RetryPayload::Rwr(r) => Some(r.circuit_id.as_str()),
-            RetryPayload::None => None,
-        };
-        let slice_part = slice_num
-            .as_deref()
-            .map(|s| s.strip_prefix("slice_").unwrap_or(s));
-        let work_key = Self::build_work_key(failed_circuit_id, slice_part);
-        self.performance_tracker
-            .record_reschedule_keyed(uid, &work_key);
+        // Transport-gated failures never left the validator: the miner saw no
+        // request, so there is no performance to debit. Everything that did
+        // reach (or could have reached) the miner still counts against it.
+        if !transport_failure {
+            let failed_circuit_id = match &retry_payload {
+                RetryPayload::DSlice(d) => Some(d.circuit.id.as_str()),
+                RetryPayload::Rwr(r) => Some(r.circuit_id.as_str()),
+                RetryPayload::None => None,
+            };
+            let slice_part = slice_num
+                .as_deref()
+                .map(|s| s.strip_prefix("slice_").unwrap_or(s));
+            let work_key = Self::build_work_key(failed_circuit_id, slice_part);
+            self.performance_tracker
+                .record_reschedule_keyed(uid, &work_key);
 
-        let elapsed = 0.0;
-        self.score_manager.update_score(
-            uid,
-            false,
-            elapsed,
-            VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
-            0.0,
-            self.config.metagraph.n,
-        );
-        metrics::record_response(false, elapsed);
+            self.score_manager.update_score(
+                uid,
+                false,
+                0.0,
+                VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
+                0.0,
+                self.config.metagraph.n,
+            );
+        }
+        metrics::record_response(false, 0.0);
 
         let max_retries = match (&request_type, &retry_payload) {
             (RequestType::DSlice, RetryPayload::DSlice(ref d))
@@ -459,6 +458,87 @@ impl ValidatorLoop {
                 }),
             )
             .await;
+        }
+    }
+}
+
+/// Whether a query failure was raised by the validator-side transport before
+/// any request reached the miner: dial and handshake failures, reconnect
+/// gating (in backoff, contention, attempts exhausted), a missing
+/// authenticated route, an uninitialized endpoint, or a stream that could not
+/// be opened. All of these surface as btlightning `Connection` or `Handshake`
+/// errors under the "QUIC query" context added in `query_miner_quic`, so the
+/// anyhow chain starts with one of the two prefixes below. Failures that can
+/// postdate delivery keep other variants — query timeouts are `transport
+/// error`, mid-stream aborts are `stream error`, and miner-reported errors
+/// are `handler error` with the miner's text *after* the prefix — so a miner
+/// cannot spoof this classification, and genuine miner faults are never
+/// misattributed to the transport.
+///
+/// A restarting miner makes these failures unavoidable: its old connection is
+/// dead for up to the QUIC idle timeout while its hotkey remains in the
+/// authenticated set, so every dispatch in that window fails inside the
+/// transport. Treating those as miner faults previously cost the miner a
+/// full-tempo dispatch cooldown (which also zeroed its weight through the
+/// skiplist path) plus delivered-work debits for requests it never received.
+fn is_transport_dispatch_failure(reason: &str) -> bool {
+    reason.starts_with("QUIC query: connection error:")
+        || reason.starts_with("QUIC query: handshake error:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_transport_dispatch_failure;
+
+    #[test]
+    fn reconnect_gating_errors_classify_as_transport() {
+        // Exact btlightning reconnect-path messages, wrapped the way
+        // query_miner surfaces them through the anyhow chain.
+        for msg in [
+            "QUIC query: connection error: Reconnection to 1.2.3.4:8080 in backoff, next retry in 900ms",
+            "QUIC query: connection error: Reconnection to 1.2.3.4:8080 already in progress",
+            "QUIC query: connection error: Reconnection attempts exhausted for 1.2.3.4:8080 (5/5), awaiting registry refresh",
+            "QUIC query: connection error: Reconnection to 1.2.3.4:8080 timed out",
+            "QUIC query: handshake error: no authenticated route for hk1 at 1.2.3.4:8080",
+            "QUIC query: connection error: QUIC endpoint not initialized",
+        ] {
+            assert!(
+                is_transport_dispatch_failure(msg),
+                "must classify as transport: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn miner_attributable_failures_are_not_transport() {
+        for msg in [
+            "verification failed",
+            "QUIC query: transport error: query timed out",
+            "QUIC query: stream error: server aborted mid-chunk",
+            "handler error: witness generation failed",
+            "deserializing QUIC payload: invalid type",
+            "decoding miner response value: unsupported msgpack value",
+        ] {
+            assert!(
+                !is_transport_dispatch_failure(msg),
+                "must not classify as transport: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn miner_cannot_spoof_transport_classification() {
+        // Miner-reported errors surface as LightningError::Handler with the
+        // miner's text after the "handler error: " prefix, so embedded
+        // transport markers never reach position zero of the chain.
+        for msg in [
+            "handler error: QUIC query: connection error: Reconnection to 1.2.3.4:8080 in backoff",
+            "handler error: connection error: Reconnection already in progress",
+        ] {
+            assert!(
+                !is_transport_dispatch_failure(msg),
+                "spoofed marker must not classify as transport: {msg}"
+            );
         }
     }
 }

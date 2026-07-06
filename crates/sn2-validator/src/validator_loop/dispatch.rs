@@ -66,6 +66,11 @@ impl ValidatorLoop {
                         return false;
                     }
                 }
+                if let Some(&until) = self.reconnect_holds.get(&n.hotkey) {
+                    if current_block < until {
+                        return false;
+                    }
+                }
                 if !self.hotkey_reachable(&n.hotkey) {
                     return false;
                 }
