@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use rand::Rng;
 use sn2_types::{
-    RSV_EXPECTED_SUBS_PER_TEMPO, VERIFICATION_COLDSTART_BLOCKS,
+    DISCONNECT_SKIPLIST_TEMPOS, RSV_EXPECTED_SUBS_PER_TEMPO, VERIFICATION_COLDSTART_BLOCKS,
     VERIFICATION_COLDSTART_RETENTION_BLOCKS, VERIFICATION_HISTORY_CAP,
     VERIFICATION_SAMPLES_PER_TEMPO, VERIFICATION_SKIPLIST_TEMPOS, VERIFICATION_STRIKES_REQUIRED,
     VERIFICATION_STRIKES_WINDOW_BLOCKS,
@@ -62,6 +62,24 @@ impl RsvManager {
         let mut rng = rand::rng();
         let roll: u64 = rng.random_range(0..RSV_EXPECTED_SUBS_PER_TEMPO);
         roll < VERIFICATION_SAMPLES_PER_TEMPO
+    }
+
+    pub fn skiplist_disconnect(&mut self, hotkey: &str, current_block: u64, blocks_per_tempo: u64) {
+        let bpt = if blocks_per_tempo == 0 {
+            360
+        } else {
+            blocks_per_tempo
+        };
+        let until = current_block + DISCONNECT_SKIPLIST_TEMPOS * bpt;
+        let entry = self.skiplist.entry(hotkey.to_string()).or_insert(0);
+        if until > *entry {
+            *entry = until;
+            warn!(
+                hotkey = %hotkey,
+                until_block = until,
+                "rsv: miner not connected, skiplisted for one epoch"
+            );
+        }
     }
 
     pub fn record_strike(
@@ -310,6 +328,30 @@ mod tests {
         mgr.observe("hk1", 2000);
         assert_eq!(mgr.coldstart.get("hk1").copied(), Some(1000));
         assert_eq!(mgr.last_seen.get("hk1").copied(), Some(2000));
+    }
+
+    #[test]
+    fn disconnect_skiplists_for_one_epoch_then_expires() {
+        let mut mgr = fresh();
+        let bpt = 360;
+        mgr.skiplist_disconnect("hk1", 1000, bpt);
+        assert!(mgr.is_skiplisted("hk1", 1000));
+        assert!(mgr.is_skiplisted("hk1", 1000 + bpt - 1));
+        assert!(!mgr.is_skiplisted("hk1", 1000 + bpt));
+    }
+
+    #[test]
+    fn disconnect_never_shortens_a_longer_skiplist() {
+        let mut mgr = fresh();
+        // A verification skiplist runs many tempos; a later disconnect must not
+        // cut it short.
+        mgr.record_strike("hk1", 100, 360);
+        assert!(mgr.is_skiplisted("hk1", 100 + 360));
+        mgr.skiplist_disconnect("hk1", 200, 360);
+        assert!(
+            mgr.is_skiplisted("hk1", 100 + 360),
+            "disconnect must not shorten the longer verification skiplist"
+        );
     }
 
     #[test]
