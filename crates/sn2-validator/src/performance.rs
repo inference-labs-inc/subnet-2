@@ -1,16 +1,15 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sn2_types::{
     ADAPTIVE_TIMEOUT_MIN_SAMPLES, ADAPTIVE_TIMEOUT_MULTIPLIER, ADAPTIVE_TIMEOUT_PERCENTILE,
     BLOCK_TIME_SECS, CAPACITY_ADJUST_INTERVAL_SECS, CAPACITY_LATENCY_BUDGET_SECS,
-    CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO, CAPACITY_RATE_BIN_SECS, CAPACITY_RATE_FILTER_BINS,
-    CAPACITY_RATE_WINDOW_BINS, CAPACITY_STEP_FRACTION, CAPACITY_TARGET_DEADBAND,
-    CAPACITY_TARGET_HEADROOM, CAPACITY_UNIT_REFERENCE_PERCENTILE, CIRCUIT_TIMEOUT_SECONDS,
-    DELIVERED_WORK_BUCKET_SECS, DELIVERED_WORK_HALF_LIFE_SECS, FAILURE_DEBIT_MULTIPLIER,
-    PERFORMANCE_MIN_SAMPLES, PERFORMANCE_RESCHEDULE_PENALTY, PERFORMANCE_WINDOW_SIZE,
-    VERIFICATION_WINDOW_BLOCKS,
+    CAPACITY_RATE_BIN_SECS, CAPACITY_RATE_FILTER_BINS, CAPACITY_RATE_WINDOW_BINS,
+    CAPACITY_STEP_FRACTION, CAPACITY_TARGET_DEADBAND, CAPACITY_TARGET_HEADROOM,
+    CAPACITY_UNIT_REFERENCE_PERCENTILE, CIRCUIT_TIMEOUT_SECONDS, DELIVERED_WORK_BUCKET_SECS,
+    DELIVERED_WORK_HALF_LIFE_SECS, FAILURE_DEBIT_MULTIPLIER, PERFORMANCE_RESCHEDULE_PENALTY,
+    PERFORMANCE_WINDOW_SIZE, VERIFICATION_WINDOW_BLOCKS,
 };
 use tracing::warn;
 
@@ -40,12 +39,6 @@ fn parse_meminfo_avail_ratio(raw: &str) -> Option<f64> {
         (Some(t), Some(a)) if t > 0 => Some(a as f64 / t as f64),
         _ => None,
     }
-}
-
-pub(crate) fn cap_ramp_blocked_by_memory_pressure() -> bool {
-    host_memory_available_ratio()
-        .map(|r| r < CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO)
-        .unwrap_or(false)
 }
 
 type WindowEntry = (Instant, bool, f64);
@@ -91,6 +84,7 @@ pub struct PerformanceTracker {
     delivered_work: HashMap<u16, VecDeque<(Instant, WorkBucket)>>,
     completion_bins: HashMap<u16, VecDeque<(Instant, u32)>>,
     cap_last_adjusted: HashMap<u16, Instant>,
+    capacity_growth_paused: bool,
     total_records: u64,
     persistence_path: Option<PathBuf>,
 }
@@ -203,6 +197,7 @@ impl PerformanceTracker {
             delivered_work: HashMap::new(),
             completion_bins: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
+            capacity_growth_paused: false,
             total_records: 0,
             persistence_path: Some(path),
         };
@@ -310,19 +305,23 @@ impl PerformanceTracker {
         }
 
         if success {
-            let bins = self.completion_bins.entry(uid).or_default();
-            let bin_len = Duration::from_secs(CAPACITY_RATE_BIN_SECS);
-            match bins.back_mut() {
-                Some((start, count)) if now.duration_since(*start) < bin_len => *count += 1,
-                _ => bins.push_back((now, 1)),
-            }
-            while bins.len() > CAPACITY_RATE_FILTER_BINS {
-                bins.pop_front();
-            }
             self.at_cap_last_touched.insert(uid, now);
-            self.update_adaptive_cap(uid, hotkey, now);
+            // A successful completion measures delivered work regardless of
+            // validator demand, but only a dispatch that filled the miner's
+            // cap proves enough work was offered to learn from that rate.
+            if was_at_capacity {
+                let bins = self.completion_bins.entry(uid).or_default();
+                let bin_len = Duration::from_secs(CAPACITY_RATE_BIN_SECS);
+                match bins.back_mut() {
+                    Some((start, count)) if now.duration_since(*start) < bin_len => *count += 1,
+                    _ => bins.push_back((now, 1)),
+                }
+                while bins.len() > CAPACITY_RATE_FILTER_BINS {
+                    bins.pop_front();
+                }
+                self.update_adaptive_cap(uid, hotkey, now);
+            }
         }
-        let _ = was_at_capacity;
     }
 
     #[cfg(test)]
@@ -380,14 +379,12 @@ impl PerformanceTracker {
     pub fn miner_capacities(&self) -> HashMap<u16, usize> {
         self.windows
             .iter()
-            .map(|(&uid, w)| {
-                if w.len() < PERFORMANCE_MIN_SAMPLES {
-                    (uid, 1)
-                } else {
-                    (uid, self.adaptive_caps.get(&uid).copied().unwrap_or(1))
-                }
-            })
+            .map(|(&uid, _)| (uid, self.adaptive_caps.get(&uid).copied().unwrap_or(1)))
             .collect()
+    }
+
+    pub fn set_capacity_growth_paused(&mut self, paused: bool) {
+        self.capacity_growth_paused = paused;
     }
 
     pub fn evict_all_stale(&mut self) {
@@ -395,51 +392,6 @@ impl PerformanceTracker {
             evict_expired(w);
         }
         self.windows.retain(|_, w| !w.is_empty());
-    }
-
-    /// Globally trim every adaptive cap by `factor` (rounded to at least 1
-    /// decrement) when the validator host is under memory pressure. Returns
-    /// the number of caps that actually decreased, for monitoring.
-    pub fn backoff_all_caps_under_pressure(
-        &mut self,
-        factor: f64,
-        uid_hotkeys: &HashMap<u16, String>,
-    ) -> usize {
-        if !cap_ramp_blocked_by_memory_pressure() {
-            return 0;
-        }
-        let factor = factor.clamp(0.0, 1.0);
-        let mut changed = 0usize;
-        for (uid, cap) in self.adaptive_caps.iter_mut() {
-            if *cap <= 1 {
-                continue;
-            }
-            let decrement = ((*cap as f64) * factor).round() as usize;
-            let decrement = decrement.max(1);
-            let new_cap = cap.saturating_sub(decrement).max(1);
-            if new_cap < *cap {
-                let hotkey = uid_hotkeys.get(uid).cloned().unwrap_or_default();
-                self.cap_events.push(CapEvent {
-                    uid: *uid,
-                    hotkey,
-                    direction: CapDirection::Backoff,
-                    cap_from: *cap,
-                    cap_to: new_cap,
-                    success_rate: 0.0,
-                    at: Instant::now(),
-                });
-                *cap = new_cap;
-                if let Some(r) = self.at_cap_results.get_mut(uid) {
-                    r.clear();
-                }
-                changed += 1;
-            }
-        }
-        if self.cap_events.len() > MAX_BUFFERED_CAP_EVENTS {
-            let drop = self.cap_events.len() - MAX_BUFFERED_CAP_EVENTS;
-            self.cap_events.drain(0..drop);
-        }
-        changed
     }
 
     pub fn save(&self) {
@@ -607,13 +559,6 @@ impl PerformanceTracker {
                 let cap = self.adaptive_caps.get(&uid).copied().unwrap_or(1);
                 (uid, (work, cap, w.len()))
             })
-            .collect()
-    }
-
-    pub fn sample_counts(&self) -> HashMap<u16, usize> {
-        self.windows
-            .iter()
-            .map(|(&uid, w)| (uid, w.len()))
             .collect()
     }
 
@@ -803,9 +748,6 @@ impl PerformanceTracker {
         if !due {
             return;
         }
-        if cap_ramp_blocked_by_memory_pressure() {
-            return;
-        }
         self.cap_last_adjusted.insert(uid, now);
         let rate = self.delivered_rate_estimate(uid, now);
         let uncongested = self.uncongested_service_time(uid);
@@ -827,7 +769,7 @@ impl PerformanceTracker {
         let cap_from = *current;
         let step = ((cap_from as f64 * CAPACITY_STEP_FRACTION).ceil() as usize).max(1);
         let target_cap = target.round() as usize;
-        let cap_to = if target_cap > cap_from {
+        let cap_to = if target_cap > cap_from && !self.capacity_growth_paused {
             (cap_from + step).min(target_cap)
         } else if (cap_from as f64) > target * (1.0 + CAPACITY_TARGET_DEADBAND) {
             cap_from.saturating_sub(step).max(target_cap).max(1)
@@ -870,7 +812,11 @@ impl PerformanceTracker {
         std::mem::take(&mut self.pending_evictions)
     }
 
-    pub fn decay_idle_caps(&mut self, uid_hotkeys: &HashMap<u16, String>) -> usize {
+    pub fn decay_idle_caps(
+        &mut self,
+        uid_hotkeys: &HashMap<u16, String>,
+        queryable_uids: &HashSet<u16>,
+    ) -> usize {
         let now = Instant::now();
         let idle = Duration::from_secs(CAP_DECAY_IDLE_SECS);
         let mut decayed = 0usize;
@@ -878,6 +824,11 @@ impl PerformanceTracker {
             .adaptive_caps
             .iter()
             .filter(|(_, &cap)| cap > 0)
+            // A queryable miner may be idle only because the validator has no
+            // work to offer. Preserve its learned cap until there is actual
+            // saturated evidence; decay is reserved for miners that are no
+            // longer dispatchable.
+            .filter(|(uid, _)| !queryable_uids.contains(uid))
             .filter(|(uid, _)| {
                 self.at_cap_last_touched
                     .get(uid)
@@ -949,6 +900,7 @@ impl PerformanceTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sn2_types::PERFORMANCE_MIN_SAMPLES;
 
     fn test_tracker() -> PerformanceTracker {
         PerformanceTracker {
@@ -967,6 +919,7 @@ mod tests {
             delivered_work: HashMap::new(),
             completion_bins: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
+            capacity_growth_paused: false,
             total_records: 0,
             persistence_path: None,
         }
@@ -1065,6 +1018,16 @@ mod tests {
         tracker.record(1, "hk", true, 5.0, false);
         let caps = tracker.miner_capacities();
         assert_eq!(caps.get(&1).copied().unwrap_or(0), 1);
+    }
+
+    #[test]
+    fn miner_capacities_expose_learned_cap_before_scoring_sample_gate() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 7);
+        tracker.record(1, "hk", true, 5.0, false);
+
+        assert!(tracker.windows.get(&1).unwrap().len() < PERFORMANCE_MIN_SAMPLES);
+        assert_eq!(tracker.miner_capacities().get(&1).copied(), Some(7));
     }
 
     #[test]
@@ -1434,17 +1397,104 @@ mod tests {
     }
 
     #[test]
-    fn closed_loop_settles_at_demand_when_supply_limited() {
+    fn capacity_growth_pause_blocks_only_ramps_and_recovers() {
+        let base = Instant::now();
+
+        let mut ramping = test_tracker();
+        ramping.adaptive_caps.insert(1, 1);
+        ramping.set_capacity_growth_paused(true);
+        let mid = drive_rate(&mut ramping, 1, 40, 120, base);
+        assert_eq!(ramping.cap_snapshot().get(&1).copied(), Some(1));
+        assert!(ramping
+            .drain_cap_events()
+            .iter()
+            .all(|event| event.direction != CapDirection::Ramp));
+
+        ramping.set_capacity_growth_paused(false);
+        drive_rate(&mut ramping, 1, 40, 60, mid + Duration::from_secs(1));
+        assert!(ramping.cap_snapshot().get(&1).copied().unwrap_or(1) > 1);
+
+        let mut backing_off = test_tracker();
+        backing_off.adaptive_caps.insert(2, 64);
+        backing_off.set_capacity_growth_paused(true);
+        drive_rate(&mut backing_off, 2, 1, 120, base);
+        assert!(backing_off.cap_snapshot().get(&2).copied().unwrap_or(64) < 64);
+        assert!(backing_off
+            .drain_cap_events()
+            .iter()
+            .any(|event| event.direction == CapDirection::Backoff));
+    }
+
+    #[test]
+    fn supply_limited_successes_do_not_change_learned_caps() {
         let mut tracker = test_tracker();
         tracker.adaptive_caps.insert(1, 64);
+        tracker.adaptive_caps.insert(2, 1);
         let base = Instant::now();
-        drive_closed_loop(&mut tracker, 1, 0.05, 8, 900, base);
-        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
-        assert!(
-            cap < 32,
-            "supply-limited miner must not hold inflated cap: cap={cap}"
+        for second in 0..180u64 {
+            tracker.record_with_time(
+                1,
+                "low-demand",
+                true,
+                0.05,
+                false,
+                "A",
+                base + Duration::from_secs(second),
+            );
+            for completion in 0..40u64 {
+                let at = base + Duration::from_millis(second * 1000 + completion * 1000 / 40);
+                tracker.record_with_time(2, "high-rate-but-not-full", true, 0.05, false, "A", at);
+            }
+        }
+
+        let caps = tracker.cap_snapshot();
+        assert_eq!(
+            caps.get(&1).copied(),
+            Some(64),
+            "low validator demand must not back off a learned cap"
         );
-        assert!(cap >= 1, "cap never drops below floor");
+        assert_eq!(
+            caps.get(&2).copied(),
+            Some(1),
+            "unsaturated delivery rate must not ramp a learned cap"
+        );
+        assert!(tracker.miner_delivered_work(1) > 0.0);
+        assert!(tracker.miner_delivered_work(2) > 0.0);
+        assert!(tracker.drain_cap_events().is_empty());
+    }
+
+    #[test]
+    fn unsaturated_rates_do_not_contaminate_later_saturated_rate() {
+        let mut tracker = test_tracker();
+        let base = Instant::now();
+        for second in 0..60u64 {
+            tracker.record_with_time(
+                1,
+                "low-demand",
+                true,
+                0.05,
+                false,
+                "A",
+                base + Duration::from_secs(second),
+            );
+            for completion in 0..40u64 {
+                let at = base + Duration::from_millis(second * 1000 + completion * 1000 / 40);
+                tracker.record_with_time(2, "high-demand", true, 0.05, false, "A", at);
+            }
+        }
+
+        let saturated_at = base + Duration::from_secs(61);
+        assert_eq!(tracker.delivered_rate_estimate(1, saturated_at), 0.0);
+        assert_eq!(tracker.delivered_rate_estimate(2, saturated_at), 0.0);
+
+        tracker.record_with_time(1, "low-demand", true, 0.05, true, "A", saturated_at);
+        tracker.record_with_time(2, "high-demand", true, 0.05, true, "A", saturated_at);
+
+        assert_eq!(
+            tracker.delivered_rate_estimate(1, saturated_at),
+            tracker.delivered_rate_estimate(2, saturated_at),
+            "the later saturated rate must not inherit either unsaturated history"
+        );
     }
 
     #[test]
@@ -1583,15 +1633,27 @@ mod tests {
         let mut tracker = test_tracker();
         tracker.adaptive_caps.insert(3, 2);
         let hotkeys: HashMap<u16, String> = [(3u16, "hk".to_string())].into_iter().collect();
-        assert_eq!(tracker.decay_idle_caps(&hotkeys), 1);
+        assert_eq!(tracker.decay_idle_caps(&hotkeys, &HashSet::new()), 1);
         assert_eq!(tracker.adaptive_caps.get(&3).copied(), Some(1));
-        assert_eq!(tracker.decay_idle_caps(&hotkeys), 0);
+        assert_eq!(tracker.decay_idle_caps(&hotkeys, &HashSet::new()), 0);
         assert_eq!(tracker.adaptive_caps.get(&3).copied(), Some(1));
         assert!(tracker.drain_pending_evictions().is_empty());
         assert!(!tracker
             .drain_cap_events()
             .iter()
             .any(|e| matches!(e.direction, CapDirection::Evict)));
+    }
+
+    #[test]
+    fn idle_decay_preserves_queryable_supply_starved_miner() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(3, 8);
+        let hotkeys: HashMap<u16, String> = [(3u16, "hk".to_string())].into_iter().collect();
+        let queryable = HashSet::from([3u16]);
+
+        assert_eq!(tracker.decay_idle_caps(&hotkeys, &queryable), 0);
+        assert_eq!(tracker.adaptive_caps.get(&3).copied(), Some(8));
+        assert!(tracker.drain_cap_events().is_empty());
     }
 
     #[test]

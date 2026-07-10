@@ -27,6 +27,33 @@ pub fn set_active_tasks(count: usize) {
     gauge!("sn2_active_tasks").set(count as f64);
 }
 
+pub fn set_dispatch_pressure(scale: f64, memory_available_ratio: Option<f64>) {
+    gauge!("sn2_dispatch_pressure_scale").set(scale);
+    if let Some(ratio) = memory_available_ratio {
+        gauge!("sn2_host_memory_available_ratio").set(ratio);
+    }
+}
+
+pub fn record_dispatch_pressure_change(direction: &str) {
+    counter!(
+        "sn2_dispatch_pressure_changes_total",
+        "direction" => direction.to_string()
+    )
+    .increment(1);
+}
+
+pub fn record_dispatch_allocation(
+    fair_slots: usize,
+    residual_slots: usize,
+    starved_miners: usize,
+    utilization: f64,
+) {
+    counter!("sn2_dispatch_fair_slots_total").increment(fair_slots as u64);
+    counter!("sn2_dispatch_residual_slots_total").increment(residual_slots as u64);
+    counter!("sn2_dispatch_starved_miners_total").increment(starved_miners as u64);
+    histogram!("sn2_dispatch_slot_utilization_ratio").record(utilization.clamp(0.0, 1.0));
+}
+
 pub fn set_metagraph_n(n: u16) {
     gauge!("sn2_metagraph_n").set(n as f64);
 }

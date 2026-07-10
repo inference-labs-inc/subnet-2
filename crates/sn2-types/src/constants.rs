@@ -68,6 +68,10 @@ pub const BUNDLE_CACHE_IDLE_TTL_SECS: u64 = 120;
 pub const CAPACITY_ADJUST_INTERVAL_SECS: u64 = 15;
 pub const CAPACITY_UNIT_REFERENCE_PERCENTILE: f64 = 0.1;
 pub const CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO: f64 = 0.20;
+/// Memory availability at which validator-wide dispatch pressure begins to
+/// recover. The gap above the ramp-block threshold provides hysteresis so a
+/// host near the boundary does not alternate between throttling and recovery.
+pub const CAPACITY_PRESSURE_RECOVERY_MIN_AVAIL_MEM_RATIO: f64 = 0.25;
 pub const CAPACITY_PRESSURE_BACKOFF_FACTOR: f64 = 0.10;
 pub const IP_REGION_CAP_FRACTION: f64 = 0.25;
 

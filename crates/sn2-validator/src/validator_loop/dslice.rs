@@ -69,6 +69,24 @@ pub(crate) struct PlannedSliceWork {
 
 const PLAN_MATERIALIZE_BATCH: usize = 16;
 
+fn effective_staging_capacity(
+    learned_capacity: usize,
+    pressure_scale: f64,
+    configured_ceiling: Option<usize>,
+) -> usize {
+    if learned_capacity == 0 {
+        return 0;
+    }
+    let pressure_adjusted = if pressure_scale >= 1.0 {
+        learned_capacity
+    } else {
+        ((learned_capacity as f64 * pressure_scale.clamp(0.0, 1.0)).floor() as usize).max(1)
+    };
+    configured_ceiling
+        .map(|ceiling| pressure_adjusted.min(ceiling))
+        .unwrap_or(pressure_adjusted)
+}
+
 impl ValidatorLoop {
     pub(super) fn decode_submission_tensor(
         submission: &DsperseSubmission,
@@ -796,15 +814,34 @@ impl ValidatorLoop {
             return;
         }
         let queued = self.api_dslice_queue.len() + self.stacked_dslice_queue.len();
-        let caps_sum: usize = self
-            .performance_tracker
-            .miner_capacities()
-            .values()
-            .copied()
-            .sum();
-        let low = caps_sum
+        let learned_caps = self.performance_tracker.miner_capacities();
+        let caps_sum = self
+            .get_queryable_neurons()
+            .iter()
+            .filter(|neuron| {
+                !self.rsv.is_skiplisted(&neuron.hotkey, self.current_block)
+                    && self
+                        .dispatch_cooldowns
+                        .get(&neuron.hotkey)
+                        .is_none_or(|&until| self.current_block >= until)
+            })
+            .fold(0usize, |total, neuron| {
+                // Unseen queryable miners enter dispatch at cap one, so they
+                // must also contribute to benchmark staging before reaching
+                // the scoring sample gate.
+                total.saturating_add(learned_caps.get(&neuron.uid).copied().unwrap_or(1))
+            });
+        let effective_caps_sum = effective_staging_capacity(
+            caps_sum,
+            self.dispatch_pressure.scale(),
+            self.config.dispatch_ceiling,
+        );
+        if effective_caps_sum == 0 {
+            return;
+        }
+        let low = effective_caps_sum
             .saturating_mul(2)
-            .clamp(DSLICE_QUEUE_LOW_WATERMARK, DSLICE_QUEUE_LOW_WATERMARK_MAX);
+            .clamp(1, DSLICE_QUEUE_LOW_WATERMARK_MAX);
         if queued >= low {
             return;
         }
@@ -1615,8 +1652,18 @@ impl ValidatorLoop {
 
 #[cfg(test)]
 mod tests {
-    use super::ValidatorLoop;
+    use super::{effective_staging_capacity, ValidatorLoop};
     use dsperse::schema::tiling::{DimSplitInfo, DimSplitKind};
+
+    #[test]
+    fn staging_capacity_respects_pressure_and_configured_ceiling() {
+        assert_eq!(effective_staging_capacity(400, 1.0, None), 400);
+        assert_eq!(effective_staging_capacity(400, 0.9, None), 360);
+        assert_eq!(effective_staging_capacity(400, 0.01, None), 4);
+        assert_eq!(effective_staging_capacity(400, 0.9, Some(200)), 200);
+        assert_eq!(effective_staging_capacity(400, 0.9, Some(0)), 0);
+        assert_eq!(effective_staging_capacity(0, 0.9, Some(200)), 0);
+    }
 
     #[test]
     fn group_dim_split_requires_multi_input_and_covering_groups() {

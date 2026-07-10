@@ -187,6 +187,7 @@ pub struct ValidatorLoop {
     pub(super) consecutive_metagraph_failures: u32,
     pub(super) dispatch_cache: dispatch::DispatchCache,
     pub(super) dispatch_cooldowns: HashMap<String, u64>,
+    dispatch_pressure: maintenance::DispatchPressure,
 }
 
 pub(super) const METAGRAPH_FAILURE_RECONNECT_THRESHOLD: u32 = 3;
@@ -398,6 +399,7 @@ impl ValidatorLoop {
             consecutive_metagraph_failures: 0,
             dispatch_cache: dispatch::DispatchCache::new(),
             dispatch_cooldowns: HashMap::new(),
+            dispatch_pressure: maintenance::DispatchPressure::new(),
         })
     }
 

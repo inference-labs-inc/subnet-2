@@ -11,6 +11,49 @@ use super::{is_valid_ip, ValidatorLoop, WeightTaskResult};
 use crate::metrics_server as metrics;
 use sn2_circuit_store::CircuitStore;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DispatchPressureChange {
+    Reduced,
+    Recovered,
+}
+
+/// Ephemeral validator-host backpressure. This deliberately lives outside the
+/// performance tracker: host memory availability is not evidence about any
+/// miner's capacity and must never rewrite a learned per-miner cap.
+pub(super) struct DispatchPressure {
+    scale: f64,
+}
+
+impl DispatchPressure {
+    pub(super) fn new() -> Self {
+        Self { scale: 1.0 }
+    }
+
+    pub(super) fn scale(&self) -> f64 {
+        self.scale
+    }
+
+    fn update(&mut self, memory_available_ratio: Option<f64>) -> Option<DispatchPressureChange> {
+        let ratio = memory_available_ratio?;
+        let previous = self.scale;
+        let change = if ratio < CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO {
+            self.scale *= 1.0 - CAPACITY_PRESSURE_BACKOFF_FACTOR;
+            DispatchPressureChange::Reduced
+        } else if ratio > CAPACITY_PRESSURE_RECOVERY_MIN_AVAIL_MEM_RATIO && self.scale < 1.0 {
+            self.scale = (self.scale + CAPACITY_PRESSURE_BACKOFF_FACTOR).min(1.0);
+            DispatchPressureChange::Recovered
+        } else {
+            return None;
+        };
+
+        if (self.scale - previous).abs() <= f64::EPSILON {
+            None
+        } else {
+            Some(change)
+        }
+    }
+}
+
 impl ValidatorLoop {
     pub(super) async fn run_periodic_tasks(&mut self) -> Result<()> {
         let now = std::time::Instant::now();
@@ -132,20 +175,59 @@ impl ValidatorLoop {
             let queue_size = self.rwr_queue.len()
                 + self.api_dslice_queue.len()
                 + self.stacked_dslice_queue.len();
-            let queryable_count = self.get_queryable_neurons().len();
+            let queryable_uids: HashSet<u16> = self
+                .get_queryable_neurons()
+                .into_iter()
+                .filter(|neuron| {
+                    !self.rsv.is_skiplisted(&neuron.hotkey, self.current_block)
+                        && self
+                            .dispatch_cooldowns
+                            .get(&neuron.hotkey)
+                            .is_none_or(|&until| self.current_block >= until)
+                })
+                .map(|neuron| neuron.uid)
+                .collect();
+            let queryable_count = queryable_uids.len();
             let dsperse_count = self.circuit_store.get_dsperse_circuits().len();
-            let pressure_backoffs = self.performance_tracker.backoff_all_caps_under_pressure(
-                CAPACITY_PRESSURE_BACKOFF_FACTOR,
-                &self.uid_hotkeys,
-            );
-            if pressure_backoffs > 0 {
-                warn!(
-                    decremented = pressure_backoffs,
-                    factor = CAPACITY_PRESSURE_BACKOFF_FACTOR,
-                    "host memory pressure: trimming adaptive caps across all miners"
-                );
+            let memory_available_ratio = crate::performance::host_memory_available_ratio();
+            let previous_pressure_scale = self.dispatch_pressure.scale();
+            let pressure_change = self.dispatch_pressure.update(memory_available_ratio);
+            let dispatch_pressure_scale = self.dispatch_pressure.scale();
+            self.performance_tracker
+                .set_capacity_growth_paused(dispatch_pressure_scale < 1.0);
+            metrics::set_dispatch_pressure(dispatch_pressure_scale, memory_available_ratio);
+            if let Some(change) = pressure_change {
+                let direction = match change {
+                    DispatchPressureChange::Reduced => "reduced",
+                    DispatchPressureChange::Recovered => "recovered",
+                };
+                metrics::record_dispatch_pressure_change(direction);
+                match change {
+                    DispatchPressureChange::Reduced => warn!(
+                        direction,
+                        memory_available_ratio = ?memory_available_ratio,
+                        previous_dispatch_scale = previous_pressure_scale,
+                        dispatch_scale = dispatch_pressure_scale,
+                        "validator-wide dispatch pressure changed"
+                    ),
+                    DispatchPressureChange::Recovered => info!(
+                        direction,
+                        memory_available_ratio = ?memory_available_ratio,
+                        previous_dispatch_scale = previous_pressure_scale,
+                        dispatch_scale = dispatch_pressure_scale,
+                        "validator-wide dispatch pressure changed"
+                    ),
+                }
             }
-            let idle_decayed = self.performance_tracker.decay_idle_caps(&self.uid_hotkeys);
+            // A global ceiling can intentionally leave otherwise healthy
+            // miners idle. Do not interpret that validator-side throttling as
+            // evidence that their learned caps should decay.
+            let idle_decayed = if dispatch_pressure_scale >= 1.0 {
+                self.performance_tracker
+                    .decay_idle_caps(&self.uid_hotkeys, &queryable_uids)
+            } else {
+                0
+            };
             if idle_decayed > 0 {
                 info!(decremented = idle_decayed, "decayed idle adaptive caps");
             }
@@ -161,7 +243,8 @@ impl ValidatorLoop {
                 verification_concurrency = self.verification_concurrency,
                 verify_tasks = self.verify_tasks.len(),
                 pending_verifications = self.pending_verifications.len(),
-                pressure_backoffs = pressure_backoffs,
+                memory_available_ratio = ?memory_available_ratio,
+                dispatch_pressure_scale,
                 "health"
             );
             if let Some(reporter) = &mut self.stats_reporter {
@@ -581,5 +664,59 @@ impl ValidatorLoop {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_pressure_uses_hysteresis_and_recovers_to_one() {
+        let mut pressure = DispatchPressure::new();
+
+        assert_eq!(
+            pressure.update(Some(CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO - 0.01)),
+            Some(DispatchPressureChange::Reduced)
+        );
+        assert!((pressure.scale() - 0.9).abs() < 1e-12);
+
+        assert_eq!(
+            pressure.update(Some(CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO - 0.01)),
+            Some(DispatchPressureChange::Reduced)
+        );
+        assert!((pressure.scale() - 0.81).abs() < 1e-12);
+
+        assert_eq!(pressure.update(Some(0.22)), None);
+        assert_eq!(
+            pressure.update(Some(CAPACITY_RAMP_MIN_AVAIL_MEM_RATIO)),
+            None
+        );
+        assert_eq!(
+            pressure.update(Some(CAPACITY_PRESSURE_RECOVERY_MIN_AVAIL_MEM_RATIO)),
+            None
+        );
+        assert!((pressure.scale() - 0.81).abs() < 1e-12);
+
+        assert_eq!(
+            pressure.update(Some(CAPACITY_PRESSURE_RECOVERY_MIN_AVAIL_MEM_RATIO + 0.01)),
+            Some(DispatchPressureChange::Recovered)
+        );
+        assert!((pressure.scale() - 0.91).abs() < 1e-12);
+        assert_eq!(
+            pressure.update(Some(CAPACITY_PRESSURE_RECOVERY_MIN_AVAIL_MEM_RATIO + 0.01)),
+            Some(DispatchPressureChange::Recovered)
+        );
+        assert!((pressure.scale() - 1.0).abs() < 1e-12);
+        assert_eq!(pressure.update(Some(0.90)), None);
+    }
+
+    #[test]
+    fn dispatch_pressure_holds_when_memory_measurement_is_unavailable() {
+        let mut pressure = DispatchPressure::new();
+        pressure.update(Some(0.10));
+        let reduced = pressure.scale();
+        assert_eq!(pressure.update(None), None);
+        assert_eq!(pressure.scale(), reduced);
     }
 }
