@@ -25,6 +25,19 @@ pub fn evict_idle_bundles(ttl_secs: u64) -> usize {
     BACKEND.evict_idle(std::time::Duration::from_secs(ttl_secs))
 }
 
+/// Bound the compiled bundle cache's total approximate bytes; `None` removes
+/// the bound. Verifiers that sample across many distinct circuits set this
+/// because their per-circuit reuse is too sparse for a residency cache to
+/// earn its memory.
+pub fn set_bundle_cache_byte_cap(bytes: Option<u64>) {
+    BACKEND.set_cache_byte_cap(bytes);
+}
+
+/// Bundle cache occupancy as (entry count, total approximate bytes).
+pub fn bundle_cache_stats() -> (usize, u64) {
+    BACKEND.cache_stats()
+}
+
 pub fn evict_circuit_cache(path_prefix: &str) {
     EVICTION_GENERATION.fetch_add(1, Ordering::SeqCst);
     BACKEND.evict_cache_by_prefix(std::path::Path::new(path_prefix));
