@@ -7,5 +7,6 @@ pub mod verify;
 
 pub use store::{StoredTile, TileStore};
 pub use verify::{
-    clear_circuit_cache, evict_circuit_cache, evict_idle_bundles, verify_inner, VerifyResult,
+    bundle_cache_stats, clear_circuit_cache, evict_circuit_cache, evict_idle_bundles,
+    set_bundle_cache_byte_cap, verify_inner, VerifyResult,
 };

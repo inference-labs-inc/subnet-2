@@ -169,8 +169,11 @@ impl ValidatorLoop {
             let (runs, artifacts, artifact_bytes, tile_entries, tile_tiles) =
                 self.run_manager.memory_stats();
             let disabled_slices: usize = self.disabled_slices.values().map(|m| m.len()).sum();
+            let (bundle_count, bundle_bytes) = sn2_verify::bundle_cache_stats();
             info!(
                 rss_mb = process_rss_mb(),
+                bundle_count = bundle_count,
+                bundle_mb = bundle_bytes / (1024 * 1024),
                 unit_time_keys = unit_keys,
                 unit_time_samples = unit_samples,
                 own_best_entries = own_best,

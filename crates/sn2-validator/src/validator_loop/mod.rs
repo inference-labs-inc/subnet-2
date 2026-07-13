@@ -201,6 +201,8 @@ impl ValidatorLoop {
             );
         }
 
+        sn2_verify::set_bundle_cache_byte_cap(Some(sn2_types::VERIFIER_BUNDLE_CACHE_CAP_BYTES));
+
         let score_path = dirs_next::home_dir()
             .unwrap_or_default()
             .join(".bittensor")
