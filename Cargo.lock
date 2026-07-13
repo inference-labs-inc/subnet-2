@@ -1827,7 +1827,7 @@ checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
 [[package]]
 name = "dsperse"
 version = "0.0.0"
-source = "git+https://github.com/inference-labs-inc/dsperse?rev=009f25151e75#009f25151e754e7db08a8bdd7aa5607f2e633f52"
+source = "git+https://github.com/inference-labs-inc/dsperse?rev=2fbcc0059883#2fbcc00598830bdd441139e35deb6c11f03d4768"
 dependencies = [
  "clap",
  "half 2.7.1",
