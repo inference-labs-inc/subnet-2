@@ -78,13 +78,16 @@ pub const IP_REGION_CAP_FRACTION: f64 = 0.25;
 /// recovered miner re-enters dispatch within the same scoring window.
 pub const REHAB_BLOCKS: u64 = 360;
 
-/// Byte bound on the validator's compiled bundle cache. Sampled verification
-/// spreads across many distinct circuits, so per-circuit reuse is too sparse
-/// for residency to earn its memory; without a bound the cache was measured
-/// holding five to twelve gigabytes of bundles with a near-zero hit rate. A
-/// cache miss reloads from local disk in fractions of a second, which the
-/// sampled verify rate absorbs without backlog.
-pub const VERIFIER_BUNDLE_CACHE_CAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Byte bound on the validator's compiled bundle cache, accounted at the
+/// stored (compressed) form. Sampled verification spreads across many
+/// distinct circuits, so per-circuit reuse is too sparse for residency to
+/// earn its memory, and the resident cost of a cached bundle is several
+/// times its stored bytes once the verifier expands it. Production showed a
+/// two gigabyte accounted cap admitting an order of magnitude more resident
+/// memory; the bound is therefore sized small enough that even with the
+/// expansion factor the cache stays a minor term. A miss reloads from local
+/// disk in fractions of a second, which the sampled verify rate absorbs.
+pub const VERIFIER_BUNDLE_CACHE_CAP_BYTES: u64 = 256 * 1024 * 1024;
 
 pub const MAX_POW_QUEUE_SIZE: usize = 1024;
 pub const POW_OUTPUT_STRIDE: usize = MAX_POW_QUEUE_SIZE;
