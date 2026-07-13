@@ -356,6 +356,26 @@ impl PerformanceTracker {
         );
     }
 
+    /// Sizes of the tracker's long-lived containers, for the periodic memory
+    /// line in the health log. Returns (unit_time_keys, unit_time_samples,
+    /// own_best_entries, reference_cache_keys, cap_events, delivered_buckets).
+    pub fn memory_stats(&self) -> (usize, usize, usize, usize, usize, usize) {
+        let unit_keys = self.unit_times.len();
+        let unit_samples = self.unit_times.values().map(|v| v.len()).sum();
+        let own_best = self.unit_own_best.values().map(|m| m.len()).sum();
+        let ref_cache = self.unit_reference_cache.len();
+        let cap_events = self.cap_events.len();
+        let buckets = self.delivered_work.values().map(|v| v.len()).sum();
+        (
+            unit_keys,
+            unit_samples,
+            own_best,
+            ref_cache,
+            cap_events,
+            buckets,
+        )
+    }
+
     pub fn adaptive_timeout(&self) -> f64 {
         let times: Vec<f64> = self
             .windows
