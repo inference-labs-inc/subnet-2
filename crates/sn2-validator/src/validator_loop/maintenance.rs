@@ -164,6 +164,28 @@ impl ValidatorLoop {
                 pressure_backoffs = pressure_backoffs,
                 "health"
             );
+            let (unit_keys, unit_samples, own_best, ref_cache, cap_events, work_buckets) =
+                self.performance_tracker.memory_stats();
+            let (runs, artifacts, artifact_bytes, tile_entries, tile_tiles) =
+                self.run_manager.memory_stats();
+            let disabled_slices: usize = self.disabled_slices.values().map(|m| m.len()).sum();
+            info!(
+                rss_mb = process_rss_mb(),
+                unit_time_keys = unit_keys,
+                unit_time_samples = unit_samples,
+                own_best_entries = own_best,
+                reference_cache_keys = ref_cache,
+                cap_events = cap_events,
+                delivered_buckets = work_buckets,
+                runs = runs,
+                artifacts = artifacts,
+                artifact_mb = artifact_bytes / (1024 * 1024),
+                tile_counter_entries = tile_entries,
+                tile_counter_tiles = tile_tiles,
+                disabled_slices = disabled_slices,
+                dispatch_cooldowns = self.dispatch_cooldowns.len(),
+                "memory"
+            );
             if let Some(reporter) = &mut self.stats_reporter {
                 reporter.sample_health(active_tasks, queue_size);
             }
@@ -582,4 +604,19 @@ impl ValidatorLoop {
 
         Ok(())
     }
+}
+
+/// Resident set size of this process in MiB, read from procfs. Returns 0 on
+/// platforms without /proc (development hosts), so the memory log line is
+/// meaningful only on the Linux deployment target.
+fn process_rss_mb() -> u64 {
+    std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|s| {
+            s.split_whitespace()
+                .nth(1)
+                .and_then(|pages| pages.parse::<u64>().ok())
+        })
+        .map(|pages| pages * 4096 / (1024 * 1024))
+        .unwrap_or(0)
 }

@@ -578,6 +578,49 @@ impl IncrementalRunManager {
         self.runs.len()
     }
 
+    /// Sizes of the run manager's long-lived containers, for the periodic
+    /// memory line in the health log. Returns (runs, artifacts,
+    /// artifact_bytes, tile_counter_entries, tile_counter_tiles). Artifact
+    /// bytes counts the dominant owned payloads (proof and witness hex plus
+    /// serialized outputs), not exact heap usage.
+    pub fn memory_stats(&self) -> (usize, usize, usize, usize, usize) {
+        fn json_size_estimate(v: &serde_json::Value) -> usize {
+            match v {
+                serde_json::Value::Array(a) => 24 + a.iter().map(json_size_estimate).sum::<usize>(),
+                serde_json::Value::Object(o) => {
+                    o.iter()
+                        .map(|(k, v)| k.len() + 48 + json_size_estimate(v))
+                        .sum::<usize>()
+                        + 32
+                }
+                serde_json::Value::String(s) => s.len() + 24,
+                _ => 16,
+            }
+        }
+        let mut artifacts = 0usize;
+        let mut artifact_bytes = 0usize;
+        for run in self.runs.values() {
+            artifacts += run.artifacts.len();
+            for a in &run.artifacts {
+                artifact_bytes += a.proof_hex.as_ref().map_or(0, |s| s.len())
+                    + a.witness_hex.as_ref().map_or(0, |s| s.len())
+                    + a.computed_outputs.as_ref().map_or(0, json_size_estimate);
+            }
+        }
+        let tile_tiles = self
+            .tile_counters
+            .values()
+            .map(|c| c.expected.len() + c.received.len())
+            .sum();
+        (
+            self.runs.len(),
+            artifacts,
+            artifact_bytes,
+            self.tile_counters.len(),
+            tile_tiles,
+        )
+    }
+
     pub fn benchmark_run_uids(&self) -> Vec<String> {
         self.runs
             .iter()
