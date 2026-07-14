@@ -42,6 +42,4 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
-mimalloc = { workspace = true }
-libmimalloc-sys = { version = "0.1", features = ["extended"] }
-ctor = { workspace = true }
+tikv-jemallocator = "0.7"

@@ -2,34 +2,26 @@
 
 #[cfg(target_os = "linux")]
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-// Mimalloc reads option env vars on first option access (lazy). The default
-// purge delay churns the page tables on our high-frequency dispatch
-// workload, observed as 38k mmap/munmap syscalls per 3s on mainnet, while
-// a delay of a minute holds every freed page for that long: at hundreds of
-// megabytes per second of transient allocation churn the rolling window of
-// freed-but-unpurged pages alone was six to ten gigabytes of resident
-// memory, which walked the process into allocation failure as throughput
-// grew. Five seconds keeps page operations batched several hundredfold
-// over the default while bounding the garbage window to a few seconds of
-// churn; measured on mainnet it restored peak-decay behavior with no
-// throughput regression. Setting the env var from a constructor that runs
-// before main() (and crucially before the tokio runtime build) captures
-// the cadence before any sustained allocation. Operators can still
-// override by setting the env var explicitly in their process
-// environment.
+// Jemalloc replaces mimalloc for the validator specifically. The workload
+// interleaves multi-megabyte transient allocations (request payloads,
+// activation tensors, expanded verification structures on short-lived
+// blocking threads) with long-lived small tracker state, and mimalloc's
+// segment model pinned pages hosting any live object: resident memory
+// ratcheted toward the host ceiling on an hourly cycle even with aggressive
+// purge settings and periodic forced collection, because fragmentation is
+// immune to both. Jemalloc segregates size classes into separate regions by
+// construction, so the transient and persistent lifetimes never share
+// pages, and the background thread batches page decommits, which also
+// avoids the page-table syscall storm that originally motivated mimalloc
+// here. Decay is set to ten seconds so freed pages return promptly without
+// per-free syscall churn.
 #[cfg(target_os = "linux")]
-#[ctor::ctor]
-fn configure_mimalloc_purge_delay() {
-    // SAFETY: ctor runs single-threaded before main; no other thread can
-    // race on environment state at this point.
-    unsafe {
-        if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
-            std::env::set_var("MIMALLOC_PURGE_DELAY", "5000");
-        }
-    }
-}
+#[allow(non_upper_case_globals)]
+#[export_name = "_rjem_malloc_conf"]
+pub static malloc_conf: &[u8] =
+    b"background_thread:true,dirty_decay_ms:10000,muzzy_decay_ms:10000\0";
 
 mod cli;
 mod config;
