@@ -621,6 +621,21 @@ impl IncrementalRunManager {
         )
     }
 
+    /// Total activation tensor cache occupancy across active combined runs,
+    /// as (tensor count, approximate bytes at eight bytes per element).
+    pub fn tensor_store_stats(&self) -> (usize, usize) {
+        let mut tensors = 0usize;
+        let mut bytes = 0usize;
+        for run in self.runs.values() {
+            if let Some(combined) = run.combined.as_ref() {
+                let (count, elements) = combined.tensor_store_stats();
+                tensors += count;
+                bytes += elements * 8;
+            }
+        }
+        (tensors, bytes)
+    }
+
     pub fn benchmark_run_uids(&self) -> Vec<String> {
         self.runs
             .iter()
