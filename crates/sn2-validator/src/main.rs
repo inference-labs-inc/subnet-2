@@ -5,13 +5,20 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 // Mimalloc reads option env vars on first option access (lazy). The default
-// `purge_delay` of ~1s churns the page tables on our high-frequency
-// dispatch workload — observed 38k mmap/munmap syscalls per 3s on mainnet,
-// re-introducing a single-thread bottleneck at the allocator layer. Setting
-// the env var from a constructor that runs before main() (and crucially
-// before the tokio runtime build) captures the desired cadence before any
-// sustained allocation. Operators can still override by setting the env
-// var explicitly in their process environment.
+// purge delay churns the page tables on our high-frequency dispatch
+// workload, observed as 38k mmap/munmap syscalls per 3s on mainnet, while
+// a delay of a minute holds every freed page for that long: at hundreds of
+// megabytes per second of transient allocation churn the rolling window of
+// freed-but-unpurged pages alone was six to ten gigabytes of resident
+// memory, which walked the process into allocation failure as throughput
+// grew. Five seconds keeps page operations batched several hundredfold
+// over the default while bounding the garbage window to a few seconds of
+// churn; measured on mainnet it restored peak-decay behavior with no
+// throughput regression. Setting the env var from a constructor that runs
+// before main() (and crucially before the tokio runtime build) captures
+// the cadence before any sustained allocation. Operators can still
+// override by setting the env var explicitly in their process
+// environment.
 #[cfg(target_os = "linux")]
 #[ctor::ctor]
 fn configure_mimalloc_purge_delay() {
@@ -19,7 +26,7 @@ fn configure_mimalloc_purge_delay() {
     // race on environment state at this point.
     unsafe {
         if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
-            std::env::set_var("MIMALLOC_PURGE_DELAY", "60000");
+            std::env::set_var("MIMALLOC_PURGE_DELAY", "5000");
         }
     }
 }
