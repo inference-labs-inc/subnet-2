@@ -116,6 +116,19 @@ impl ValidatorLoop {
 
         if now.duration_since(self.timings.gc) > Duration::from_secs(120) {
             self.gc_stale_runs().await;
+            // Force the allocator to decommit freed and abandoned pages. The
+            // workload's large transient allocations happen on short-lived
+            // blocking threads whose heap segments are abandoned when the
+            // thread dies, and neither the purge delay nor the abandoned-page
+            // option returned them in production: resident memory climbed to
+            // the process manager's bound roughly hourly while every gauged
+            // container stayed small. An explicit forced collect reclaims
+            // abandoned segments and decommits free pages on our cadence, at
+            // a cost of milliseconds every two minutes.
+            #[cfg(target_os = "linux")]
+            unsafe {
+                libmimalloc_sys::mi_collect(true);
+            }
             self.timings.gc = now;
         }
 
