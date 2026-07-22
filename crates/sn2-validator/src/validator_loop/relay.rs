@@ -145,6 +145,13 @@ impl ValidatorLoop {
         final_output: Option<serde_json::Value>,
         failed_count: usize,
     ) {
+        let (_, total_tiles, _) = self.run_manager.slice_tile_counts(run_uid);
+        let verified_tiles = self.run_manager.verified_tile_total(run_uid);
+        let proof_coverage = if total_tiles > 0 {
+            (verified_tiles as f64 / total_tiles as f64).min(1.0)
+        } else {
+            0.0
+        };
         let notify_circuit_id = active_run
             .as_ref()
             .map(|r| r.circuit_id.as_str())
@@ -156,7 +163,7 @@ impl ValidatorLoop {
             "complete"
         };
         let mut result = serde_json::json!({"run_uid": run_uid, "status": status});
-        if let Some(output) = final_output {
+        if let Some(output) = final_output.clone() {
             result["output"] = output;
         }
         if failed_count > 0 {
@@ -172,7 +179,13 @@ impl ValidatorLoop {
             "run_uid": run_uid,
             "circuit_id": notify_circuit_id,
             "status": notification_status,
+            "verified_tiles": verified_tiles,
+            "total_tiles": total_tiles,
+            "proof_coverage": proof_coverage,
         });
+        if let Some(output) = final_output {
+            notification["output"] = output;
+        }
         if failed_count > 0 {
             notification["failed_slices"] = serde_json::json!(failed_count);
         }

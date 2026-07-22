@@ -206,6 +206,17 @@ impl IncrementalRunManager {
             .unwrap_or(0)
     }
 
+    /// Total tiles verified across every slice of a run. Paired with the run's
+    /// total tile count this yields the fraction of the model whose execution
+    /// is backed by a verified proof.
+    pub fn verified_tile_total(&self, run_uid: &str) -> usize {
+        self.verified_tile_counts
+            .iter()
+            .filter(|((uid, _), _)| uid == run_uid)
+            .map(|(_, count)| *count)
+            .sum()
+    }
+
     pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize, HashMap<String, usize>) {
         let run = match self.runs.get(run_uid) {
             Some(r) => r,
