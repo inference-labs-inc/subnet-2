@@ -1,5 +1,5 @@
 ARG SN2_PLATFORM=linux/amd64
-FROM --platform=$SN2_PLATFORM rust:1.96.0-bookworm@sha256:19817ead3289c8c631c73df281e18b59b172f6a31f4f563290f69cddd06c30e9 AS chef
+FROM --platform=$SN2_PLATFORM rust:1.97.0-bookworm@sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c3073 AS chef
 
 RUN cargo install cargo-chef --locked
 RUN apt-get update && apt-get install -y \
