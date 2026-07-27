@@ -6,7 +6,11 @@ mod subxt_helpers;
 mod wallet;
 mod weights;
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
+use subxt::backend::{ChainHeadBackend, CombinedBackend, LegacyBackend};
+use subxt::rpcs::RpcClient;
 use subxt::{OnlineClient, PolkadotConfig};
 
 pub use metagraph::{Metagraph, NeuronInfo};
@@ -34,13 +38,39 @@ pub fn resolve_endpoint(network: &str, override_endpoint: Option<&str>) -> Strin
 /// TLS-validating `from_url`; `ws://` URLs use `from_insecure_url`, which
 /// subxt requires for non-TLS sockets even when reaching localhost or a
 /// private substrate node.
+///
+/// The backend is assembled explicitly rather than via
+/// `OnlineClient::from_url`, which builds a `CombinedBackend` that enables the
+/// `archive_v1_*` backend whenever the node advertises those methods in
+/// `rpc_methods`. Pruned subtensor nodes advertise the archive namespace but
+/// answer every archive call with `Method not found (-32601)`, and the archive
+/// backend builds its storage streams lazily, so the failure surfaces on first
+/// poll rather than at construction and `CombinedBackend`'s per-call fallback
+/// chain never gets the chance to retry against `chainHead` or the legacy
+/// `state_*` methods. Omitting the archive backend keeps storage reads on the
+/// two backends every subtensor node actually serves.
 pub async fn connect_chain(endpoint: &str) -> Result<OnlineClient<PolkadotConfig>> {
-    let result = if endpoint.starts_with("ws://") {
-        OnlineClient::<PolkadotConfig>::from_insecure_url(endpoint).await
+    let rpc_client = if endpoint.starts_with("ws://") {
+        RpcClient::from_insecure_url(endpoint).await
     } else {
-        OnlineClient::<PolkadotConfig>::from_url(endpoint).await
-    };
-    result.with_context(|| format!("connecting to subtensor at {endpoint}"))
+        RpcClient::from_url(endpoint).await
+    }
+    .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
+
+    let chain_head = ChainHeadBackend::builder().build_with_background_driver(rpc_client.clone());
+    let legacy = LegacyBackend::builder().build(rpc_client.clone());
+
+    let backend = CombinedBackend::<PolkadotConfig>::builder()
+        .no_default_backends()
+        .with_chainhead_backend(chain_head)
+        .with_legacy_backend(legacy)
+        .build_with_background_driver(rpc_client)
+        .await
+        .with_context(|| format!("building subtensor backend for {endpoint}"))?;
+
+    OnlineClient::<PolkadotConfig>::from_backend(Arc::new(backend))
+        .await
+        .with_context(|| format!("connecting to subtensor at {endpoint}"))
 }
 
 pub fn is_rpc_disconnect(err: &anyhow::Error) -> bool {
