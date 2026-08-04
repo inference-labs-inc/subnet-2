@@ -912,9 +912,9 @@ dependencies = [
 
 [[package]]
 name = "btwallet"
-version = "4.0.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfbd26f85078c02aa02c7913494602afb5b994580ab8581682c40a9c7361ffad"
+checksum = "8365dd736f1a158d7a84cf31c659f15c1060326e8a80364de9a0ed1439f5d357"
 dependencies = [
  "ansible-vault",
  "base64 0.22.1",
@@ -5390,13 +5390,13 @@ dependencies = [
 
 [[package]]
 name = "rpassword"
-version = "7.5.2"
+version = "7.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ac5b223d9738ef56e0b98305410be40fa0941bf6036c56f1506751e43552d64"
+checksum = "66d4c8b64f049c6721ec8ccec37ddfc3d641c4a7fca57e8f2a89de509c73df39"
 dependencies = [
  "libc",
  "rtoolbox",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
