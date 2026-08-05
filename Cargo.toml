@@ -42,7 +42,7 @@ mimalloc = { version = "0.1", default-features = false }
 ctor = "0.2"
 hex = "0.4"
 sp-core = "34"
-bittensor_wallet = { version = "4.0.1", package = "btwallet", default-features = false }
+bittensor_wallet = { version = "4.1.0", package = "btwallet", default-features = false }
 subxt = "0.50"
 btlightning = { version = "0.2.14", features = ["btwallet", "subtensor"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
