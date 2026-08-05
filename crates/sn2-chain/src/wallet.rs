@@ -69,3 +69,52 @@ impl Wallet {
         Ok(subxt::utils::AccountId32::from(bytes))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    const MNEMONIC: &str = "bottom drive obey lake curtain smoke basket hold race lonely fit walk";
+    const EXPECTED_SS58: &str = "5DfhGyQdFobKM8NsWvEeAKk5EQQgYe9AydgJ7rMB6E1EqRzV";
+
+    fn write_wallet(dir: &std::path::Path, keyfile: &str) {
+        let hotkeys = dir.join("sn2-test").join("hotkeys");
+        std::fs::create_dir_all(&hotkeys).expect("create hotkeys dir");
+        let mut f = std::fs::File::create(hotkeys.join("default")).expect("create hotkey file");
+        f.write_all(keyfile.as_bytes()).expect("write hotkey file");
+    }
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("sn2-wallet-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn loads_hotkey_written_without_crypto_type() {
+        let dir = scratch_dir("no-crypto-type");
+        write_wallet(&dir, &format!(r#"{{"secretPhrase":"{MNEMONIC}"}}"#));
+
+        let wallet = Wallet::from_paths("sn2-test", "default", Some(dir.to_str().unwrap()))
+            .expect("hotkey without cryptoType should load");
+        assert_eq!(wallet.hotkey_ss58(), EXPECTED_SS58);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loads_hotkey_written_with_integer_crypto_type() {
+        let dir = scratch_dir("crypto-type");
+        write_wallet(
+            &dir,
+            &format!(r#"{{"secretPhrase":"{MNEMONIC}","cryptoType":1}}"#),
+        );
+
+        let wallet = Wallet::from_paths("sn2-test", "default", Some(dir.to_str().unwrap()))
+            .expect("hotkey carrying an integer cryptoType should load");
+        assert_eq!(wallet.hotkey_ss58(), EXPECTED_SS58);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
