@@ -892,6 +892,29 @@ mod tests {
     }
 
     #[test]
+    fn verified_tile_total_counts_until_run_removal() {
+        let mut mgr = make_manager_with_run("run-1");
+        let tiling: TilingInfo = serde_json::from_value(
+            serde_json::json!({ "num_tiles": 2, "tiles_y": 1, "tiles_x": 2 }),
+        )
+        .unwrap();
+        let expected: HashSet<u32> = [0u32, 1u32].into_iter().collect();
+        mgr.init_tile_counter("run-1", "slice_0", &tiling, expected)
+            .unwrap();
+
+        mgr.record_tile("run-1", "slice_0", 0);
+        mgr.record_tile("run-1", "slice_0", 1);
+
+        // Both tiles verified: the completion notification snapshots this here.
+        assert_eq!(mgr.verified_tile_total("run-1"), 2);
+
+        // remove_run clears tile state, which is why finalize_combined_run must
+        // read the counts before calling it.
+        mgr.remove_run("run-1");
+        assert_eq!(mgr.verified_tile_total("run-1"), 0);
+    }
+
+    #[test]
     fn skipped_slices_cleared_on_run_removal() {
         let mut mgr = make_manager_with_run("run-1");
         mgr.note_slice_skipped("run-1", "slice_a");

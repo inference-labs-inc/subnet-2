@@ -7,6 +7,16 @@ use crate::dsperse_events::DsperseEventClient;
 use crate::relay::FRAME_SUBMIT_RESULT;
 use crate::stats_reporter::{DsperseRunReport, DsperseSliceReport};
 
+/// Fraction of a run's tiles backed by a verified proof, clamped to 1.0.
+/// Zero total tiles yields 0.0 rather than a division by zero.
+pub(super) fn proof_coverage_fraction(verified_tiles: usize, total_tiles: usize) -> f64 {
+    if total_tiles > 0 {
+        (verified_tiles as f64 / total_tiles as f64).min(1.0)
+    } else {
+        0.0
+    }
+}
+
 impl ValidatorLoop {
     pub(super) async fn relay_send_response(
         &self,
@@ -144,14 +154,12 @@ impl ValidatorLoop {
         active_run: &Option<crate::incremental_runner::ActiveRun>,
         final_output: Option<serde_json::Value>,
         failed_count: usize,
+        verified_tiles: usize,
+        total_tiles: usize,
     ) {
-        let (_, total_tiles, _) = self.run_manager.slice_tile_counts(run_uid);
-        let verified_tiles = self.run_manager.verified_tile_total(run_uid);
-        let proof_coverage = if total_tiles > 0 {
-            (verified_tiles as f64 / total_tiles as f64).min(1.0)
-        } else {
-            0.0
-        };
+        // Tile counts are snapshotted by the caller before the run is removed
+        // from the run manager; reading them here would return zero.
+        let proof_coverage = proof_coverage_fraction(verified_tiles, total_tiles);
         let notify_circuit_id = active_run
             .as_ref()
             .map(|r| r.circuit_id.as_str())
@@ -283,5 +291,26 @@ impl ValidatorLoop {
         self.dslice_input_scales
             .retain(|(uid, _), _| uid != run_uid);
         self.relay_remove_pending(run_uid).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::proof_coverage_fraction;
+
+    #[test]
+    fn proof_coverage_partial_run() {
+        assert_eq!(proof_coverage_fraction(1, 4), 0.25);
+    }
+
+    #[test]
+    fn proof_coverage_full_run_clamps() {
+        assert_eq!(proof_coverage_fraction(4, 4), 1.0);
+        assert_eq!(proof_coverage_fraction(5, 4), 1.0);
+    }
+
+    #[test]
+    fn proof_coverage_zero_tiles_is_zero() {
+        assert_eq!(proof_coverage_fraction(0, 0), 0.0);
     }
 }
