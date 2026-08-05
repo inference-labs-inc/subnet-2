@@ -206,6 +206,17 @@ impl IncrementalRunManager {
             .unwrap_or(0)
     }
 
+    /// Total tiles verified across every slice of a run. Paired with the run's
+    /// total tile count this yields the fraction of the model whose execution
+    /// is backed by a verified proof.
+    pub fn verified_tile_total(&self, run_uid: &str) -> usize {
+        self.verified_tile_counts
+            .iter()
+            .filter(|((uid, _), _)| uid == run_uid)
+            .map(|(_, count)| *count)
+            .sum()
+    }
+
     pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize, HashMap<String, usize>) {
         let run = match self.runs.get(run_uid) {
             Some(r) => r,
@@ -878,6 +889,29 @@ mod tests {
         mgr.note_slice_skipped("run-1", "slice_a");
         assert!(mgr.is_slice_skipped("run-1", "slice_a"));
         assert!(!mgr.is_slice_skipped("run-2", "slice_a"));
+    }
+
+    #[test]
+    fn verified_tile_total_counts_until_run_removal() {
+        let mut mgr = make_manager_with_run("run-1");
+        let tiling: TilingInfo = serde_json::from_value(
+            serde_json::json!({ "num_tiles": 2, "tiles_y": 1, "tiles_x": 2 }),
+        )
+        .unwrap();
+        let expected: HashSet<u32> = [0u32, 1u32].into_iter().collect();
+        mgr.init_tile_counter("run-1", "slice_0", &tiling, expected)
+            .unwrap();
+
+        mgr.record_tile("run-1", "slice_0", 0);
+        mgr.record_tile("run-1", "slice_0", 1);
+
+        // Both tiles verified: the completion notification snapshots this here.
+        assert_eq!(mgr.verified_tile_total("run-1"), 2);
+
+        // remove_run clears tile state, which is why finalize_combined_run must
+        // read the counts before calling it.
+        mgr.remove_run("run-1");
+        assert_eq!(mgr.verified_tile_total("run-1"), 0);
     }
 
     #[test]

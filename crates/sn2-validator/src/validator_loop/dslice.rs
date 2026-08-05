@@ -1469,6 +1469,10 @@ impl ValidatorLoop {
         }
 
         let final_output = self.run_manager.final_output_json(run_uid);
+        // Snapshot the tile counts before remove_run clears the run's tile
+        // state, otherwise the completion metrics report zero.
+        let (_, total_tiles, _) = self.run_manager.slice_tile_counts(run_uid);
+        let verified_tiles = self.run_manager.verified_tile_total(run_uid);
         let mut active_run = self.run_manager.remove_run(run_uid);
 
         if let Some(ref run) = active_run {
@@ -1478,8 +1482,15 @@ impl ValidatorLoop {
 
         let relay_output = final_output.clone();
         self.spawn_artifact_upload(run_uid, &mut active_run, final_output);
-        self.notify_run_completed(run_uid, &active_run, relay_output, failed_count)
-            .await;
+        self.notify_run_completed(
+            run_uid,
+            &active_run,
+            relay_output,
+            failed_count,
+            verified_tiles,
+            total_tiles,
+        )
+        .await;
     }
 
     pub(super) async fn replenish_dslice_queues(&mut self) {
