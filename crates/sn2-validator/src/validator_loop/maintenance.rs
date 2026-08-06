@@ -19,6 +19,9 @@ const DSLICE_STALL_TIMEOUT_SECS: u64 = 90;
 // How often the stale-run sweep runs. Kept well below the stall timeout so a
 // stalled run is closed out within roughly one stall window.
 const DSLICE_GC_INTERVAL_SECS: u64 = 30;
+// How often live proof coverage is pushed to the relay for in-flight API runs.
+// The detections are delivered up front, so this only streams the trust number.
+const DSLICE_COVERAGE_INTERVAL_SECS: u64 = 5;
 
 impl ValidatorLoop {
     pub(super) async fn run_periodic_tasks(&mut self) -> Result<()> {
@@ -121,6 +124,13 @@ impl ValidatorLoop {
         {
             self.replenish_dslice_queues().await;
             self.timings.replenish = now;
+        }
+
+        if now.duration_since(self.timings.coverage)
+            > Duration::from_secs(DSLICE_COVERAGE_INTERVAL_SECS)
+        {
+            self.emit_coverage_updates().await;
+            self.timings.coverage = now;
         }
 
         if now.duration_since(self.timings.gc) > Duration::from_secs(DSLICE_GC_INTERVAL_SECS) {

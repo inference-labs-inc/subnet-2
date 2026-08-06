@@ -95,6 +95,7 @@ pub(super) struct PeriodicTimings {
     pub(super) gc: Instant,
     pub(super) cooldown_prune: Instant,
     pub(super) bundle_cache_sweep: Instant,
+    pub(super) coverage: Instant,
 }
 
 impl PeriodicTimings {
@@ -111,6 +112,7 @@ impl PeriodicTimings {
             gc: now,
             cooldown_prune: now,
             bundle_cache_sweep: now,
+            coverage: now,
         }
     }
 }

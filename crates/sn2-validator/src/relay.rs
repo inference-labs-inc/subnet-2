@@ -23,6 +23,8 @@ const MSG_STATUS_RESULT: u8 = 0x21;
 const MSG_PROOF_REQ: u8 = 0x30;
 const MSG_PROOF_RESULT: u8 = 0x31;
 const MSG_BATCH_DONE: u8 = 0x40;
+const MSG_OUTPUT_READY: u8 = 0x41;
+const MSG_COVERAGE_UPDATE: u8 = 0x42;
 const MSG_ERROR: u8 = 0xFE;
 
 pub const FRAME_SUBMIT_RESULT: u8 = MSG_SUBMIT_RESULT;
@@ -567,6 +569,8 @@ impl RelayManager {
         if let Some(tx) = &self.ws_tx {
             let msg_type = match method {
                 "subnet-2.batch_completed" => MSG_BATCH_DONE,
+                "subnet-2.output_ready" => MSG_OUTPUT_READY,
+                "subnet-2.coverage_update" => MSG_COVERAGE_UPDATE,
                 _ => {
                     warn!(method = method, "unknown notification method");
                     return;

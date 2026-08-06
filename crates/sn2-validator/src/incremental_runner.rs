@@ -217,6 +217,17 @@ impl IncrementalRunManager {
             .sum()
     }
 
+    /// Credit a non-tiled slice's single implicit tile toward coverage. Tiled
+    /// slices accrue verified tiles through record_tile; non-tiled slices
+    /// complete via mark_slice_done and would otherwise never count, so their
+    /// one tile is registered here. Idempotent: a non-tiled slice has exactly
+    /// one tile, so repeat completions leave the count at one.
+    pub fn record_verified_slice(&mut self, run_uid: &str, slice_id: &str) {
+        self.verified_tile_counts
+            .entry((run_uid.to_string(), slice_id.to_string()))
+            .or_insert(1);
+    }
+
     pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize, HashMap<String, usize>) {
         let run = match self.runs.get(run_uid) {
             Some(r) => r,
@@ -683,6 +694,14 @@ impl IncrementalRunManager {
             .collect()
     }
 
+    pub fn api_run_uids(&self) -> Vec<String> {
+        self.runs
+            .iter()
+            .filter(|(_, run)| run.run_source == RunSource::Api)
+            .map(|(uid, _)| uid.clone())
+            .collect()
+    }
+
     pub fn evict_by_circuit(&mut self, circuit_id: &str) -> Vec<String> {
         let to_remove: Vec<String> = self
             .runs
@@ -956,6 +975,21 @@ mod tests {
         let mgr = make_manager_with_run("run-1");
         assert_eq!(mgr.pending_slice_count("run-1"), 0);
         assert_eq!(mgr.pending_slice_count("missing"), 0);
+    }
+
+    #[test]
+    fn record_verified_slice_credits_non_tiled_coverage() {
+        let mut mgr = make_manager_with_run("run-1");
+        assert_eq!(mgr.verified_tile_total("run-1"), 0);
+        mgr.record_verified_slice("run-1", "slice_0");
+        assert_eq!(mgr.verified_tile_total("run-1"), 1);
+        // A repeat completion of the same non-tiled slice must not double-count:
+        // it has exactly one implicit tile.
+        mgr.record_verified_slice("run-1", "slice_0");
+        assert_eq!(mgr.verified_tile_total("run-1"), 1);
+        // A distinct non-tiled slice adds its own tile.
+        mgr.record_verified_slice("run-1", "slice_1");
+        assert_eq!(mgr.verified_tile_total("run-1"), 2);
     }
 
     #[test]
