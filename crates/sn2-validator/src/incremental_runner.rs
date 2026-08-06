@@ -527,6 +527,34 @@ impl IncrementalRunManager {
             .unwrap_or(0)
     }
 
+    /// Slices still awaiting a verified proof. Non-zero at finalize means the
+    /// run is being closed out after its dispatch stalled rather than after a
+    /// clean completion.
+    pub fn pending_slice_count(&self, run_uid: &str) -> usize {
+        self.runs
+            .get(run_uid)
+            .and_then(|r| r.combined.as_ref())
+            .map(|c| c.pending_count())
+            .unwrap_or(0)
+    }
+
+    /// API run ids whose last activity predates the stall threshold. Their
+    /// dispatch has stopped producing proofs but some slices never completed,
+    /// so they must be finalized (partially) rather than left hanging. Scoped
+    /// to API runs because a waiting client depends on their completion;
+    /// benchmark runs are handled by the hard idle eviction.
+    pub fn stale_api_run_uids(&self, idle_timeout: Duration) -> Vec<String> {
+        let now = Instant::now();
+        self.runs
+            .iter()
+            .filter(|(_, run)| {
+                run.run_source == RunSource::Api
+                    && now.duration_since(run.last_activity) >= idle_timeout
+            })
+            .map(|(uid, _)| uid.clone())
+            .collect()
+    }
+
     /// Record that a slice was marked failed without ever being dispatched.
     /// Used by the run-wide failure guard in finalize_combined_run to avoid
     /// conflating deterministic skips (already-disabled slices, preflight
@@ -889,6 +917,45 @@ mod tests {
         mgr.note_slice_skipped("run-1", "slice_a");
         assert!(mgr.is_slice_skipped("run-1", "slice_a"));
         assert!(!mgr.is_slice_skipped("run-2", "slice_a"));
+    }
+
+    #[test]
+    fn stale_api_run_uids_scoped_to_api_source() {
+        // make_manager_with_run starts a benchmark run; add an API run.
+        let mut mgr = make_manager_with_run("run-bench");
+        mgr.start_run(
+            "run-api".to_string(),
+            "test-circuit".to_string(),
+            "test".to_string(),
+            RunSource::Api,
+            None,
+            None,
+        );
+        // Zero timeout treats every run as idle; only the API run is returned.
+        let stale = mgr.stale_api_run_uids(Duration::ZERO);
+        assert_eq!(stale, vec!["run-api".to_string()]);
+    }
+
+    #[test]
+    fn stale_api_run_uids_respects_idle_threshold() {
+        let mut mgr = make_manager_with_run("run-bench");
+        mgr.start_run(
+            "run-api".to_string(),
+            "test-circuit".to_string(),
+            "test".to_string(),
+            RunSource::Api,
+            None,
+            None,
+        );
+        // A freshly started run is not idle for an hour.
+        assert!(mgr.stale_api_run_uids(Duration::from_secs(3600)).is_empty());
+    }
+
+    #[test]
+    fn pending_slice_count_zero_without_combined() {
+        let mgr = make_manager_with_run("run-1");
+        assert_eq!(mgr.pending_slice_count("run-1"), 0);
+        assert_eq!(mgr.pending_slice_count("missing"), 0);
     }
 
     #[test]
