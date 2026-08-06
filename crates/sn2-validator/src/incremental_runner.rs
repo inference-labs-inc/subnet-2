@@ -220,12 +220,12 @@ impl IncrementalRunManager {
     /// Credit a non-tiled slice's single implicit tile toward coverage. Tiled
     /// slices accrue verified tiles through record_tile; non-tiled slices
     /// complete via mark_slice_done and would otherwise never count, so their
-    /// one tile is registered here. Guarded by the caller to fire once.
+    /// one tile is registered here. Idempotent: a non-tiled slice has exactly
+    /// one tile, so repeat completions leave the count at one.
     pub fn record_verified_slice(&mut self, run_uid: &str, slice_id: &str) {
-        *self
-            .verified_tile_counts
+        self.verified_tile_counts
             .entry((run_uid.to_string(), slice_id.to_string()))
-            .or_insert(0) += 1;
+            .or_insert(1);
     }
 
     pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize, HashMap<String, usize>) {
@@ -983,6 +983,11 @@ mod tests {
         assert_eq!(mgr.verified_tile_total("run-1"), 0);
         mgr.record_verified_slice("run-1", "slice_0");
         assert_eq!(mgr.verified_tile_total("run-1"), 1);
+        // A repeat completion of the same non-tiled slice must not double-count:
+        // it has exactly one implicit tile.
+        mgr.record_verified_slice("run-1", "slice_0");
+        assert_eq!(mgr.verified_tile_total("run-1"), 1);
+        // A distinct non-tiled slice adds its own tile.
         mgr.record_verified_slice("run-1", "slice_1");
         assert_eq!(mgr.verified_tile_total("run-1"), 2);
     }
