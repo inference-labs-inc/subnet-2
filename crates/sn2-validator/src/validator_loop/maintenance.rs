@@ -11,6 +11,15 @@ use super::{is_valid_ip, ValidatorLoop, WeightTaskResult};
 use crate::metrics_server as metrics;
 use sn2_circuit_store::CircuitStore;
 
+// An API run that has received no proof or failure for this long has stalled:
+// its dispatch is exhausted but some slices never produced a verified proof.
+// It is finalized (partially) rather than left to hang. Active proving updates
+// last activity roughly continuously, so this only fires on a genuine stall.
+const DSLICE_STALL_TIMEOUT_SECS: u64 = 90;
+// How often the stale-run sweep runs. Kept well below the stall timeout so a
+// stalled run is closed out within roughly one stall window.
+const DSLICE_GC_INTERVAL_SECS: u64 = 30;
+
 impl ValidatorLoop {
     pub(super) async fn run_periodic_tasks(&mut self) -> Result<()> {
         let now = std::time::Instant::now();
@@ -114,7 +123,7 @@ impl ValidatorLoop {
             self.timings.replenish = now;
         }
 
-        if now.duration_since(self.timings.gc) > Duration::from_secs(120) {
+        if now.duration_since(self.timings.gc) > Duration::from_secs(DSLICE_GC_INTERVAL_SECS) {
             self.gc_stale_runs().await;
             self.timings.gc = now;
         }
@@ -252,6 +261,20 @@ impl ValidatorLoop {
     }
 
     async fn gc_stale_runs(&mut self) {
+        // An API run whose last activity predates the stall threshold has
+        // stopped receiving proofs: its dispatch is exhausted but some slices
+        // never completed. Finalize it so the waiting relay/client gets a
+        // partial completion — carrying whatever coverage and output were
+        // achieved — instead of hanging until the hard eviction removes it
+        // silently. finalize_combined_run removes the run itself.
+        let stalled = self
+            .run_manager
+            .stale_api_run_uids(Duration::from_secs(DSLICE_STALL_TIMEOUT_SECS));
+        for uid in stalled {
+            warn!(run_uid = %uid, "finalizing stalled API run with incomplete coverage");
+            self.finalize_combined_run(&uid).await;
+        }
+
         let evicted = self.run_manager.gc_stale(Duration::from_secs(600));
         for uid in &evicted {
             self.cleanup_run_resources(uid).await;

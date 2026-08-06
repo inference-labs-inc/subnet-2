@@ -1397,8 +1397,13 @@ impl ValidatorLoop {
         self.dslice_input_scales
             .retain(|(uid, _), _| uid != run_uid);
 
-        let failed_count = self.run_manager.failed_slice_count(run_uid);
-        info!(run_uid = %run_uid, failed_count, "combined run complete");
+        // Slices still pending at finalize mean the run is being closed out
+        // after its dispatch stalled; count them alongside the explicitly
+        // failed slices so the completion reports its true partial status
+        // instead of a clean finish. A normally completing run has none.
+        let pending_count = self.run_manager.pending_slice_count(run_uid);
+        let failed_count = self.run_manager.failed_slice_count(run_uid) + pending_count;
+        info!(run_uid = %run_uid, failed_count, pending_count, "combined run complete");
 
         if let Some(circuit_id) = self
             .run_manager
