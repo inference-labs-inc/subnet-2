@@ -217,6 +217,17 @@ impl IncrementalRunManager {
             .sum()
     }
 
+    /// Credit a non-tiled slice's single implicit tile toward coverage. Tiled
+    /// slices accrue verified tiles through record_tile; non-tiled slices
+    /// complete via mark_slice_done and would otherwise never count, so their
+    /// one tile is registered here. Guarded by the caller to fire once.
+    pub fn record_verified_slice(&mut self, run_uid: &str, slice_id: &str) {
+        *self
+            .verified_tile_counts
+            .entry((run_uid.to_string(), slice_id.to_string()))
+            .or_insert(0) += 1;
+    }
+
     pub fn slice_tile_counts(&self, run_uid: &str) -> (usize, usize, HashMap<String, usize>) {
         let run = match self.runs.get(run_uid) {
             Some(r) => r,
@@ -964,6 +975,16 @@ mod tests {
         let mgr = make_manager_with_run("run-1");
         assert_eq!(mgr.pending_slice_count("run-1"), 0);
         assert_eq!(mgr.pending_slice_count("missing"), 0);
+    }
+
+    #[test]
+    fn record_verified_slice_credits_non_tiled_coverage() {
+        let mut mgr = make_manager_with_run("run-1");
+        assert_eq!(mgr.verified_tile_total("run-1"), 0);
+        mgr.record_verified_slice("run-1", "slice_0");
+        assert_eq!(mgr.verified_tile_total("run-1"), 1);
+        mgr.record_verified_slice("run-1", "slice_1");
+        assert_eq!(mgr.verified_tile_total("run-1"), 2);
     }
 
     #[test]
