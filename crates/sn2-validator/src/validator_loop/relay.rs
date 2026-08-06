@@ -35,6 +35,26 @@ impl ValidatorLoop {
         }
     }
 
+    /// Stream live proof coverage for in-flight API runs. Detections are
+    /// delivered up front via output_ready, so this only advances the trust
+    /// number the browser shows; it never gates the result.
+    pub(super) async fn emit_coverage_updates(&self) {
+        for run_uid in self.run_manager.api_run_uids() {
+            let (_, total_tiles, _) = self.run_manager.slice_tile_counts(&run_uid);
+            let verified_tiles = self.run_manager.verified_tile_total(&run_uid);
+            self.relay_send_notification(
+                "subnet-2.coverage_update",
+                serde_json::json!({
+                    "run_uid": run_uid,
+                    "verified_tiles": verified_tiles,
+                    "total_tiles": total_tiles,
+                    "proof_coverage": proof_coverage_fraction(verified_tiles, total_tiles),
+                }),
+            )
+            .await;
+        }
+    }
+
     pub(super) async fn relay_register_pending(&self, hash: &str) {
         if let Some(relay) = &self.relay {
             relay.register_pending(hash).await;

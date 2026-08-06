@@ -683,6 +683,14 @@ impl IncrementalRunManager {
             .collect()
     }
 
+    pub fn api_run_uids(&self) -> Vec<String> {
+        self.runs
+            .iter()
+            .filter(|(_, run)| run.run_source == RunSource::Api)
+            .map(|(uid, _)| uid.clone())
+            .collect()
+    }
+
     pub fn evict_by_circuit(&mut self, circuit_id: &str) -> Vec<String> {
         let to_remove: Vec<String> = self
             .runs
