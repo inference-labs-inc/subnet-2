@@ -345,8 +345,11 @@ impl ValidatorLoop {
                     return;
                 }
             }
-        } else {
-            self.run_manager.mark_slice_done(&run_uid, &slice_num);
+        } else if self.run_manager.mark_slice_done(&run_uid, &slice_num) {
+            // A non-tiled slice carries a single implicit tile that never
+            // flows through record_tile; credit it on first completion so
+            // coverage reflects completed non-tiled proofs.
+            self.run_manager.record_verified_slice(&run_uid, &slice_num);
         }
 
         if self.run_manager.is_run_complete(&run_uid) {

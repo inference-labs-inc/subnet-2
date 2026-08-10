@@ -197,6 +197,23 @@ impl ValidatorLoop {
             .await;
         }
 
+        // Best-effort delivery: the combined ONNX run has already produced the
+        // detection output, so push it to the relay now. The browser renders
+        // boxes immediately; proof coverage streams separately on completion
+        // and never gates the result.
+        if let Some(output) = self.run_manager.final_output_json(&run_uid) {
+            self.relay_send_notification(
+                "subnet-2.output_ready",
+                serde_json::json!({
+                    "run_uid": run_uid,
+                    "circuit_id": circuit.id,
+                    "total_tiles": total_tiles,
+                    "output": output,
+                }),
+            )
+            .await;
+        }
+
         let benchmark_uids = self.run_manager.benchmark_run_uids();
         for uid in &benchmark_uids {
             info!(run_uid = %uid, "preempting benchmark run for API dsperse submission");
