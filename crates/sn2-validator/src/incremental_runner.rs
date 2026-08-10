@@ -610,6 +610,31 @@ impl IncrementalRunManager {
         Some(arrayd_to_json(output))
     }
 
+    /// Every declared model output by name, each as `{data, shape}`. A single
+    /// final tensor is not enough to decode multi-head models (e.g. detection
+    /// transformers emit separate box and class tensors), so the full set is
+    /// surfaced and the consumer decodes from it.
+    pub fn final_outputs_json(&self, run_uid: &str) -> Option<serde_json::Value> {
+        let run = self.runs.get(run_uid)?;
+        let combined = run.combined.as_ref()?;
+        let meta = combined.model_meta();
+        let mut map = serde_json::Map::new();
+        for (i, name) in meta.output_names.iter().enumerate() {
+            if let Some(flat) = combined.outputs_for_names(std::slice::from_ref(name)) {
+                let shape = meta.output_shapes.get(i).cloned().unwrap_or_default();
+                map.insert(
+                    name.clone(),
+                    serde_json::json!({ "data": flat, "shape": shape }),
+                );
+            }
+        }
+        if map.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(map))
+        }
+    }
+
     pub fn push_artifact(&mut self, run_uid: &str, artifact: SliceArtifact) {
         if let Some(run) = self.runs.get_mut(run_uid) {
             run.artifacts.push(artifact);
