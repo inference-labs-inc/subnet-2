@@ -202,6 +202,7 @@ impl ValidatorLoop {
         // boxes immediately; proof coverage streams separately on completion
         // and never gates the result.
         if let Some(output) = self.run_manager.final_output_json(&run_uid) {
+            let outputs = self.run_manager.final_outputs_json(&run_uid);
             self.relay_send_notification(
                 "subnet-2.output_ready",
                 serde_json::json!({
@@ -209,6 +210,7 @@ impl ValidatorLoop {
                     "circuit_id": circuit.id,
                     "total_tiles": total_tiles,
                     "output": output,
+                    "outputs": outputs,
                 }),
             )
             .await;
