@@ -130,6 +130,15 @@ impl MinerQueryClient {
         self.lightning.authenticated_hotkeys().await
     }
 
+    /// Per-address transport connection status ("active", "closed(..)",
+    /// "missing"), keyed as `connection_{ip:port}`.
+    pub async fn connection_stats(&self) -> Result<HashMap<String, String>> {
+        self.lightning
+            .get_connection_stats()
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn query_miner(
         &self,
         ip: &str,

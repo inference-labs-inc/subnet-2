@@ -88,6 +88,7 @@ pub struct RwrSubmission {
     pub inputs: serde_json::Value,
     pub request_id: Option<u32>,
     pub retry_count: u32,
+    pub last_failed_uid: Option<u16>,
 }
 
 const DSPERSE_SEMAPHORE_CAPACITY: usize = 64;
@@ -467,6 +468,7 @@ impl RelayManager {
             inputs,
             request_id: req_id_opt,
             retry_count: 0,
+            last_failed_uid: None,
         };
 
         if let Err(e) = rwr_tx.try_send(submission) {
