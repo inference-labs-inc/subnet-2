@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use subxt::dynamic::Value;
 use subxt::tx::Signer;
 use subxt::{OnlineClient, PolkadotConfig};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::subxt_helpers::{at_current_block, fetch_typed, fetch_u128_or, netuid_keys, PALLET};
 use crate::wallet::Wallet;
@@ -13,6 +13,8 @@ use crate::wallet::Wallet;
 const BLOCK_TIME: f64 = 12.0;
 const TX_SUBMIT_TIMEOUT: Duration = Duration::from_secs(30);
 const TX_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(180);
+const COMMIT_RECONCILE_ATTEMPTS: u32 = 10;
+const COMMIT_RECONCILE_INTERVAL: Duration = Duration::from_secs(6);
 const COMMIT_REVEAL_VERSION: u64 = 4;
 
 #[derive(Clone)]
@@ -85,7 +87,9 @@ impl WeightsSetter {
         wallet: &Arc<Wallet>,
         commit_bytes: Vec<u8>,
         reveal_round: u64,
+        uid: u16,
     ) -> Result<()> {
+        let last_update_before = self.last_update_block(client, uid).await?;
         let tx = subxt::dynamic::tx(
             PALLET,
             "commit_timelocked_weights",
@@ -108,23 +112,60 @@ impl WeightsSetter {
         .context("commit_timelocked_weights submit timed out")?
         .context("submitting commit_timelocked_weights")?;
 
-        let result = tokio::time::timeout(
+        let finalization = tokio::time::timeout(
             TX_FINALIZATION_TIMEOUT,
             progress.wait_for_finalized_success(),
         )
-        .await
-        .context("commit_timelocked_weights finalization timed out")?
-        .context("commit_timelocked_weights finalization")?;
+        .await;
+        let watch_error = match finalization {
+            Ok(Ok(result)) => {
+                info!(
+                    hash = %result.extrinsic_hash(),
+                    reveal_round = reveal_round,
+                    "timelocked weights committed"
+                );
+                return Ok(());
+            }
+            Ok(Err(e)) => anyhow::Error::new(e).context("commit_timelocked_weights finalization"),
+            Err(_) => anyhow::anyhow!("commit_timelocked_weights finalization timed out"),
+        };
 
-        info!(
-            hash = %result.extrinsic_hash(),
-            reveal_round = reveal_round,
-            "timelocked weights committed"
-        );
-        Ok(())
+        self.reconcile_commit(client, uid, last_update_before, reveal_round, watch_error)
+            .await
     }
 
-    pub async fn blocks_since_last_update(
+    async fn reconcile_commit(
+        &self,
+        client: &OnlineClient<PolkadotConfig>,
+        uid: u16,
+        last_update_before: u64,
+        reveal_round: u64,
+        watch_error: anyhow::Error,
+    ) -> Result<()> {
+        warn!(
+            error = ?watch_error,
+            "commit watch lost after submission; reconciling against chain state"
+        );
+        for attempt in 1..=COMMIT_RECONCILE_ATTEMPTS {
+            tokio::time::sleep(COMMIT_RECONCILE_INTERVAL).await;
+            match self.last_update_block(client, uid).await {
+                Ok(last_update) if commit_reconciled(last_update_before, last_update) => {
+                    info!(
+                        reveal_round = reveal_round,
+                        last_update = last_update,
+                        attempt = attempt,
+                        "timelocked weights committed (reconciled from chain after watch loss)"
+                    );
+                    return Ok(());
+                }
+                Ok(_) => {}
+                Err(e) => warn!(error = ?e, attempt = attempt, "commit reconciliation read failed"),
+            }
+        }
+        Err(watch_error)
+    }
+
+    async fn last_update_block(
         &self,
         client: &OnlineClient<PolkadotConfig>,
         uid: u16,
@@ -135,7 +176,16 @@ impl WeightsSetter {
                 .await
                 .context("decoding LastUpdate vec")?
                 .unwrap_or_default();
-        let last_update = updates.get(uid as usize).copied().unwrap_or(0);
+        Ok(updates.get(uid as usize).copied().unwrap_or(0))
+    }
+
+    pub async fn blocks_since_last_update(
+        &self,
+        client: &OnlineClient<PolkadotConfig>,
+        uid: u16,
+    ) -> Result<u64> {
+        let at_block = at_current_block(client).await?;
+        let last_update = self.last_update_block(client, uid).await?;
         Ok(at_block.block_number().saturating_sub(last_update))
     }
 }
@@ -302,5 +352,24 @@ mod tests {
             .unwrap();
         assert!(!ct.is_empty());
         assert!(round > 0);
+    }
+}
+
+/// A commit landed if the validator's `LastUpdate` advanced past the value read
+/// before submission; `commit_timelocked_weights` sets it at commit time.
+pub fn commit_reconciled(last_update_before: u64, last_update_after: u64) -> bool {
+    last_update_after > last_update_before
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::commit_reconciled;
+
+    #[test]
+    fn reconciled_only_when_last_update_advances() {
+        assert!(commit_reconciled(100, 101));
+        assert!(commit_reconciled(0, 1));
+        assert!(!commit_reconciled(100, 100));
+        assert!(!commit_reconciled(100, 99));
     }
 }

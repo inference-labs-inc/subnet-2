@@ -60,9 +60,16 @@ pub fn resolve_endpoint(network: &str, override_endpoint: Option<&str>) -> Strin
 /// The RPC transport is subxt's reconnecting client with websocket pings: a
 /// silent path failure (NAT mapping expiry, load balancer idle close) is
 /// detected within `CHAIN_RPC_INACTIVE_LIMIT` and the socket is re-established
-/// with exponential backoff, and calls made while the link is down surface
-/// `DisconnectedWillReconnect` (see `is_rpc_disconnect`) instead of failing for
-/// the rest of the process lifetime on a closed background task.
+/// with exponential backoff instead of failing every call for the rest of the
+/// process lifetime on a closed background task. Calls in flight on the old
+/// socket surface `DisconnectedWillReconnect` (see `is_rpc_disconnect`); calls
+/// issued while a reconnect is pending are queued and dispatched once the new
+/// socket is up, and `CHAIN_RPC_REQUEST_TIMEOUT` only starts when a call is
+/// dispatched, so callers that need a hard deadline wrap the call in their own
+/// timeout (the transaction paths in `weights` and `registration` do).
+/// Subscriptions, including transaction status watches, are not resumed across
+/// a reconnect; `WeightsSetter::commit_timelocked_weights` reconciles a lost
+/// watch against chain state before reporting failure.
 pub async fn connect_chain(endpoint: &str) -> Result<OnlineClient<PolkadotConfig>> {
     let reconnecting = ReconnectingRpcClient::builder()
         .request_timeout(CHAIN_RPC_REQUEST_TIMEOUT)

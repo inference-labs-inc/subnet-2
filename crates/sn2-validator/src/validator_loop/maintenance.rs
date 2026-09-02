@@ -648,9 +648,10 @@ impl ValidatorLoop {
             .clone()
             .context("update_weights requires wallet")?;
 
+        let uid = self.config.user_uid;
         self.weight_tasks.spawn(async move {
             match setter
-                .commit_timelocked_weights(&client, &wallet, ct_bytes, reveal_round)
+                .commit_timelocked_weights(&client, &wallet, ct_bytes, reveal_round, uid)
                 .await
             {
                 Ok(()) => WeightTaskResult::CommitSuccess,
