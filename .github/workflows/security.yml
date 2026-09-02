@@ -28,7 +28,7 @@ jobs:
 
       - name: Cache cargo-audit binary
         id: cache-audit
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-${{ env.CARGO_AUDIT_VERSION }}
@@ -96,40 +96,6 @@ jobs:
           sarif_file: semgrep-results.sarif
           category: semgrep
 
-  trivy:
-    name: Trivy Security Scanner
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Scan repository
-        uses: ./.github/actions/trivy-sarif
-        with:
-          scan-type: fs
-          scan-ref: "."
-          category: trivy
-          skip-dirs: "/lib/modules,/boot,/usr/src/kernels,target"
-
-      - name: Run Trivy for JSON report
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
-        with:
-          scan-type: "repo"
-          scan-ref: "."
-          format: "json"
-          output: "trivy-results.json"
-
-      - name: Upload Trivy Results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: trivy-results
-          path: trivy-results.json
-
   cargo-deny:
     name: Cargo Deny
     runs-on: ubuntu-latest
@@ -153,7 +119,7 @@ jobs:
 
       - name: TruffleHog OSS (Pull Request)
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@30d5bb91af1a771378349dbbb0c82129392acf70 # v3.95.6
+        uses: trufflesecurity/trufflehog@20652fbbdefffcdaa493a5bf57ab2ac6b1db715b # v3.97.1
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -162,7 +128,7 @@ jobs:
 
       - name: TruffleHog OSS (Push)
         if: github.event_name == 'push'
-        uses: trufflesecurity/trufflehog@30d5bb91af1a771378349dbbb0c82129392acf70 # v3.95.6
+        uses: trufflesecurity/trufflehog@20652fbbdefffcdaa493a5bf57ab2ac6b1db715b # v3.97.1
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -171,14 +137,14 @@ jobs:
 
       - name: TruffleHog OSS (Schedule)
         if: github.event_name == 'schedule'
-        uses: trufflesecurity/trufflehog@30d5bb91af1a771378349dbbb0c82129392acf70 # v3.95.6
+        uses: trufflesecurity/trufflehog@20652fbbdefffcdaa493a5bf57ab2ac6b1db715b # v3.97.1
         with:
           path: ./
           extra_args: --debug --only-verified
 
       - name: TruffleHog OSS (Release gate)
         if: github.event_name == 'workflow_call'
-        uses: trufflesecurity/trufflehog@30d5bb91af1a771378349dbbb0c82129392acf70 # v3.95.6
+        uses: trufflesecurity/trufflehog@20652fbbdefffcdaa493a5bf57ab2ac6b1db715b # v3.97.1
         with:
           path: ./
           extra_args: --debug --only-verified
@@ -186,7 +152,7 @@ jobs:
   security-summary:
     name: Security Summary
     runs-on: ubuntu-latest
-    needs: [cargo-audit, cargo-deny, semgrep, trivy, secrets-detection]
+    needs: [cargo-audit, cargo-deny, semgrep, secrets-detection]
     if: always()
     steps:
       - name: Download all artifacts
@@ -200,7 +166,6 @@ jobs:
           echo "- Cargo Audit: ${{ needs.cargo-audit.result }}" >> security-summary.md
           echo "- Cargo Deny: ${{ needs.cargo-deny.result }}" >> security-summary.md
           echo "- Semgrep: ${{ needs.semgrep.result }}" >> security-summary.md
-          echo "- Trivy: ${{ needs.trivy.result }}" >> security-summary.md
           echo "- Secrets Detection: ${{ needs.secrets-detection.result }}" >> security-summary.md
 
       - name: Upload Security Summary

@@ -39,6 +39,28 @@ pub const DSLICE_QUEUE_LOW_WATERMARK_MAX: usize = 4096;
 /// then retried. One tempo is a Bittensor epoch.
 pub const DISCONNECT_SKIPLIST_TEMPOS: u64 = 1;
 
+/// A validator's public address can change underneath it: dynamic egress,
+/// NAT re-mapping, host migration. Miners enforcing source-address allowlists
+/// learn the new address from chain on their next sync, so for a bounded
+/// window after a rotation the validator's own connection failures are its
+/// fault, not the miners'. Connection failures inside the window are requeued
+/// without skiplisting, capacity debits or score debits. The window is fixed
+/// and opens only on an address change the validator itself observed, so a
+/// miner cannot induce it.
+pub const ADDRESS_ROTATION_GRACE_SECS: u64 = 1200;
+/// How often an auto-detected external address is re-checked and, if it
+/// changed, republished. Miners typically refresh allowlists every 10 minutes.
+pub const EXTERNAL_ADDRESS_REFRESH_SECS: u64 = 300;
+/// A burst of connection failures across distinct miners inside this window
+/// requests an immediate address re-check instead of waiting for the interval.
+pub const DISCONNECT_BURST_WINDOW_SECS: u64 = 60;
+pub const DISCONNECT_BURST_MIN_MINERS: usize = 5;
+/// Floor between address re-checks requested by failure bursts.
+pub const EXTERNAL_ADDRESS_RECHECK_MIN_SECS: u64 = 30;
+/// Pacing between dispatches to a miner whose connection failed during the
+/// grace window, so a still-unreachable miner is not hammered while requeued.
+pub const ROTATION_GRACE_REDISPATCH_BLOCKS: u64 = 3;
+
 pub const VERIFICATION_SAMPLES_PER_TEMPO: u64 = 20;
 pub const VERIFICATION_STRIKES_REQUIRED: u32 = 1;
 pub const VERIFICATION_STRIKES_WINDOW_BLOCKS: u64 = 7200;
