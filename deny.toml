@@ -13,8 +13,9 @@ unmaintained = "workspace"
 ignore = [
     # h2 0.3.x has no patched release for this advisory. The 0.3 line is reached
     # only through a git-pinned dependency still on hyper 0.14 (reqwest 0.11 /
-    # warp 0.3); the 0.4 line is updated. Remove once that dependency moves to
-    # hyper 1.x.
+    # warp 0.3); the 0.4 line is updated. Because this exception is keyed by
+    # advisory id, the patched 0.4 bound is asserted separately against the
+    # lockfile in the CI test job. Remove once that dependency moves to hyper 1.x.
     { id = "RUSTSEC-2026-0258", reason = "h2 0.3 reached only via a git-pinned hyper 0.14 dependency; no patched 0.3 release exists. h2 0.4 is updated." },
     { crate = "wasmtime@8.0.1", reason = "Pulled transitively via sc-executor-wasmtime; we do not execute untrusted WASM. Patched versions require a Substrate-wide upgrade." },
 ]

@@ -57,6 +57,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm pkg-config libssl-dev libudev-dev protobuf-compiler
 
+      # RUSTSEC-2026-0258 is fixed in h2 0.4.16. The advisory exception in
+      # deny.toml exists for the unpatched 0.3 line only; this keeps the 0.4
+      # line honest regardless of which scanners are enabled.
+      - name: Assert patched h2 0.4 line in lockfile
+        run: |
+          python3 - <<'PY'
+          import re, sys
+          lock = open("Cargo.lock").read()
+          bad = [v for v in re.findall(r'name = "h2"\nversion = "(0\.4\.\d+)"', lock)
+                 if int(v.split(".")[2]) < 16]
+          if bad:
+              sys.exit(f"h2 {bad} is below 0.4.16 (RUSTSEC-2026-0258)")
+          print("h2 0.4 line is patched")
+          PY
+
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - run: cargo test --workspace --locked
