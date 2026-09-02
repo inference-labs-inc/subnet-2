@@ -7,9 +7,13 @@ mod wallet;
 mod weights;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use subxt::backend::{ChainHeadBackend, CombinedBackend, LegacyBackend};
+use subxt::rpcs::client::reconnecting_rpc_client::{
+    PingConfig, RpcClient as ReconnectingRpcClient,
+};
 use subxt::rpcs::RpcClient;
 use subxt::{OnlineClient, PolkadotConfig};
 
@@ -21,6 +25,10 @@ pub use weights::WeightsSetter;
 pub const FINNEY_ENDPOINT: &str = "wss://entrypoint-finney.opentensor.ai:443";
 pub const TEST_ENDPOINT: &str = "wss://test.finney.opentensor.ai:443";
 pub const LOCAL_ENDPOINT: &str = "ws://127.0.0.1:9944";
+
+pub const CHAIN_RPC_PING_INTERVAL: Duration = Duration::from_secs(20);
+pub const CHAIN_RPC_INACTIVE_LIMIT: Duration = Duration::from_secs(60);
+pub const CHAIN_RPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn resolve_endpoint(network: &str, override_endpoint: Option<&str>) -> String {
     match override_endpoint {
@@ -34,10 +42,9 @@ pub fn resolve_endpoint(network: &str, override_endpoint: Option<&str>) -> Strin
     }
 }
 
-/// Open a subxt `OnlineClient` against `endpoint`. `wss://` URLs use the
-/// TLS-validating `from_url`; `ws://` URLs use `from_insecure_url`, which
-/// subxt requires for non-TLS sockets even when reaching localhost or a
-/// private substrate node.
+/// Open a subxt `OnlineClient` against `endpoint`. Both `wss://` (TLS
+/// validated) and plain `ws://` (localhost or a private substrate node) URLs
+/// are accepted by the reconnecting transport.
 ///
 /// The backend is assembled explicitly rather than via
 /// `OnlineClient::from_url`, which builds a `CombinedBackend` that enables the
@@ -49,13 +56,25 @@ pub fn resolve_endpoint(network: &str, override_endpoint: Option<&str>) -> Strin
 /// chain never gets the chance to retry against `chainHead` or the legacy
 /// `state_*` methods. Omitting the archive backend keeps storage reads on the
 /// two backends every subtensor node actually serves.
+///
+/// The RPC transport is subxt's reconnecting client with websocket pings: a
+/// silent path failure (NAT mapping expiry, load balancer idle close) is
+/// detected within `CHAIN_RPC_INACTIVE_LIMIT` and the socket is re-established
+/// with exponential backoff, and calls made while the link is down surface
+/// `DisconnectedWillReconnect` (see `is_rpc_disconnect`) instead of failing for
+/// the rest of the process lifetime on a closed background task.
 pub async fn connect_chain(endpoint: &str) -> Result<OnlineClient<PolkadotConfig>> {
-    let rpc_client = if endpoint.starts_with("ws://") {
-        RpcClient::from_insecure_url(endpoint).await
-    } else {
-        RpcClient::from_url(endpoint).await
-    }
-    .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
+    let reconnecting = ReconnectingRpcClient::builder()
+        .request_timeout(CHAIN_RPC_REQUEST_TIMEOUT)
+        .enable_ws_ping(
+            PingConfig::new()
+                .ping_interval(CHAIN_RPC_PING_INTERVAL)
+                .inactive_limit(CHAIN_RPC_INACTIVE_LIMIT),
+        )
+        .build(endpoint)
+        .await
+        .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
+    let rpc_client = RpcClient::new(reconnecting);
 
     let chain_head = ChainHeadBackend::builder().build_with_background_driver(rpc_client.clone());
     let legacy = LegacyBackend::builder().build(rpc_client.clone());
