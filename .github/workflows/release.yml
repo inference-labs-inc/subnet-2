@@ -61,7 +61,7 @@ jobs:
         run: sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-linux-aarch64 sn2-miner-linux-aarch64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 sbom.cdx.json > SHA256SUMS
 
       - name: Attest release binaries
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             sn2-validator-linux-x86_64
@@ -78,7 +78,7 @@ jobs:
         run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           generate_release_notes: true
           files: |
@@ -114,7 +114,7 @@ jobs:
           sha256sum sn2-validator-linux-x86_64 sn2-miner-linux-x86_64 sn2-validator-linux-aarch64 sn2-miner-linux-aarch64 sn2-validator-macos-aarch64 sn2-miner-macos-aarch64 > SHA256SUMS
 
       - name: Attest release binaries
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             sn2-validator-linux-x86_64
