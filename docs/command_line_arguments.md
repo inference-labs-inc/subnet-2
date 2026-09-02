@@ -22,7 +22,7 @@ All arguments use `--long-flag` syntax. Flags are shared between miner and valid
 | `--axon-host` | `0.0.0.0` | Bind address for the HTTP axon server |
 | `--axon-port` | `8091` | HTTP axon port |
 | `--quic-port` | `8092` | QUIC ([btlightning](https://github.com/inference-labs-inc/lightning)) server port |
-| `--external-ip` | None | Public IP to register on-chain for the axon. When omitted the address is detected automatically, re-checked every 5 minutes, and republished if it changed; for 20 minutes after a change, connection failures are requeued without penalizing miners while their allowlists resync |
+| `--external-ip` | None | Public IP to register on-chain for the axon |
 | `--dsperse-socket` | None | dsperse prover socket address |
 
 ## Validator Arguments
@@ -33,6 +33,7 @@ All arguments use `--long-flag` syntax. Flags are shared between miner and valid
 | `--api-miners-pct` | `20` | Percentage of miners allocated to API requests |
 | `--disable-benchmark` | `false` | Disable benchmark queries |
 | `--relay-url` | None | WebSocket relay URL |
+| `--external-ip` | None | Public IP to publish on-chain for miners' source-address allowlists. When omitted the address is detected automatically, re-checked every 5 minutes, and republished if it changed; for 20 minutes after a change, connection failures are requeued without penalizing miners while their allowlists resync |
 | `--no-relay` | `false` | Disable the relay WebSocket connection (enabled by default) |
 | `--metrics-port` | `9090` | Prometheus metrics exporter port |
 | `--dsperse-socket` | None | dsperse prover socket address |

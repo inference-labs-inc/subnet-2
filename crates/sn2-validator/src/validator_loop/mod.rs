@@ -196,6 +196,11 @@ pub struct ValidatorLoop {
     pub(super) dispatch_cooldowns: HashMap<String, u64>,
     /// Last external address successfully published to chain by this process.
     pub(super) published_external_ip: Option<IpAddr>,
+    /// Last external address this process detected, whether or not the publish
+    /// that followed succeeded. Rotation is judged against this first, so a
+    /// publish that keeps failing for one address change cannot keep re-opening
+    /// the grace window on every re-check.
+    pub(super) observed_external_ip: Option<IpAddr>,
     /// Open while connection failures are attributable to the validator's own
     /// address rotation rather than to miners. See ADDRESS_ROTATION_GRACE_SECS.
     pub(super) address_rotation_grace_until: Option<Instant>,
@@ -417,6 +422,7 @@ impl ValidatorLoop {
             dispatch_cache: dispatch::DispatchCache::new(),
             dispatch_cooldowns: HashMap::new(),
             published_external_ip: None,
+            observed_external_ip: None,
             address_rotation_grace_until: None,
             recent_disconnects: VecDeque::new(),
             address_recheck_requested: false,
@@ -588,21 +594,26 @@ impl ValidatorLoop {
                 return;
             }
         };
-        // The address miners currently hold for this validator: what this
-        // process last published, or, before the first publish, the on-chain
-        // Axons entry from the last metagraph sync.
-        let previously_known = self.published_external_ip.or_else(|| {
-            let own = wallet.hotkey_ss58();
-            self.config
-                .metagraph
-                .neurons
-                .iter()
-                .find(|n| n.hotkey == own)
-                .and_then(|n| n.axon_ip.parse::<IpAddr>().ok())
-        });
+        // The address this validator was last known to have: what this process
+        // last observed, else what it last published, else, before the first
+        // publish, the on-chain Axons entry from the last metagraph sync.
+        let own = wallet.hotkey_ss58();
+        let chain_entry = self
+            .config
+            .metagraph
+            .neurons
+            .iter()
+            .find(|n| n.hotkey == own)
+            .and_then(|n| n.axon_ip.parse::<IpAddr>().ok());
+        let previously_known = known_address(
+            self.observed_external_ip,
+            self.published_external_ip,
+            chain_entry,
+        );
         if rotation_detected(previously_known, external_ip) {
             self.open_address_rotation_grace(previously_known, external_ip);
         }
+        self.observed_external_ip = Some(external_ip);
         let registration = Registration::new(self.config.netuid);
         match registration
             .serve_axon(
@@ -759,6 +770,16 @@ fn rotation_detected(previously_known: Option<IpAddr>, current: IpAddr) -> bool 
     previously_known.is_some_and(|prev| prev != current)
 }
 
+/// The address to compare a fresh detection against, in order of how recently
+/// it was established by this process.
+fn known_address(
+    observed: Option<IpAddr>,
+    published: Option<IpAddr>,
+    chain_entry: Option<IpAddr>,
+) -> Option<IpAddr> {
+    observed.or(published).or(chain_entry)
+}
+
 fn disconnect_burst(recent: &VecDeque<(Instant, u16)>, min_miners: usize) -> bool {
     let mut uids: Vec<u16> = recent.iter().map(|(_, uid)| *uid).collect();
     uids.sort_unstable();
@@ -768,7 +789,7 @@ fn disconnect_burst(recent: &VecDeque<(Instant, u16)>, min_miners: usize) -> boo
 
 #[cfg(test)]
 mod address_rotation_tests {
-    use super::{disconnect_burst, rotation_detected};
+    use super::{disconnect_burst, known_address, rotation_detected};
     use std::collections::VecDeque;
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Instant;
@@ -790,6 +811,26 @@ mod address_rotation_tests {
     #[test]
     fn changed_address_is_a_rotation() {
         assert!(rotation_detected(Some(ip(1)), ip(2)));
+    }
+
+    #[test]
+    fn observed_address_takes_precedence_so_failed_publish_cannot_reopen_grace() {
+        // First detection: nothing observed yet, chain says ip(1), we now have ip(2).
+        assert!(rotation_detected(
+            known_address(None, None, Some(ip(1))),
+            ip(2)
+        ));
+        // Publish failed, so nothing published; the re-check sees ip(2) again.
+        // The observed address wins and no rotation is reported.
+        assert!(!rotation_detected(
+            known_address(Some(ip(2)), None, Some(ip(1))),
+            ip(2)
+        ));
+        // A genuine further change is still a rotation.
+        assert!(rotation_detected(
+            known_address(Some(ip(2)), None, Some(ip(1))),
+            ip(3)
+        ));
     }
 
     #[test]
