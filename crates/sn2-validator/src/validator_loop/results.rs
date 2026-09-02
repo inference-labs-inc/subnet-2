@@ -1,3 +1,4 @@
+use sn2_types::ROTATION_GRACE_REDISPATCH_BLOCKS;
 use sn2_types::*;
 use tracing::{debug, info, warn};
 
@@ -375,6 +376,31 @@ impl ValidatorLoop {
     ) {
         warn!(uid = uid, rtype = %request_type, retry = retry_count, run_uid = ?run_uid, slice = ?slice_num, tile = ?tile_idx, error = reason, "miner query failed");
 
+        // Inside the window that follows the validator's own address rotation a
+        // connection failure is most likely the miner rejecting the stale
+        // source. Such a failure carries no skiplist, capacity or score penalty
+        // and is requeued at the same retry count behind a short pacing
+        // cooldown. Everything else, including terminal handling when the work
+        // cannot be requeued, proceeds exactly as for any other failure.
+        let is_disconnect = is_disconnect_failure(reason);
+        if is_disconnect {
+            self.note_disconnect(uid);
+        }
+        let in_rotation_grace = is_disconnect && self.in_address_rotation_grace();
+        if in_rotation_grace {
+            info!(
+                uid,
+                error = reason,
+                "connection failure within address rotation grace; not penalized"
+            );
+            if !hotkey.is_empty() {
+                self.dispatch_cooldowns.insert(
+                    hotkey.to_string(),
+                    self.current_block + ROTATION_GRACE_REDISPATCH_BLOCKS,
+                );
+            }
+        }
+
         let is_verification_failure = reason.starts_with("verification failed")
             && matches!(
                 request_type,
@@ -395,7 +421,7 @@ impl ValidatorLoop {
         // hotkey for one epoch: ignored and weighted zero, then retried. This
         // is the punishing counterpart to a debit, not an exemption, so a miner
         // that drops its connection to shed load is scored worse, never better.
-        if is_disconnect_failure(reason) && !hotkey.is_empty() {
+        if is_disconnect && !in_rotation_grace && !hotkey.is_empty() {
             self.rsv
                 .skiplist_disconnect(hotkey, self.current_block, self.blocks_per_tempo);
         }
@@ -413,17 +439,19 @@ impl ValidatorLoop {
             .as_deref()
             .map(|s| s.strip_prefix("slice_").unwrap_or(s));
         let work_key = Self::build_work_key(failed_circuit_id, slice_part);
-        self.performance_tracker
-            .record_reschedule_keyed(uid, &work_key);
+        if !in_rotation_grace {
+            self.performance_tracker
+                .record_reschedule_keyed(uid, &work_key);
 
-        self.score_manager.update_score(
-            uid,
-            false,
-            0.0,
-            VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
-            0.0,
-            self.config.metagraph.n,
-        );
+            self.score_manager.update_score(
+                uid,
+                false,
+                0.0,
+                VALIDATOR_REQUEST_TIMEOUT_SECONDS as f64,
+                0.0,
+                self.config.metagraph.n,
+            );
+        }
         metrics::record_response(false, 0.0);
 
         let max_retries = match (&request_type, &retry_payload) {
@@ -436,7 +464,12 @@ impl ValidatorLoop {
             _ => MAX_API_RETRIES,
         };
 
-        let next_retry = retry_count + 1;
+        // A requeue inside the grace window does not consume a retry.
+        let next_retry = if in_rotation_grace {
+            retry_count
+        } else {
+            retry_count + 1
+        };
 
         if !is_verification_failure
             && next_retry <= max_retries
