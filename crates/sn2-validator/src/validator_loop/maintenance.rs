@@ -3,8 +3,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use btlightning::QuicAxonInfo;
-use sn2_types::BUNDLE_CACHE_IDLE_TTL_SECS;
 use sn2_types::*;
+use sn2_types::{
+    BUNDLE_CACHE_IDLE_TTL_SECS, EXTERNAL_ADDRESS_RECHECK_MIN_SECS, EXTERNAL_ADDRESS_REFRESH_SECS,
+};
 use tracing::{debug, info, warn};
 
 use super::{is_valid_ip, ValidatorLoop, WeightTaskResult};
@@ -53,6 +55,21 @@ impl ValidatorLoop {
                 self.timings.metagraph_sync = now;
             }
 
+            // Re-check an auto-detected external address on a short interval,
+            // or immediately (rate limited) after a burst of connection failures
+            // across miners, so a rotation is republished long before the hourly
+            // metagraph sync would notice it.
+            if self.config.external_ip.is_none() {
+                let since = now.duration_since(self.timings.external_address);
+                let due = since > Duration::from_secs(EXTERNAL_ADDRESS_REFRESH_SECS);
+                let requested = self.address_recheck_requested
+                    && since > Duration::from_secs(EXTERNAL_ADDRESS_RECHECK_MIN_SECS);
+                if due || requested {
+                    self.address_recheck_requested = false;
+                    self.publish_axon_if_configured().await;
+                    self.timings.external_address = now;
+                }
+            }
             if now.duration_since(self.timings.miner_registry_refresh) > Duration::from_secs(60) {
                 self.refresh_miner_connections().await;
                 self.timings.miner_registry_refresh = now;

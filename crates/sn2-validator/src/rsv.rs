@@ -12,6 +12,10 @@ use tracing::{info, warn};
 
 pub struct RsvManager {
     skiplist: HashMap<String, u64>,
+    /// Connection-level skiplist entries, kept apart from strike-based ones so
+    /// they can be lifted when the validator learns its own address rotated.
+    /// Not persisted: a restart is itself a likely rotation.
+    disconnect_skiplist: HashMap<String, u64>,
     strikes: HashMap<String, VecDeque<u64>>,
     coldstart: HashMap<String, u64>,
     last_seen: HashMap<String, u64>,
@@ -22,6 +26,7 @@ impl RsvManager {
     pub fn new_with_persistence(path: PathBuf) -> Self {
         let mut mgr = Self {
             skiplist: HashMap::new(),
+            disconnect_skiplist: HashMap::new(),
             strikes: HashMap::new(),
             coldstart: HashMap::new(),
             last_seen: HashMap::new(),
@@ -32,9 +37,19 @@ impl RsvManager {
     }
 
     pub fn is_skiplisted(&self, hotkey: &str, current_block: u64) -> bool {
-        self.skiplist
-            .get(hotkey)
-            .is_some_and(|&until| current_block < until)
+        let active =
+            |m: &HashMap<String, u64>| m.get(hotkey).is_some_and(|&until| current_block < until);
+        active(&self.skiplist) || active(&self.disconnect_skiplist)
+    }
+
+    /// Lift every connection-level skiplist entry. Used when the validator
+    /// detects its own address changed: miners that could not be reached were
+    /// most likely rejecting the stale source, and strike-based entries are
+    /// untouched because they record delivered-but-invalid proofs.
+    pub fn clear_disconnect_skiplist(&mut self) -> usize {
+        let n = self.disconnect_skiplist.len();
+        self.disconnect_skiplist.clear();
+        n
     }
 
     pub fn is_in_coldstart(&self, hotkey: &str, current_block: u64) -> bool {
@@ -71,7 +86,10 @@ impl RsvManager {
             blocks_per_tempo
         };
         let until = current_block + DISCONNECT_SKIPLIST_TEMPOS * bpt;
-        let entry = self.skiplist.entry(hotkey.to_string()).or_insert(0);
+        let entry = self
+            .disconnect_skiplist
+            .entry(hotkey.to_string())
+            .or_insert(0);
         if until > *entry {
             *entry = until;
             warn!(
@@ -120,6 +138,8 @@ impl RsvManager {
 
     pub fn prune_expired(&mut self, current_block: u64, blocks_per_tempo: u64) {
         self.skiplist.retain(|_, until| *until > current_block);
+        self.disconnect_skiplist
+            .retain(|_, until| *until > current_block);
 
         let strikes_cutoff = current_block.saturating_sub(VERIFICATION_STRIKES_WINDOW_BLOCKS);
         let coldstart_cutoff =
@@ -281,6 +301,33 @@ impl RsvManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn disconnect_skiplist_is_lifted_but_strike_skiplist_is_kept() {
+        let mut mgr = super::RsvManager::new_with_persistence(
+            std::env::temp_dir().join(format!("rsv-{}.json", std::process::id())),
+        );
+        mgr.skiplist_disconnect("hk-disconnected", 1000, 360);
+        assert!(mgr.record_strike("hk-invalid-proof", 1000, 360));
+        assert!(mgr.is_skiplisted("hk-disconnected", 1001));
+        assert!(mgr.is_skiplisted("hk-invalid-proof", 1001));
+
+        assert_eq!(mgr.clear_disconnect_skiplist(), 1);
+        assert!(!mgr.is_skiplisted("hk-disconnected", 1001));
+        assert!(mgr.is_skiplisted("hk-invalid-proof", 1001));
+    }
+
+    #[test]
+    fn disconnect_skiplist_expires_after_one_tempo() {
+        let mut mgr = super::RsvManager::new_with_persistence(
+            std::env::temp_dir().join(format!("rsv-exp-{}.json", std::process::id())),
+        );
+        mgr.skiplist_disconnect("hk", 1000, 360);
+        assert!(mgr.is_skiplisted("hk", 1359));
+        assert!(!mgr.is_skiplisted("hk", 1360));
+        mgr.prune_expired(1360, 360);
+        assert!(!mgr.is_skiplisted("hk", 1000));
+    }
+
     use super::*;
 
     fn temp_path(suffix: &str) -> PathBuf {
@@ -300,6 +347,7 @@ mod tests {
     fn fresh() -> RsvManager {
         RsvManager {
             skiplist: HashMap::new(),
+            disconnect_skiplist: HashMap::new(),
             strikes: HashMap::new(),
             coldstart: HashMap::new(),
             last_seen: HashMap::new(),

@@ -1,3 +1,4 @@
+use sn2_types::ROTATION_GRACE_REDISPATCH_BLOCKS;
 use sn2_types::*;
 use tracing::{debug, info, warn};
 
@@ -374,6 +375,32 @@ impl ValidatorLoop {
         reason: &str,
     ) {
         warn!(uid = uid, rtype = %request_type, retry = retry_count, run_uid = ?run_uid, slice = ?slice_num, tile = ?tile_idx, error = reason, "miner query failed");
+
+        // Inside the window that follows the validator's own address rotation a
+        // connection failure is most likely the miner rejecting the stale
+        // source. Requeue the work at the same retry count with a short pacing
+        // cooldown and apply no skiplist, capacity or score penalty. Failures
+        // of every other kind, and every failure outside the window, are
+        // handled exactly as before.
+        if is_disconnect_failure(reason) {
+            self.note_disconnect(uid);
+            if self.in_address_rotation_grace() {
+                info!(
+                    uid,
+                    error = reason,
+                    "connection failure within address rotation grace; requeued without penalty"
+                );
+                if !hotkey.is_empty() {
+                    self.dispatch_cooldowns.insert(
+                        hotkey.to_string(),
+                        self.current_block + ROTATION_GRACE_REDISPATCH_BLOCKS,
+                    );
+                }
+                metrics::record_response(false, 0.0);
+                self.attempt_retry(retry_payload, retry_count);
+                return;
+            }
+        }
 
         let is_verification_failure = reason.starts_with("verification failed")
             && matches!(
