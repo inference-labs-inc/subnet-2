@@ -55,13 +55,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Scan container image
-        if: github.event_name == 'push'
-        uses: ./.github/actions/trivy-sarif
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
-          category: trivy-image-testnet
-
       - name: Generate container SBOM
         if: github.event_name == 'push'
         uses: anchore/sbom-action@57aae528053a48a3f6235f2d9461b05fbcb7366d # v0.23.1
@@ -190,24 +183,6 @@ jobs:
           labels: ${{ steps.release-meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Run Trivy scan
-        id: trivy-release
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
-        with:
-          scan-type: image
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: "true"
-
-      - name: Upload SARIF to GitHub Security tab
-        if: steps.trivy-release.conclusion == 'success'
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-image-release
 
       - name: Generate container SBOM
         uses: anchore/sbom-action@57aae528053a48a3f6235f2d9461b05fbcb7366d # v0.23.1
