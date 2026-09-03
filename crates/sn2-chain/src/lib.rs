@@ -26,6 +26,7 @@ pub const FINNEY_ENDPOINT: &str = "wss://entrypoint-finney.opentensor.ai:443";
 pub const TEST_ENDPOINT: &str = "wss://test.finney.opentensor.ai:443";
 pub const LOCAL_ENDPOINT: &str = "ws://127.0.0.1:9944";
 
+pub const CHAIN_RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const CHAIN_RPC_PING_INTERVAL: Duration = Duration::from_secs(20);
 pub const CHAIN_RPC_INACTIVE_LIMIT: Duration = Duration::from_secs(60);
 pub const CHAIN_RPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -69,18 +70,30 @@ pub fn resolve_endpoint(network: &str, override_endpoint: Option<&str>) -> Strin
 /// timeout (the transaction paths in `weights` and `registration` do).
 /// Subscriptions, including transaction status watches, are not resumed across
 /// a reconnect; `WeightsSetter::commit_timelocked_weights` reconciles a lost
-/// watch against chain state before reporting failure.
+/// watch against chain state before reporting failure. The reconnecting client
+/// retries the initial connection with the same backoff it uses at runtime, so
+/// the first connect is bounded by `CHAIN_RPC_CONNECT_TIMEOUT` to keep an
+/// unreachable endpoint a startup error rather than an endless retry.
 pub async fn connect_chain(endpoint: &str) -> Result<OnlineClient<PolkadotConfig>> {
-    let reconnecting = ReconnectingRpcClient::builder()
-        .request_timeout(CHAIN_RPC_REQUEST_TIMEOUT)
-        .enable_ws_ping(
-            PingConfig::new()
-                .ping_interval(CHAIN_RPC_PING_INTERVAL)
-                .inactive_limit(CHAIN_RPC_INACTIVE_LIMIT),
+    let reconnecting = tokio::time::timeout(
+        CHAIN_RPC_CONNECT_TIMEOUT,
+        ReconnectingRpcClient::builder()
+            .request_timeout(CHAIN_RPC_REQUEST_TIMEOUT)
+            .enable_ws_ping(
+                PingConfig::new()
+                    .ping_interval(CHAIN_RPC_PING_INTERVAL)
+                    .inactive_limit(CHAIN_RPC_INACTIVE_LIMIT),
+            )
+            .build(endpoint),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "connecting to subtensor at {endpoint} timed out after {:?}",
+            CHAIN_RPC_CONNECT_TIMEOUT
         )
-        .build(endpoint)
-        .await
-        .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
+    })?
+    .with_context(|| format!("connecting to subtensor at {endpoint}"))?;
     let rpc_client = RpcClient::new(reconnecting);
 
     let chain_head = ChainHeadBackend::builder().build_with_background_driver(rpc_client.clone());
