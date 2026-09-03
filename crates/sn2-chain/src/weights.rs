@@ -13,9 +13,8 @@ use crate::wallet::Wallet;
 const BLOCK_TIME: f64 = 12.0;
 const TX_SUBMIT_TIMEOUT: Duration = Duration::from_secs(30);
 const TX_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(180);
-const COMMIT_RECONCILE_ATTEMPTS: u32 = 10;
+const COMMIT_RECONCILE_DEADLINE: Duration = Duration::from_secs(60);
 const COMMIT_RECONCILE_INTERVAL: Duration = Duration::from_secs(6);
-const COMMIT_RECONCILE_READ_TIMEOUT: Duration = Duration::from_secs(12);
 const COMMIT_REVEAL_VERSION: u64 = 4;
 
 #[derive(Clone)]
@@ -147,14 +146,22 @@ impl WeightsSetter {
             error = ?watch_error,
             "commit watch lost after submission; reconciling against chain state"
         );
-        for attempt in 1..=COMMIT_RECONCILE_ATTEMPTS {
-            tokio::time::sleep(COMMIT_RECONCILE_INTERVAL).await;
-            let read = tokio::time::timeout(
-                COMMIT_RECONCILE_READ_TIMEOUT,
-                self.last_update_block(client, uid),
-            )
-            .await
-            .unwrap_or_else(|_| Err(anyhow::anyhow!("LastUpdate read timed out")));
+        let deadline = tokio::time::Instant::now() + COMMIT_RECONCILE_DEADLINE;
+        let mut attempt = 0u32;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let Some(wait) = reconcile_wait(remaining, COMMIT_RECONCILE_INTERVAL) else {
+                break;
+            };
+            tokio::time::sleep(wait).await;
+            attempt += 1;
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let read = tokio::time::timeout(remaining, self.last_update_block(client, uid))
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("LastUpdate read timed out")));
             match read {
                 Ok(last_update) if commit_reconciled(last_update_before, last_update) => {
                     info!(
@@ -368,9 +375,21 @@ pub fn commit_reconciled(last_update_before: u64, last_update_after: u64) -> boo
     last_update_after > last_update_before
 }
 
+/// Next wait before a reconciliation read: the poll interval capped by the time
+/// left before the absolute deadline, or `None` once the deadline has passed.
+pub fn reconcile_wait(remaining: Duration, interval: Duration) -> Option<Duration> {
+    if remaining.is_zero() {
+        None
+    } else {
+        Some(interval.min(remaining))
+    }
+}
+
 #[cfg(test)]
 mod reconcile_tests {
-    use super::commit_reconciled;
+    use std::time::Duration;
+
+    use super::{commit_reconciled, reconcile_wait};
 
     #[test]
     fn reconciled_only_when_last_update_advances() {
@@ -378,5 +397,19 @@ mod reconcile_tests {
         assert!(commit_reconciled(0, 1));
         assert!(!commit_reconciled(100, 100));
         assert!(!commit_reconciled(100, 99));
+    }
+
+    #[test]
+    fn wait_is_capped_by_remaining_deadline() {
+        let interval = Duration::from_secs(6);
+        assert_eq!(
+            reconcile_wait(Duration::from_secs(60), interval),
+            Some(interval)
+        );
+        assert_eq!(
+            reconcile_wait(Duration::from_secs(2), interval),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(reconcile_wait(Duration::ZERO, interval), None);
     }
 }
