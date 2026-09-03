@@ -15,6 +15,7 @@ const TX_SUBMIT_TIMEOUT: Duration = Duration::from_secs(30);
 const TX_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(180);
 const COMMIT_RECONCILE_ATTEMPTS: u32 = 10;
 const COMMIT_RECONCILE_INTERVAL: Duration = Duration::from_secs(6);
+const COMMIT_RECONCILE_READ_TIMEOUT: Duration = Duration::from_secs(12);
 const COMMIT_REVEAL_VERSION: u64 = 4;
 
 #[derive(Clone)]
@@ -148,7 +149,13 @@ impl WeightsSetter {
         );
         for attempt in 1..=COMMIT_RECONCILE_ATTEMPTS {
             tokio::time::sleep(COMMIT_RECONCILE_INTERVAL).await;
-            match self.last_update_block(client, uid).await {
+            let read = tokio::time::timeout(
+                COMMIT_RECONCILE_READ_TIMEOUT,
+                self.last_update_block(client, uid),
+            )
+            .await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("LastUpdate read timed out")));
+            match read {
                 Ok(last_update) if commit_reconciled(last_update_before, last_update) => {
                     info!(
                         reveal_round = reveal_round,
