@@ -75,6 +75,10 @@ fn rmpv_to_json_value_bounded(value: RmpvValue, depth: usize) -> Result<JsonValu
                     RmpvValue::Integer(i) => i.to_string(),
                     other => format!("{other}"),
                 };
+                anyhow::ensure!(
+                    !obj.contains_key(&key),
+                    "miner response map contains duplicate key after JSON normalization: {key}"
+                );
                 obj.insert(key, rmpv_to_json_value_bounded(v, depth + 1)?);
             }
             JsonValue::Object(obj)
@@ -230,6 +234,25 @@ mod tests {
         assert!(obj.keys().all(|k| k.starts_with("__msgpack_str_hex:")));
         assert!(obj.contains_key("__msgpack_str_hex:ff00"));
         assert!(obj.contains_key("__msgpack_str_hex:fe01"));
+    }
+
+    #[test]
+    fn duplicate_map_keys_are_rejected() {
+        // Hand-encoded MessagePack: fixmap(2) { "a" => 1, "a" => 2 }
+        let bytes: &[u8] = &[0x82, 0xa1, b'a', 0x01, 0xa1, b'a', 0x02];
+        let value = rmpv::decode::read_value(&mut std::io::Cursor::new(bytes)).expect("decode");
+        let err = rmpv_to_json_value(value).unwrap_err().to_string();
+        assert!(err.contains("duplicate key"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn normalized_map_key_collisions_are_rejected() {
+        let value = RmpvValue::Map(vec![
+            (RmpvValue::String("1".into()), RmpvValue::from(1)),
+            (RmpvValue::from(1), RmpvValue::from(2)),
+        ]);
+        let err = rmpv_to_json_value(value).unwrap_err().to_string();
+        assert!(err.contains("duplicate key"), "unexpected error: {err}");
     }
 
     #[test]
