@@ -237,14 +237,13 @@ impl ValidatorLoop {
             .join("subnet-2")
             .join("performance_tracker.json");
         let mut performance_tracker = PerformanceTracker::new_with_persistence(perf_path);
-        performance_tracker.retain_work_for_hotkeys(
-            &config
-                .metagraph
-                .neurons
-                .iter()
-                .map(|neuron| (neuron.uid, neuron.hotkey.clone()))
-                .collect(),
-        );
+        let uid_hotkeys = config
+            .metagraph
+            .neurons
+            .iter()
+            .map(|neuron| (neuron.uid, neuron.hotkey.clone()))
+            .collect();
+        performance_tracker.retain_work_for_hotkeys(&uid_hotkeys);
 
         let rsv_path = dirs_next::home_dir()
             .unwrap_or_default()
@@ -405,7 +404,7 @@ impl ValidatorLoop {
             dsperse_rx,
             rwr_rx,
             timings: PeriodicTimings::new(now),
-            uid_hotkeys: HashMap::new(),
+            uid_hotkeys,
             dispatch_notify: Arc::new(Notify::new()),
             task_meta: HashMap::new(),
             run_manager,

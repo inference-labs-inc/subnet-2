@@ -530,6 +530,15 @@ impl PerformanceTracker {
             "capacities": capacities_json,
             "delivered_work": delivered_work_json,
             "work_hotkeys": self.work_hotkeys,
+            // Keep the observations used to price new failures as well as
+            // historical work; otherwise a restart discounts expensive failures
+            // to the cold-start fallback while retaining the old credit.
+            "unit_times": self.unit_times.iter().map(|(key, samples)| {
+                let samples: Vec<_> = samples.iter().map(|(ts, time)| {
+                    (now_secs.saturating_sub(now_instant.saturating_duration_since(*ts).as_secs()), *time)
+                }).collect();
+                (key, samples)
+            }).collect::<HashMap<_, _>>(),
         });
 
         match serde_json::to_string(&data) {
@@ -618,7 +627,34 @@ impl PerformanceTracker {
         // The ledger is already priced: restore both credit and debit at the
         // original bucket age, including time spent offline. Legacy files
         // without this field keep their previous empty-ledger behavior.
-        if let Some(map) = parsed.get("delivered_work").and_then(|v| v.as_object()) {
+        if let (Some(map), Some(prices)) = (
+            parsed.get("delivered_work").and_then(|v| v.as_object()),
+            parsed.get("unit_times").and_then(|v| {
+                let prices =
+                    serde_json::from_value::<HashMap<String, Vec<(u64, f64)>>>(v.clone()).ok()?;
+                prices
+                    .into_iter()
+                    .map(|(key, samples)| {
+                        let samples = samples
+                            .into_iter()
+                            .map(|(ts, time)| {
+                                if !time.is_finite() || time <= 0.0 {
+                                    return None;
+                                }
+                                Some((
+                                    now_instant.checked_sub(Duration::from_secs(
+                                        now_secs.checked_sub(ts)?,
+                                    ))?,
+                                    time,
+                                ))
+                            })
+                            .collect::<Option<VecDeque<_>>>()?;
+                        (samples.len() <= UNIT_TIMES_CAP).then_some((key, samples))
+                    })
+                    .collect::<Option<HashMap<_, _>>>()
+            }),
+        ) {
+            self.unit_times = prices;
             let work_ttl_secs = ttl_secs + DELIVERED_WORK_BUCKET_SECS;
             for (uid_str, entries) in map {
                 let Ok(uid) = uid_str.parse::<u16>() else {
@@ -635,17 +671,15 @@ impl PerformanceTracker {
                 let Some(entries) = entries.as_array() else {
                     continue;
                 };
-                let buckets: VecDeque<_> = entries
+                // Reject a damaged/clock-skewed ledger as a whole. Skipping
+                // individual invalid entries could forgive only its debits.
+                let buckets = entries
                     .iter()
-                    .filter_map(|entry| {
+                    .map(|entry| {
                         let (abs_secs, credit, debit, fallback_priced) =
                             serde_json::from_value::<(u64, f64, f64, u64)>(entry.clone()).ok()?;
                         let elapsed = now_secs.checked_sub(abs_secs)?;
-                        if elapsed > work_ttl_secs
-                            || !credit.is_finite()
-                            || credit < 0.0
-                            || !debit.is_finite()
-                            || debit < 0.0
+                        if !credit.is_finite() || credit < 0.0 || !debit.is_finite() || debit < 0.0
                         {
                             return None;
                         }
@@ -659,7 +693,11 @@ impl PerformanceTracker {
                             },
                         ))
                     })
-                    .collect();
+                    .collect::<Option<VecDeque<_>>>();
+                let Some(mut buckets) = buckets else {
+                    continue;
+                };
+                buckets.retain(|(ts, _)| ts.elapsed().as_secs() <= work_ttl_secs);
                 if !buckets.is_empty() {
                     self.delivered_work.insert(uid, buckets);
                     self.work_hotkeys.insert(uid, hotkey.to_string());
@@ -1858,11 +1896,14 @@ mod tests {
         let expired = now - window_ttl().as_secs() - DELIVERED_WORK_BUCKET_SECS - 60;
         std::fs::write(
             &path,
-            serde_json::json!({"work_hotkeys": {"9": "hk"}, "delivered_work": {
+            serde_json::json!({"unit_times": {}, "work_hotkeys": {"9": "hk", "10": "other"}, "delivered_work": {
                 "invalid-uid": [[now, 100.0, 0.0, 0]],
                 "9": [
-                    [now - DELIVERED_WORK_HALF_LIFE_SECS, 8.0, 2.0, 3],
                     [expired, 100.0, 0.0, 0],
+                    [now - DELIVERED_WORK_HALF_LIFE_SECS, 8.0, 2.0, 3]
+                ],
+                "10": [
+                    [now - DELIVERED_WORK_HALF_LIFE_SECS, 8.0, 2.0, 3],
                     [now + 60, 100.0, 0.0, 0],
                     [now, -1.0, 0.0, 0],
                     [now, 1.0, -1.0, 0],
