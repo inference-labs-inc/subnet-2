@@ -512,7 +512,11 @@ impl PerformanceTracker {
             let entries: Vec<serde_json::Value> = buckets
                 .iter()
                 .map(|(ts, bucket)| {
-                    let elapsed = now_instant.saturating_duration_since(*ts).as_secs();
+                    // Round age up, so repeated restarts cannot refresh work.
+                    let elapsed = now_instant
+                        .saturating_duration_since(*ts)
+                        .as_secs_f64()
+                        .ceil() as u64;
                     let abs_secs = now_secs.saturating_sub(elapsed);
                     serde_json::json!([
                         abs_secs,
@@ -535,7 +539,7 @@ impl PerformanceTracker {
             // to the cold-start fallback while retaining the old credit.
             "unit_times": self.unit_times.iter().map(|(key, samples)| {
                 let samples: Vec<_> = samples.iter().map(|(ts, time)| {
-                    (now_secs.saturating_sub(now_instant.saturating_duration_since(*ts).as_secs()), *time)
+                    (now_secs.saturating_sub(now_instant.saturating_duration_since(*ts).as_secs_f64().ceil() as u64), *time)
                 }).collect();
                 (key, samples)
             }).collect::<HashMap<_, _>>(),
