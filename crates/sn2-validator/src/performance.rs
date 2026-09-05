@@ -1598,6 +1598,130 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    fn round_trip_work(tracker: &mut PerformanceTracker) -> PerformanceTracker {
+        let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+        tracker.persistence_path = Some(path.clone());
+        tracker.save();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        std::fs::remove_file(path).unwrap();
+        restored
+    }
+
+    #[test]
+    fn delivered_work_persistence_preserves_credit_and_debit() {
+        let mut tracker = test_tracker();
+        for _ in 0..120 {
+            tracker.record_keyed(9, "hk", true, 2.0, false, "A");
+        }
+        tracker.record_reschedule_keyed(9, "A");
+        let expected = tracker.delivered_breakdown(9);
+        assert!(expected.0 > expected.1 && expected.1 > 0.0);
+        let restored = round_trip_work(&mut tracker);
+        assert_eq!(restored.sample_counts(), tracker.sample_counts());
+        assert_eq!(restored.delivered_breakdown(9), expected);
+        assert!(restored.throughput_snapshot()[&9].0 > 0.0);
+    }
+
+    #[test]
+    fn delivered_work_persistence_preserves_bucket_age() {
+        let mut tracker = test_tracker();
+        let half_life = Duration::from_secs(DELIVERED_WORK_HALF_LIFE_SECS);
+        let started = Instant::now() - half_life;
+        tracker.delivered_work.insert(
+            9,
+            VecDeque::from([(
+                started,
+                WorkBucket {
+                    credit: 8.0,
+                    debit: 2.0,
+                    fallback_priced: 3,
+                },
+            )]),
+        );
+        let restored = round_trip_work(&mut tracker);
+        let (restored_start, _) = restored.delivered_work[&9].front().unwrap();
+        let age = restored_start.elapsed();
+        assert!(age >= half_life - Duration::from_secs(1));
+        assert!(age <= started.elapsed() + Duration::from_secs(1));
+        assert!((restored.miner_delivered_work(9) - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn delivered_work_persistence_expires_old_buckets() {
+        let mut tracker = test_tracker();
+        let expired =
+            Instant::now() - window_ttl() - Duration::from_secs(DELIVERED_WORK_BUCKET_SECS + 60);
+        tracker.delivered_work.insert(
+            9,
+            VecDeque::from([(
+                expired,
+                WorkBucket {
+                    credit: 8.0,
+                    debit: 2.0,
+                    fallback_priced: 3,
+                },
+            )]),
+        );
+        let restored = round_trip_work(&mut tracker);
+        assert!(!restored.delivered_work.contains_key(&9));
+    }
+
+    #[test]
+    fn delivered_work_persistence_loads_legacy_files() {
+        let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "windows": {"9": [[now, true, 2.0]]},
+                "capacities": {"9": [4, [true]]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(restored.sample_counts()[&9], 1);
+        assert_eq!(restored.adaptive_caps[&9], 4);
+        assert!(restored.delivered_work.is_empty());
+    }
+
+    #[test]
+    fn delivered_work_persistence_accounts_for_downtime_and_rejects_invalid_buckets() {
+        let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let expired = now - window_ttl().as_secs() - DELIVERED_WORK_BUCKET_SECS - 60;
+        std::fs::write(
+            &path,
+            serde_json::json!({"delivered_work": {
+                "invalid-uid": [[now, 100.0, 0.0, 0]],
+                "9": [
+                    [now - DELIVERED_WORK_HALF_LIFE_SECS, 8.0, 2.0, 3],
+                    [expired, 100.0, 0.0, 0],
+                    [now + 60, 100.0, 0.0, 0],
+                    [now, -1.0, 0.0, 0],
+                    [now, 1.0, -1.0, 0],
+                    [now, null, 0.0, 0],
+                    [now, 1.0]
+                ]
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(restored.delivered_work.len(), 1);
+        assert_eq!(restored.delivered_work[&9].len(), 1);
+        assert_eq!(restored.delivered_breakdown(9), (8.0, 2.0, 3));
+        assert!((restored.miner_delivered_work(9) - 3.0).abs() < 0.01);
+    }
+
     #[test]
     fn idle_decay_floors_at_one_without_eviction() {
         let mut tracker = test_tracker();
