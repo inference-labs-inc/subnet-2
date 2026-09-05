@@ -236,7 +236,15 @@ impl ValidatorLoop {
             .join(".bittensor")
             .join("subnet-2")
             .join("performance_tracker.json");
-        let performance_tracker = PerformanceTracker::new_with_persistence(perf_path);
+        let mut performance_tracker = PerformanceTracker::new_with_persistence(perf_path);
+        performance_tracker.retain_work_for_hotkeys(
+            &config
+                .metagraph
+                .neurons
+                .iter()
+                .map(|neuron| (neuron.uid, neuron.hotkey.clone()))
+                .collect(),
+        );
 
         let rsv_path = dirs_next::home_dir()
             .unwrap_or_default()

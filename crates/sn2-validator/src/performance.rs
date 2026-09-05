@@ -89,6 +89,7 @@ pub struct PerformanceTracker {
     // service time weighted by the work mix it is actually being sent.
     min_service: HashMap<u16, VecDeque<(Instant, f64)>>,
     delivered_work: HashMap<u16, VecDeque<(Instant, WorkBucket)>>,
+    work_hotkeys: HashMap<u16, String>,
     completion_bins: HashMap<u16, VecDeque<(Instant, u32)>>,
     cap_last_adjusted: HashMap<u16, Instant>,
     total_records: u64,
@@ -201,6 +202,7 @@ impl PerformanceTracker {
             unit_own_best: HashMap::new(),
             min_service: HashMap::new(),
             delivered_work: HashMap::new(),
+            work_hotkeys: HashMap::new(),
             completion_bins: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
             total_records: 0,
@@ -253,6 +255,14 @@ impl PerformanceTracker {
         now: Instant,
     ) {
         self.total_records = self.total_records.wrapping_add(1);
+        let previous = self
+            .work_hotkeys
+            .entry(uid)
+            .or_insert_with(|| hotkey.to_string());
+        if previous != hotkey {
+            *previous = hotkey.to_string();
+            self.delivered_work.remove(&uid);
+        }
         let window = self.windows.entry(uid).or_default();
         window.push_back((now, success, response_time));
         evict_expired(window);
@@ -497,9 +507,29 @@ impl PerformanceTracker {
             capacities_json.insert(uid.to_string(), serde_json::json!([*cap, results]));
         }
 
+        let mut delivered_work_json = serde_json::Map::new();
+        for (uid, buckets) in &self.delivered_work {
+            let entries: Vec<serde_json::Value> = buckets
+                .iter()
+                .map(|(ts, bucket)| {
+                    let elapsed = now_instant.saturating_duration_since(*ts).as_secs();
+                    let abs_secs = now_secs.saturating_sub(elapsed);
+                    serde_json::json!([
+                        abs_secs,
+                        bucket.credit,
+                        bucket.debit,
+                        bucket.fallback_priced
+                    ])
+                })
+                .collect();
+            delivered_work_json.insert(uid.to_string(), serde_json::Value::Array(entries));
+        }
+
         let data = serde_json::json!({
             "windows": windows_json,
             "capacities": capacities_json,
+            "delivered_work": delivered_work_json,
+            "work_hotkeys": self.work_hotkeys,
         });
 
         match serde_json::to_string(&data) {
@@ -585,6 +615,58 @@ impl PerformanceTracker {
             }
         }
 
+        // The ledger is already priced: restore both credit and debit at the
+        // original bucket age, including time spent offline. Legacy files
+        // without this field keep their previous empty-ledger behavior.
+        if let Some(map) = parsed.get("delivered_work").and_then(|v| v.as_object()) {
+            let work_ttl_secs = ttl_secs + DELIVERED_WORK_BUCKET_SECS;
+            for (uid_str, entries) in map {
+                let Ok(uid) = uid_str.parse::<u16>() else {
+                    continue;
+                };
+                let Some(hotkey) = parsed
+                    .get("work_hotkeys")
+                    .and_then(|keys| keys.get(uid_str))
+                    .and_then(|key| key.as_str())
+                    .filter(|key| !key.is_empty())
+                else {
+                    continue;
+                };
+                let Some(entries) = entries.as_array() else {
+                    continue;
+                };
+                let buckets: VecDeque<_> = entries
+                    .iter()
+                    .filter_map(|entry| {
+                        let (abs_secs, credit, debit, fallback_priced) =
+                            serde_json::from_value::<(u64, f64, f64, u64)>(entry.clone()).ok()?;
+                        let elapsed = now_secs.checked_sub(abs_secs)?;
+                        if elapsed > work_ttl_secs
+                            || !credit.is_finite()
+                            || credit < 0.0
+                            || !debit.is_finite()
+                            || debit < 0.0
+                        {
+                            return None;
+                        }
+                        let ts = now_instant.checked_sub(Duration::from_secs(elapsed))?;
+                        Some((
+                            ts,
+                            WorkBucket {
+                                credit,
+                                debit,
+                                fallback_priced,
+                            },
+                        ))
+                    })
+                    .collect();
+                if !buckets.is_empty() {
+                    self.delivered_work.insert(uid, buckets);
+                    self.work_hotkeys.insert(uid, hotkey.to_string());
+                }
+            }
+        }
+
         if let Some(map) = parsed.get("capacities").and_then(|v| v.as_object()) {
             for (uid_str, entry) in map {
                 let uid: u16 = match uid_str.parse() {
@@ -610,6 +692,18 @@ impl PerformanceTracker {
                 }
             }
         }
+    }
+
+    /// Validate restored credit against the startup metagraph before scoring.
+    /// A UID may have been reassigned while the validator was offline.
+    pub fn retain_work_for_hotkeys(&mut self, current: &HashMap<u16, String>) {
+        self.delivered_work.retain(|uid, _| {
+            self.work_hotkeys
+                .get(uid)
+                .is_some_and(|saved| current.get(uid) == Some(saved))
+        });
+        self.work_hotkeys
+            .retain(|uid, _| self.delivered_work.contains_key(uid));
     }
 
     pub fn snapshot(&self) -> HashMap<u16, (f64, usize)> {
@@ -683,6 +777,7 @@ impl PerformanceTracker {
         self.unit_own_best.remove(&uid);
         self.min_service.remove(&uid);
         self.delivered_work.remove(&uid);
+        self.work_hotkeys.remove(&uid);
         self.completion_bins.remove(&uid);
         self.cap_last_adjusted.remove(&uid);
         self.pending_evictions.retain(|(u, _)| *u != uid);
@@ -985,6 +1080,7 @@ mod tests {
             unit_own_best: HashMap::new(),
             min_service: HashMap::new(),
             delivered_work: HashMap::new(),
+            work_hotkeys: HashMap::new(),
             completion_bins: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
             total_records: 0,
@@ -1625,6 +1721,7 @@ mod tests {
     #[test]
     fn delivered_work_persistence_preserves_bucket_age() {
         let mut tracker = test_tracker();
+        tracker.work_hotkeys.insert(9, "hk".into());
         let half_life = Duration::from_secs(DELIVERED_WORK_HALF_LIFE_SECS);
         let started = Instant::now() - half_life;
         tracker.delivered_work.insert(
@@ -1649,6 +1746,7 @@ mod tests {
     #[test]
     fn delivered_work_persistence_expires_old_buckets() {
         let mut tracker = test_tracker();
+        tracker.work_hotkeys.insert(9, "hk".into());
         let expired =
             Instant::now() - window_ttl() - Duration::from_secs(DELIVERED_WORK_BUCKET_SECS + 60);
         tracker.delivered_work.insert(
@@ -1699,7 +1797,7 @@ mod tests {
         let expired = now - window_ttl().as_secs() - DELIVERED_WORK_BUCKET_SECS - 60;
         std::fs::write(
             &path,
-            serde_json::json!({"delivered_work": {
+            serde_json::json!({"work_hotkeys": {"9": "hk"}, "delivered_work": {
                 "invalid-uid": [[now, 100.0, 0.0, 0]],
                 "9": [
                     [now - DELIVERED_WORK_HALF_LIFE_SECS, 8.0, 2.0, 3],
@@ -1720,6 +1818,24 @@ mod tests {
         assert_eq!(restored.delivered_work[&9].len(), 1);
         assert_eq!(restored.delivered_breakdown(9), (8.0, 2.0, 3));
         assert!((restored.miner_delivered_work(9) - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn delivered_work_persistence_does_not_transfer_to_reassigned_uids() {
+        let mut tracker = test_tracker();
+        for uid in [1, 2, 3] {
+            tracker.record(uid, "original", true, 2.0, false);
+        }
+        let mut restored = round_trip_work(&mut tracker);
+        restored.retain_work_for_hotkeys(&HashMap::from([
+            (1, "original".into()),
+            (2, "replacement".into()),
+        ]));
+        assert!(restored.miner_delivered_work(1) > 0.0);
+        assert_eq!(restored.miner_delivered_work(2), 0.0);
+        assert_eq!(restored.miner_delivered_work(3), 0.0);
+        assert!(!restored.work_hotkeys.contains_key(&2));
+        assert!(!restored.work_hotkeys.contains_key(&3));
     }
 
     #[test]
