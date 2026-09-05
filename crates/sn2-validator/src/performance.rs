@@ -1843,6 +1843,38 @@ mod tests {
     }
 
     #[test]
+    fn delivered_work_persistence_does_not_refresh_fractional_age() {
+        let mut tracker = test_tracker();
+        let started = Instant::now() - Duration::from_millis(12_345);
+        tracker.record_with_time(9, "hk", true, 2.0, false, "A", started);
+        let restored = round_trip_work(&mut tracker);
+        assert!(restored.delivered_work[&9][0].0.elapsed() >= started.elapsed());
+        assert!(restored.unit_times["A"][0].0.elapsed() >= started.elapsed());
+    }
+
+    #[test]
+    fn delivered_work_persistence_requires_valid_pricing() {
+        for prices in [None, Some(serde_json::json!({"A": [[0, null]]}))] {
+            let mut tracker = test_tracker();
+            tracker.record_keyed(9, "hk", true, 2.0, false, "A");
+            let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+            tracker.persistence_path = Some(path.clone());
+            tracker.save();
+            let mut json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            json.as_object_mut().unwrap().remove("unit_times");
+            if let Some(prices) = prices {
+                json["unit_times"] = prices;
+            }
+            std::fs::write(&path, json.to_string()).unwrap();
+            let restored = PerformanceTracker::new_with_persistence(path.clone());
+            std::fs::remove_file(path).unwrap();
+            assert!(restored.delivered_work.is_empty());
+            assert_eq!(restored.sample_counts()[&9], 1);
+        }
+    }
+
+    #[test]
     fn delivered_work_persistence_expires_old_buckets() {
         let mut tracker = test_tracker();
         tracker.work_hotkeys.insert(9, "hk".into());
