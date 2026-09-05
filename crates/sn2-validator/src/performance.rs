@@ -1719,6 +1719,67 @@ mod tests {
     }
 
     #[test]
+    fn delivered_work_persistence_does_not_discount_new_failures() {
+        let mut tracker = test_tracker();
+        for _ in 0..120 {
+            tracker.record_keyed(9, "hk", true, 100.0, false, "expensive");
+        }
+        let mut restored = round_trip_work(&mut tracker);
+        for key in ["expensive", "unpriced"] {
+            let before = tracker.delivered_breakdown(9).1;
+            tracker.record_reschedule_keyed(9, key);
+            let expected = tracker.delivered_breakdown(9).1 - before;
+            let before = restored.delivered_breakdown(9).1;
+            restored.record_reschedule_keyed(9, key);
+            assert_eq!(
+                restored.delivered_breakdown(9).1 - before,
+                expected,
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn delivered_work_persistence_rejects_future_debit_without_keeping_credit() {
+        let mut tracker = test_tracker();
+        tracker.work_hotkeys.insert(9, "hk".into());
+        tracker.delivered_work.insert(
+            9,
+            VecDeque::from([
+                (
+                    Instant::now() - Duration::from_secs(120),
+                    WorkBucket {
+                        credit: 10.0,
+                        debit: 0.0,
+                        fallback_priced: 0,
+                    },
+                ),
+                (
+                    Instant::now(),
+                    WorkBucket {
+                        credit: 0.0,
+                        debit: 20.0,
+                        fallback_priced: 0,
+                    },
+                ),
+            ]),
+        );
+        let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+        tracker.persistence_path = Some(path.clone());
+        tracker.save();
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // Simulate a clock correction between saving and loading: only the
+        // newer debit is now in the future. Dropping it alone forgives debt.
+        let timestamp = json["delivered_work"]["9"][1][0].as_u64().unwrap();
+        json["delivered_work"]["9"][1][0] = (timestamp + 60).into();
+        std::fs::write(&path, json.to_string()).unwrap();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(restored.miner_delivered_work(9), 0.0);
+    }
+
+    #[test]
     fn delivered_work_persistence_preserves_bucket_age() {
         let mut tracker = test_tracker();
         tracker.work_hotkeys.insert(9, "hk".into());
