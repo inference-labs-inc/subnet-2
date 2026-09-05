@@ -497,9 +497,34 @@ impl PerformanceTracker {
             capacities_json.insert(uid.to_string(), serde_json::json!([*cap, results]));
         }
 
+        // delivered_work is the numerator of every miner weight (scoring.rs
+        // raises it to PERFORMANCE_CURVE_POWER). Persist it alongside the
+        // windows that gate it, otherwise a restart restores the sample counts
+        // but not the work, every miner scores 0.0, the weight total is 0,
+        // normalization is skipped and the owner is left as the only nonzero
+        // entry -- a 100% burn epoch.
+        let mut delivered_json = serde_json::Map::new();
+        for (uid, buckets) in &self.delivered_work {
+            let entries: Vec<serde_json::Value> = buckets
+                .iter()
+                .map(|(ts, bucket)| {
+                    let elapsed = now_instant.saturating_duration_since(*ts).as_secs();
+                    let abs_secs = now_secs.saturating_sub(elapsed);
+                    serde_json::json!([
+                        abs_secs,
+                        bucket.credit,
+                        bucket.debit,
+                        bucket.fallback_priced
+                    ])
+                })
+                .collect();
+            delivered_json.insert(uid.to_string(), serde_json::Value::Array(entries));
+        }
+
         let data = serde_json::json!({
             "windows": windows_json,
             "capacities": capacities_json,
+            "delivered_work": delivered_json,
         });
 
         match serde_json::to_string(&data) {
@@ -581,6 +606,55 @@ impl PerformanceTracker {
                 }
                 if !deque.is_empty() {
                     self.windows.insert(uid, deque);
+                }
+            }
+        }
+
+        if let Some(map) = parsed.get("delivered_work").and_then(|v| v.as_object()) {
+            for (uid_str, entries) in map {
+                let uid: u16 = match uid_str.parse() {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                let arr = match entries.as_array() {
+                    Some(a) => a,
+                    None => continue,
+                };
+                let mut deque: VecDeque<(Instant, WorkBucket)> = VecDeque::new();
+                for entry in arr {
+                    let quad = match entry.as_array() {
+                        Some(q) if q.len() == 4 => q,
+                        _ => continue,
+                    };
+                    let abs_secs = match quad[0].as_u64() {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    // Same TTL discipline as the windows above: a bucket older
+                    // than the retention horizon must not be resurrected, or a
+                    // restart would credit work the live path has already aged
+                    // out.
+                    if now_secs.saturating_sub(abs_secs) > ttl_secs {
+                        continue;
+                    }
+                    let credit = quad[1].as_f64().unwrap_or(0.0);
+                    let debit = quad[2].as_f64().unwrap_or(0.0);
+                    let fallback_priced = quad[3].as_u64().unwrap_or(0);
+                    let elapsed = now_secs.saturating_sub(abs_secs);
+                    let ts = now_instant
+                        .checked_sub(Duration::from_secs(elapsed))
+                        .unwrap_or(now_instant);
+                    deque.push_back((
+                        ts,
+                        WorkBucket {
+                            credit,
+                            debit,
+                            fallback_priced,
+                        },
+                    ));
+                }
+                if !deque.is_empty() {
+                    self.delivered_work.insert(uid, deque);
                 }
             }
         }
@@ -969,6 +1043,55 @@ impl PerformanceTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: a validator restart must not zero every miner weight.
+    ///
+    /// save() used to persist `windows` and `capacities` but not
+    /// `delivered_work`. On restart the restored windows satisfied
+    /// PERFORMANCE_MIN_SAMPLES, so every miner cleared the sample gate, but
+    /// delivered_work was empty so each scored 0.0. scoring.rs then saw a
+    /// weight total of 0, skipped normalization, and left the owner as the
+    /// only nonzero entry -- a 100% burn epoch. Observed on mainnet as 122 of
+    /// 446 epochs with owner incentive 1.0.
+    #[test]
+    fn delivered_work_survives_save_load_roundtrip() {
+        let dir = std::env::temp_dir().join(format!(
+            "sn2-perf-roundtrip-{}",
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("performance.json");
+
+        let mut tracker = PerformanceTracker::new_with_persistence(path.clone());
+        let now = Instant::now();
+        tracker.delivered_work.entry(7u16).or_default().push_back((
+            now,
+            WorkBucket {
+                credit: 12.5,
+                debit: 2.5,
+                fallback_priced: 3,
+            },
+        ));
+        tracker.save();
+
+        let restored = PerformanceTracker::new_with_persistence(path);
+        let buckets = restored
+            .delivered_work
+            .get(&7u16)
+            .expect("delivered_work must be restored after a restart");
+        assert_eq!(buckets.len(), 1, "bucket count must round-trip");
+        assert!(
+            (buckets[0].1.credit - 12.5).abs() < f64::EPSILON,
+            "credit must round-trip; it is the numerator of every miner weight"
+        );
+        assert!((buckets[0].1.debit - 2.5).abs() < f64::EPSILON);
+        assert_eq!(buckets[0].1.fallback_priced, 3);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn test_tracker() -> PerformanceTracker {
         PerformanceTracker {
