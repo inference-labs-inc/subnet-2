@@ -89,6 +89,7 @@ pub struct PerformanceTracker {
     // service time weighted by the work mix it is actually being sent.
     min_service: HashMap<u16, VecDeque<(Instant, f64)>>,
     delivered_work: HashMap<u16, VecDeque<(Instant, WorkBucket)>>,
+    work_hotkeys: HashMap<u16, String>,
     completion_bins: HashMap<u16, VecDeque<(Instant, u32)>>,
     cap_last_adjusted: HashMap<u16, Instant>,
     total_records: u64,
@@ -201,6 +202,7 @@ impl PerformanceTracker {
             unit_own_best: HashMap::new(),
             min_service: HashMap::new(),
             delivered_work: HashMap::new(),
+            work_hotkeys: HashMap::new(),
             completion_bins: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
             total_records: 0,
@@ -253,6 +255,14 @@ impl PerformanceTracker {
         now: Instant,
     ) {
         self.total_records = self.total_records.wrapping_add(1);
+        let previous = self
+            .work_hotkeys
+            .entry(uid)
+            .or_insert_with(|| hotkey.to_string());
+        if previous != hotkey {
+            *previous = hotkey.to_string();
+            self.delivered_work.remove(&uid);
+        }
         let window = self.windows.entry(uid).or_default();
         window.push_back((now, success, response_time));
         evict_expired(window);
@@ -497,9 +507,42 @@ impl PerformanceTracker {
             capacities_json.insert(uid.to_string(), serde_json::json!([*cap, results]));
         }
 
+        let mut delivered_work_json = serde_json::Map::new();
+        for (uid, buckets) in &self.delivered_work {
+            let entries: Vec<serde_json::Value> = buckets
+                .iter()
+                .map(|(ts, bucket)| {
+                    // Round age up, so repeated restarts cannot refresh work.
+                    let elapsed = now_instant
+                        .saturating_duration_since(*ts)
+                        .as_secs_f64()
+                        .ceil() as u64;
+                    let abs_secs = now_secs.saturating_sub(elapsed);
+                    serde_json::json!([
+                        abs_secs,
+                        bucket.credit,
+                        bucket.debit,
+                        bucket.fallback_priced
+                    ])
+                })
+                .collect();
+            delivered_work_json.insert(uid.to_string(), serde_json::Value::Array(entries));
+        }
+
         let data = serde_json::json!({
             "windows": windows_json,
             "capacities": capacities_json,
+            "delivered_work": delivered_work_json,
+            "work_hotkeys": self.work_hotkeys,
+            // Keep the observations used to price new failures as well as
+            // historical work; otherwise a restart discounts expensive failures
+            // to the cold-start fallback while retaining the old credit.
+            "unit_times": self.unit_times.iter().map(|(key, samples)| {
+                let samples: Vec<_> = samples.iter().map(|(ts, time)| {
+                    (now_secs.saturating_sub(now_instant.saturating_duration_since(*ts).as_secs_f64().ceil() as u64), *time)
+                }).collect();
+                (key, samples)
+            }).collect::<HashMap<_, _>>(),
         });
 
         match serde_json::to_string(&data) {
@@ -585,6 +628,91 @@ impl PerformanceTracker {
             }
         }
 
+        // The ledger is already priced: restore both credit and debit at the
+        // original bucket age, including time spent offline. Legacy files
+        // without this field keep their previous empty-ledger behavior.
+        if let (Some(map), Some(prices)) = (
+            parsed.get("delivered_work").and_then(|v| v.as_object()),
+            parsed.get("unit_times").and_then(|v| {
+                let prices =
+                    serde_json::from_value::<HashMap<String, Vec<(u64, f64)>>>(v.clone()).ok()?;
+                prices
+                    .into_iter()
+                    .map(|(key, samples)| {
+                        let mut samples = samples
+                            .into_iter()
+                            .map(|(ts, time)| {
+                                if !time.is_finite() || time <= 0.0 {
+                                    return None;
+                                }
+                                Some((
+                                    now_instant.checked_sub(Duration::from_secs(
+                                        now_secs.checked_sub(ts)?,
+                                    ))?,
+                                    time,
+                                ))
+                            })
+                            .collect::<Option<VecDeque<_>>>()?;
+                        if samples.len() > UNIT_TIMES_CAP {
+                            return None;
+                        }
+                        samples.retain(|(ts, _)| ts.elapsed() <= window_ttl());
+                        Some((key, samples))
+                    })
+                    .collect::<Option<HashMap<_, _>>>()
+            }),
+        ) {
+            self.unit_times = prices;
+            let work_ttl_secs = ttl_secs + DELIVERED_WORK_BUCKET_SECS;
+            for (uid_str, entries) in map {
+                let Ok(uid) = uid_str.parse::<u16>() else {
+                    continue;
+                };
+                let Some(hotkey) = parsed
+                    .get("work_hotkeys")
+                    .and_then(|keys| keys.get(uid_str))
+                    .and_then(|key| key.as_str())
+                    .filter(|key| !key.is_empty())
+                else {
+                    continue;
+                };
+                let Some(entries) = entries.as_array() else {
+                    continue;
+                };
+                // Reject a damaged/clock-skewed ledger as a whole. Skipping
+                // individual invalid entries could forgive only its debits.
+                let buckets = entries
+                    .iter()
+                    .map(|entry| {
+                        let (abs_secs, credit, debit, fallback_priced) =
+                            serde_json::from_value::<(u64, f64, f64, u64)>(entry.clone()).ok()?;
+                        let elapsed = now_secs.checked_sub(abs_secs)?;
+                        if !credit.is_finite() || credit < 0.0 || !debit.is_finite() || debit < 0.0
+                        {
+                            return None;
+                        }
+                        let ts = now_instant.checked_sub(Duration::from_secs(elapsed))?;
+                        Some((
+                            ts,
+                            WorkBucket {
+                                credit,
+                                debit,
+                                fallback_priced,
+                            },
+                        ))
+                    })
+                    .collect::<Option<VecDeque<_>>>();
+                let Some(mut buckets) = buckets else {
+                    continue;
+                };
+                buckets.retain(|(ts, _)| ts.elapsed().as_secs() <= work_ttl_secs);
+                if !buckets.is_empty() {
+                    self.delivered_work.insert(uid, buckets);
+                    self.work_hotkeys.insert(uid, hotkey.to_string());
+                }
+            }
+        }
+
         if let Some(map) = parsed.get("capacities").and_then(|v| v.as_object()) {
             for (uid_str, entry) in map {
                 let uid: u16 = match uid_str.parse() {
@@ -610,6 +738,18 @@ impl PerformanceTracker {
                 }
             }
         }
+    }
+
+    /// Validate restored credit against the startup metagraph before scoring.
+    /// A UID may have been reassigned while the validator was offline.
+    pub fn retain_work_for_hotkeys(&mut self, current: &HashMap<u16, String>) {
+        self.delivered_work.retain(|uid, _| {
+            self.work_hotkeys
+                .get(uid)
+                .is_some_and(|saved| current.get(uid) == Some(saved))
+        });
+        self.work_hotkeys
+            .retain(|uid, _| self.delivered_work.contains_key(uid));
     }
 
     pub fn snapshot(&self) -> HashMap<u16, (f64, usize)> {
@@ -683,6 +823,7 @@ impl PerformanceTracker {
         self.unit_own_best.remove(&uid);
         self.min_service.remove(&uid);
         self.delivered_work.remove(&uid);
+        self.work_hotkeys.remove(&uid);
         self.completion_bins.remove(&uid);
         self.cap_last_adjusted.remove(&uid);
         self.pending_evictions.retain(|(u, _)| *u != uid);
@@ -985,6 +1126,7 @@ mod tests {
             unit_own_best: HashMap::new(),
             min_service: HashMap::new(),
             delivered_work: HashMap::new(),
+            work_hotkeys: HashMap::new(),
             completion_bins: HashMap::new(),
             cap_last_adjusted: HashMap::new(),
             total_records: 0,
@@ -1596,6 +1738,339 @@ mod tests {
             "a persisted zero cap must revive as one, never a dispatch black hole"
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    fn round_trip_work(tracker: &mut PerformanceTracker) -> PerformanceTracker {
+        let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+        tracker.persistence_path = Some(path.clone());
+        tracker.save();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        std::fs::remove_file(path).unwrap();
+        restored
+    }
+
+    #[test]
+    fn delivered_work_persistence_preserves_credit_and_debit() {
+        let mut tracker = test_tracker();
+        for _ in 0..120 {
+            tracker.record_keyed(9, "hk", true, 2.0, false, "A");
+        }
+        tracker.record_reschedule_keyed(9, "A");
+        let expected = tracker.delivered_breakdown(9);
+        assert!(expected.0 > expected.1 && expected.1 > 0.0);
+        let restored = round_trip_work(&mut tracker);
+        assert_eq!(restored.sample_counts(), tracker.sample_counts());
+        assert_eq!(restored.delivered_breakdown(9), expected);
+        assert!(restored.throughput_snapshot()[&9].0 > 0.0);
+    }
+
+    #[test]
+    fn delivered_work_persistence_does_not_discount_new_failures() {
+        let mut tracker = test_tracker();
+        for _ in 0..120 {
+            tracker.record_keyed(9, "hk", true, 100.0, false, "expensive");
+        }
+        let mut restored = round_trip_work(&mut tracker);
+        for key in ["expensive", "unpriced"] {
+            let before = tracker.delivered_breakdown(9).1;
+            tracker.record_reschedule_keyed(9, key);
+            let expected = tracker.delivered_breakdown(9).1 - before;
+            let before = restored.delivered_breakdown(9).1;
+            restored.record_reschedule_keyed(9, key);
+            assert_eq!(
+                restored.delivered_breakdown(9).1 - before,
+                expected,
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn delivered_work_persistence_expires_failure_prices_after_downtime() {
+        let mut tracker = test_tracker();
+        let expired = Instant::now() - window_ttl() - Duration::from_secs(60);
+        tracker.unit_times.insert(
+            "expensive".into(),
+            vec![(expired, 100.0); UNIT_REFERENCE_MIN_SAMPLES].into(),
+        );
+        let mut restored = round_trip_work(&mut tracker);
+        let actual = [(9, "expensive"), (10, "unpriced")].map(|(uid, key)| {
+            restored.record_reschedule_keyed(uid, key);
+            restored.delivered_breakdown(uid)
+        });
+        let expected = (
+            0.0,
+            DELIVERED_WORK_FALLBACK_FLOOR * FAILURE_DEBIT_MULTIPLIER,
+            1,
+        );
+        assert_eq!(actual, [expected; 2]);
+    }
+
+    #[test]
+    fn delivered_work_persistence_prices_only_unexpired_samples() {
+        for fresh_count in [
+            UNIT_REFERENCE_MIN_SAMPLES - 1,
+            UNIT_REFERENCE_MIN_SAMPLES,
+            UNIT_TIMES_CAP,
+        ] {
+            let mut tracker = test_tracker();
+            let fresh = Instant::now() - Duration::from_secs(60);
+            let expired = fresh - window_ttl();
+            // Expired samples need not be at the front of a persisted list.
+            let mut samples = VecDeque::from(vec![(fresh, 4.0); fresh_count]);
+            samples.extend(vec![(expired, 100.0); UNIT_TIMES_CAP - fresh_count]);
+            tracker.unit_times.insert("A".into(), samples);
+            let mut restored = round_trip_work(&mut tracker);
+            assert_eq!(restored.unit_times["A"].len(), fresh_count);
+            assert!(restored.unit_times["A"]
+                .iter()
+                .all(|(ts, time)| ts.elapsed() <= window_ttl() && *time == 4.0));
+
+            let priced = fresh_count >= UNIT_REFERENCE_MIN_SAMPLES;
+            let price = if priced {
+                4.0
+            } else {
+                DELIVERED_WORK_FALLBACK_FLOOR
+            };
+            for (uid, key) in [(9, "A"), (10, "unpriced")] {
+                restored.record_reschedule_keyed(uid, key);
+                assert_eq!(
+                    restored.delivered_breakdown(uid),
+                    (
+                        0.0,
+                        price * FAILURE_DEBIT_MULTIPLIER,
+                        u64::from(!priced || key == "unpriced")
+                    ),
+                    "{fresh_count} fresh samples, {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn delivered_work_persistence_validates_prices_before_expiring_them() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let expired = now - window_ttl().as_secs() - 60;
+        for invalid in [
+            serde_json::json!([[expired, 0.0]]),
+            serde_json::json!([[expired, -1.0]]),
+            serde_json::json!([[expired, null]]),
+            serde_json::json!([[now + 60, 2.0]]),
+            serde_json::json!(vec![(expired, 2.0); UNIT_TIMES_CAP + 1]),
+        ] {
+            let mut tracker = test_tracker();
+            tracker.record_keyed(9, "hk", true, 2.0, false, "A");
+            let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+            tracker.persistence_path = Some(path.clone());
+            tracker.save();
+            let mut json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            json["unit_times"]["invalid"] = invalid;
+            std::fs::write(&path, json.to_string()).unwrap();
+            let restored = PerformanceTracker::new_with_persistence(path.clone());
+            std::fs::remove_file(path).unwrap();
+            assert!(restored.unit_times.is_empty());
+            assert!(restored.delivered_work.is_empty());
+            assert_eq!(restored.sample_counts()[&9], 1);
+        }
+    }
+
+    #[test]
+    fn delivered_work_persistence_rejects_future_debit_without_keeping_credit() {
+        let mut tracker = test_tracker();
+        tracker.work_hotkeys.insert(9, "hk".into());
+        tracker.delivered_work.insert(
+            9,
+            VecDeque::from([
+                (
+                    Instant::now() - Duration::from_secs(120),
+                    WorkBucket {
+                        credit: 10.0,
+                        debit: 0.0,
+                        fallback_priced: 0,
+                    },
+                ),
+                (
+                    Instant::now(),
+                    WorkBucket {
+                        credit: 0.0,
+                        debit: 20.0,
+                        fallback_priced: 0,
+                    },
+                ),
+            ]),
+        );
+        let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+        tracker.persistence_path = Some(path.clone());
+        tracker.save();
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // Simulate a clock correction between saving and loading: only the
+        // newer debit is now in the future. Dropping it alone forgives debt.
+        let timestamp = json["delivered_work"]["9"][1][0].as_u64().unwrap();
+        json["delivered_work"]["9"][1][0] = (timestamp + 60).into();
+        std::fs::write(&path, json.to_string()).unwrap();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(restored.miner_delivered_work(9), 0.0);
+    }
+
+    #[test]
+    fn delivered_work_persistence_preserves_bucket_age() {
+        let mut tracker = test_tracker();
+        tracker.work_hotkeys.insert(9, "hk".into());
+        let half_life = Duration::from_secs(DELIVERED_WORK_HALF_LIFE_SECS);
+        let started = Instant::now() - half_life;
+        tracker.delivered_work.insert(
+            9,
+            VecDeque::from([(
+                started,
+                WorkBucket {
+                    credit: 8.0,
+                    debit: 2.0,
+                    fallback_priced: 3,
+                },
+            )]),
+        );
+        let restored = round_trip_work(&mut tracker);
+        let (restored_start, _) = restored.delivered_work[&9].front().unwrap();
+        let age = restored_start.elapsed();
+        assert!(age >= half_life - Duration::from_secs(1));
+        assert!(age <= started.elapsed() + Duration::from_secs(1));
+        assert!((restored.miner_delivered_work(9) - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn delivered_work_persistence_does_not_refresh_fractional_age() {
+        let mut tracker = test_tracker();
+        let started = Instant::now() - Duration::from_millis(12_345);
+        tracker.record_with_time(9, "hk", true, 2.0, false, "A", started);
+        let restored = round_trip_work(&mut tracker);
+        assert!(restored.delivered_work[&9][0].0.elapsed() >= started.elapsed());
+        assert!(restored.unit_times["A"][0].0.elapsed() >= started.elapsed());
+    }
+
+    #[test]
+    fn delivered_work_persistence_requires_valid_pricing() {
+        for prices in [None, Some(serde_json::json!({"A": [[0, null]]}))] {
+            let mut tracker = test_tracker();
+            tracker.record_keyed(9, "hk", true, 2.0, false, "A");
+            let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+            tracker.persistence_path = Some(path.clone());
+            tracker.save();
+            let mut json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            json.as_object_mut().unwrap().remove("unit_times");
+            if let Some(prices) = prices {
+                json["unit_times"] = prices;
+            }
+            std::fs::write(&path, json.to_string()).unwrap();
+            let restored = PerformanceTracker::new_with_persistence(path.clone());
+            std::fs::remove_file(path).unwrap();
+            assert!(restored.delivered_work.is_empty());
+            assert_eq!(restored.sample_counts()[&9], 1);
+        }
+    }
+
+    #[test]
+    fn delivered_work_persistence_expires_old_buckets() {
+        let mut tracker = test_tracker();
+        tracker.work_hotkeys.insert(9, "hk".into());
+        let expired =
+            Instant::now() - window_ttl() - Duration::from_secs(DELIVERED_WORK_BUCKET_SECS + 60);
+        tracker.delivered_work.insert(
+            9,
+            VecDeque::from([(
+                expired,
+                WorkBucket {
+                    credit: 8.0,
+                    debit: 2.0,
+                    fallback_priced: 3,
+                },
+            )]),
+        );
+        let restored = round_trip_work(&mut tracker);
+        assert!(!restored.delivered_work.contains_key(&9));
+    }
+
+    #[test]
+    fn delivered_work_persistence_loads_legacy_files() {
+        let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "windows": {"9": [[now, true, 2.0]]},
+                "capacities": {"9": [4, [true]]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(restored.sample_counts()[&9], 1);
+        assert_eq!(restored.adaptive_caps[&9], 4);
+        assert!(restored.delivered_work.is_empty());
+    }
+
+    #[test]
+    fn delivered_work_persistence_accounts_for_downtime_and_rejects_invalid_buckets() {
+        let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let expired = now - window_ttl().as_secs() - DELIVERED_WORK_BUCKET_SECS - 60;
+        std::fs::write(
+            &path,
+            serde_json::json!({"unit_times": {}, "work_hotkeys": {"9": "hk", "10": "other"}, "delivered_work": {
+                "invalid-uid": [[now, 100.0, 0.0, 0]],
+                "9": [
+                    [expired, 100.0, 0.0, 0],
+                    [now - DELIVERED_WORK_HALF_LIFE_SECS, 8.0, 2.0, 3]
+                ],
+                "10": [
+                    [now - DELIVERED_WORK_HALF_LIFE_SECS, 8.0, 2.0, 3],
+                    [now + 60, 100.0, 0.0, 0],
+                    [now, -1.0, 0.0, 0],
+                    [now, 1.0, -1.0, 0],
+                    [now, null, 0.0, 0],
+                    [now, 1.0]
+                ]
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(restored.delivered_work.len(), 1);
+        assert_eq!(restored.delivered_work[&9].len(), 1);
+        assert_eq!(restored.delivered_breakdown(9), (8.0, 2.0, 3));
+        assert!((restored.miner_delivered_work(9) - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn delivered_work_persistence_does_not_transfer_to_reassigned_uids() {
+        let mut tracker = test_tracker();
+        for uid in [1, 2, 3] {
+            tracker.record(uid, "original", true, 2.0, false);
+        }
+        let mut restored = round_trip_work(&mut tracker);
+        restored.retain_work_for_hotkeys(&HashMap::from([
+            (1, "original".into()),
+            (2, "replacement".into()),
+        ]));
+        assert!(restored.miner_delivered_work(1) > 0.0);
+        assert_eq!(restored.miner_delivered_work(2), 0.0);
+        assert_eq!(restored.miner_delivered_work(3), 0.0);
+        assert!(!restored.work_hotkeys.contains_key(&2));
+        assert!(!restored.work_hotkeys.contains_key(&3));
     }
 
     #[test]
