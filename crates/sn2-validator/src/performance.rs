@@ -654,9 +654,17 @@ impl PerformanceTracker {
                     let debit = quad[2].as_f64().unwrap_or(0.0);
                     let fallback_priced = quad[3].as_u64().unwrap_or(0);
                     let elapsed = now_secs.saturating_sub(abs_secs);
-                    let ts = now_instant
-                        .checked_sub(Duration::from_secs(elapsed))
-                        .unwrap_or(now_instant);
+                    // Unreachable on unix: `Instant` is a `Timespec` whose
+                    // `tv_sec` is i64, so subtraction only fails on i64
+                    // underflow, and `elapsed` is already bounded by the TTL
+                    // check above. Reject rather than fall back to `now_instant`
+                    // anyway: on a platform whose monotonic clock floors at its
+                    // origin, that fallback would stamp an hours-old bucket as
+                    // fresh and hold it a full retention window past expiry.
+                    let ts = match now_instant.checked_sub(Duration::from_secs(elapsed)) {
+                        Some(ts) => ts,
+                        None => continue,
+                    };
                     deque.push_back((
                         ts,
                         WorkBucket {
