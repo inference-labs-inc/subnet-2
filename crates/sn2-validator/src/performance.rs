@@ -639,7 +639,7 @@ impl PerformanceTracker {
                 prices
                     .into_iter()
                     .map(|(key, samples)| {
-                        let samples = samples
+                        let mut samples = samples
                             .into_iter()
                             .map(|(ts, time)| {
                                 if !time.is_finite() || time <= 0.0 {
@@ -653,7 +653,11 @@ impl PerformanceTracker {
                                 ))
                             })
                             .collect::<Option<VecDeque<_>>>()?;
-                        (samples.len() <= UNIT_TIMES_CAP).then_some((key, samples))
+                        if samples.len() > UNIT_TIMES_CAP {
+                            return None;
+                        }
+                        samples.retain(|(ts, _)| ts.elapsed() <= window_ttl());
+                        Some((key, samples))
                     })
                     .collect::<Option<HashMap<_, _>>>()
             }),
