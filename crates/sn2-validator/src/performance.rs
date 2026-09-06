@@ -1782,6 +1782,99 @@ mod tests {
     }
 
     #[test]
+    fn delivered_work_persistence_expires_failure_prices_after_downtime() {
+        let mut tracker = test_tracker();
+        let expired = Instant::now() - window_ttl() - Duration::from_secs(60);
+        tracker.unit_times.insert(
+            "expensive".into(),
+            vec![(expired, 100.0); UNIT_REFERENCE_MIN_SAMPLES].into(),
+        );
+        let mut restored = round_trip_work(&mut tracker);
+        let actual = [(9, "expensive"), (10, "unpriced")].map(|(uid, key)| {
+            restored.record_reschedule_keyed(uid, key);
+            restored.delivered_breakdown(uid)
+        });
+        let expected = (
+            0.0,
+            DELIVERED_WORK_FALLBACK_FLOOR * FAILURE_DEBIT_MULTIPLIER,
+            1,
+        );
+        assert_eq!(actual, [expected; 2]);
+    }
+
+    #[test]
+    fn delivered_work_persistence_prices_only_unexpired_samples() {
+        for fresh_count in [
+            UNIT_REFERENCE_MIN_SAMPLES - 1,
+            UNIT_REFERENCE_MIN_SAMPLES,
+            UNIT_TIMES_CAP,
+        ] {
+            let mut tracker = test_tracker();
+            let fresh = Instant::now() - Duration::from_secs(60);
+            let expired = fresh - window_ttl();
+            // Expired samples need not be at the front of a persisted list.
+            let mut samples = VecDeque::from(vec![(fresh, 4.0); fresh_count]);
+            samples.extend(vec![(expired, 100.0); UNIT_TIMES_CAP - fresh_count]);
+            tracker.unit_times.insert("A".into(), samples);
+            let mut restored = round_trip_work(&mut tracker);
+            assert_eq!(restored.unit_times["A"].len(), fresh_count);
+            assert!(restored.unit_times["A"]
+                .iter()
+                .all(|(ts, time)| ts.elapsed() <= window_ttl() && *time == 4.0));
+
+            let priced = fresh_count >= UNIT_REFERENCE_MIN_SAMPLES;
+            let price = if priced {
+                4.0
+            } else {
+                DELIVERED_WORK_FALLBACK_FLOOR
+            };
+            for (uid, key) in [(9, "A"), (10, "unpriced")] {
+                restored.record_reschedule_keyed(uid, key);
+                assert_eq!(
+                    restored.delivered_breakdown(uid),
+                    (
+                        0.0,
+                        price * FAILURE_DEBIT_MULTIPLIER,
+                        u64::from(!priced || key == "unpriced")
+                    ),
+                    "{fresh_count} fresh samples, {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn delivered_work_persistence_validates_prices_before_expiring_them() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let expired = now - window_ttl().as_secs() - 60;
+        for invalid in [
+            serde_json::json!([[expired, 0.0]]),
+            serde_json::json!([[expired, -1.0]]),
+            serde_json::json!([[expired, null]]),
+            serde_json::json!([[now + 60, 2.0]]),
+            serde_json::json!(vec![(expired, 2.0); UNIT_TIMES_CAP + 1]),
+        ] {
+            let mut tracker = test_tracker();
+            tracker.record_keyed(9, "hk", true, 2.0, false, "A");
+            let path = std::env::temp_dir().join(format!("sn2-work-{}.json", uuid::Uuid::new_v4()));
+            tracker.persistence_path = Some(path.clone());
+            tracker.save();
+            let mut json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            json["unit_times"]["invalid"] = invalid;
+            std::fs::write(&path, json.to_string()).unwrap();
+            let restored = PerformanceTracker::new_with_persistence(path.clone());
+            std::fs::remove_file(path).unwrap();
+            assert!(restored.unit_times.is_empty());
+            assert!(restored.delivered_work.is_empty());
+            assert_eq!(restored.sample_counts()[&9], 1);
+        }
+    }
+
+    #[test]
     fn delivered_work_persistence_rejects_future_debit_without_keeping_credit() {
         let mut tracker = test_tracker();
         tracker.work_hotkeys.insert(9, "hk".into());
