@@ -116,6 +116,17 @@ fn window_ttl() -> Duration {
     Duration::from_secs(VERIFICATION_WINDOW_BLOCKS * BLOCK_TIME_SECS)
 }
 
+/// Retention horizon for `delivered_work` buckets.
+///
+/// A bucket accumulates for `DELIVERED_WORK_BUCKET_SECS` before it stops being
+/// written to, so it must outlive `window_ttl()` by that much for the oldest
+/// bucket to remain fully weighted. Prune, scoring and persistence must all use
+/// this same horizon: if the load path is shorter, a restart silently discards
+/// work the running validator still counts and miner weights drop.
+fn delivered_work_ttl() -> Duration {
+    window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS)
+}
+
 fn evict_expired(window: &mut VecDeque<WindowEntry>) {
     let ttl = window_ttl();
     while let Some((ts, _, _)) = window.front() {
@@ -161,7 +172,7 @@ fn push_bucketed(
             },
         )),
     }
-    let ttl = window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS);
+    let ttl = delivered_work_ttl();
     while let Some((start, _)) = buckets.front() {
         if now.duration_since(*start) > ttl {
             buckets.pop_front();
@@ -566,6 +577,7 @@ impl PerformanceTracker {
             Err(_) => return,
         };
         let ttl_secs = window_ttl().as_secs();
+        let delivered_ttl_secs = delivered_work_ttl().as_secs();
 
         if let Some(map) = parsed.get("windows").and_then(|v| v.as_object()) {
             for (uid_str, entries) in map {
@@ -630,11 +642,12 @@ impl PerformanceTracker {
                         Some(v) => v,
                         None => continue,
                     };
-                    // Same TTL discipline as the windows above: a bucket older
-                    // than the retention horizon must not be resurrected, or a
-                    // restart would credit work the live path has already aged
-                    // out.
-                    if now_secs.saturating_sub(abs_secs) > ttl_secs {
+                    // Must match the LIVE horizon (delivered_work_ttl), not
+                    // window_ttl: buckets keep accruing for
+                    // DELIVERED_WORK_BUCKET_SECS, so the shorter window horizon
+                    // would drop buckets the running validator still counts and
+                    // silently cut miner weights on restart.
+                    if now_secs.saturating_sub(abs_secs) > delivered_ttl_secs {
                         continue;
                     }
                     let credit = quad[1].as_f64().unwrap_or(0.0);
@@ -716,7 +729,7 @@ impl PerformanceTracker {
             Some(b) => b,
             None => return 0.0,
         };
-        let ttl = window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS);
+        let ttl = delivered_work_ttl();
         let half_life = DELIVERED_WORK_HALF_LIFE_SECS as f64;
         let mut work = 0.0;
         for (start, bucket) in buckets {
@@ -734,7 +747,7 @@ impl PerformanceTracker {
             Some(b) => b,
             None => return (0.0, 0.0, 0),
         };
-        let ttl = window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS);
+        let ttl = delivered_work_ttl();
         let mut credit = 0.0;
         let mut debit = 0.0;
         let mut fallback = 0u64;
@@ -1043,6 +1056,62 @@ impl PerformanceTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: a bucket still inside the LIVE retention horizon must
+    /// survive a restart.
+    ///
+    /// The load path originally reused `window_ttl()`, but delivered_work is
+    /// retained for `window_ttl() + DELIVERED_WORK_BUCKET_SECS` because a
+    /// bucket keeps accruing for one bucket-width. Anything landing in that gap
+    /// was counted by the running validator but dropped on restore, silently
+    /// reducing miner weights. Both paths now use `delivered_work_ttl()`.
+    #[test]
+    fn delivered_work_retention_matches_live_horizon() {
+        assert_eq!(
+            delivered_work_ttl(),
+            window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS),
+            "persistence horizon must equal the live prune/scoring horizon"
+        );
+        assert!(
+            delivered_work_ttl() > window_ttl(),
+            "delivered_work outlives the sample window by one bucket width"
+        );
+
+        let dir = std::env::temp_dir().join(format!(
+            "sn2-perf-horizon-{}",
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("performance.json");
+
+        // A bucket older than window_ttl() but inside delivered_work_ttl():
+        // the exact range the original patch discarded.
+        let gap = window_ttl() + Duration::from_secs(DELIVERED_WORK_BUCKET_SECS / 2);
+        let mut tracker = PerformanceTracker::new_with_persistence(path.clone());
+        let ts = Instant::now()
+            .checked_sub(gap)
+            .expect("clock far enough from boot");
+        tracker.delivered_work.entry(9u16).or_default().push_back((
+            ts,
+            WorkBucket {
+                credit: 4.0,
+                debit: 0.0,
+                fallback_priced: 0,
+            },
+        ));
+        tracker.save();
+
+        let restored = PerformanceTracker::new_with_persistence(path);
+        assert!(
+            restored.delivered_work.contains_key(&9u16),
+            "bucket inside the live horizon must survive restart"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Regression: a validator restart must not zero every miner weight.
     ///
