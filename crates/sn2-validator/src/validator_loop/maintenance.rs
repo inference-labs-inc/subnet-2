@@ -612,8 +612,22 @@ impl ValidatorLoop {
             &coldstart,
         );
 
-        if weights.iter().all(|&w| w == 0) {
-            info!("no weights to set, skipping");
+        // A commit in which every miner is zero is a state-loss signal, not a
+        // scoring outcome: the owner entry alone normalizes to a full burn on
+        // chain, and a plain all-zero check never catches it because the owner
+        // weight is nonzero. Hold the previously committed weights instead, and
+        // surface how many miners cleared the sample gate while reporting no
+        // delivered work, which is the signature of performance state that did
+        // not survive a restart.
+        if miner_weight_total(&weight_uids, &weights, owner_uid) == 0 {
+            let starved = snap
+                .values()
+                .filter(|(work, _, count)| *count >= PERFORMANCE_MIN_SAMPLES && *work <= 0.0)
+                .count();
+            warn!(
+                uids = weight_uids.len(),
+                starved, "every miner weight is zero, holding previously committed weights"
+            );
             return Ok(());
         }
 
@@ -676,4 +690,44 @@ fn process_rss_mb() -> u64 {
         })
         .map(|pages| pages * 4096 / (1024 * 1024))
         .unwrap_or(0)
+}
+
+/// Total weight assigned to everyone except the subnet owner.
+///
+/// The weight setter must never publish a commit in which this is zero: the
+/// owner entry normalizes to the whole emission and the epoch burns. With no
+/// owner this is the sum of every weight, so the check it guards is equivalent
+/// to rejecting an all-zero commit.
+fn miner_weight_total(uids: &[u16], weights: &[u16], owner_uid: Option<u16>) -> u64 {
+    uids.iter()
+        .zip(weights.iter())
+        .filter(|(uid, _)| Some(**uid) != owner_uid)
+        .map(|(_, &w)| w as u64)
+        .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::miner_weight_total;
+
+    #[test]
+    fn miner_weight_total_is_zero_when_only_the_owner_scores() {
+        let uids = [0u16, 1, 2, 3];
+        let weights = [52_428u16, 0, 0, 0];
+        assert_eq!(miner_weight_total(&uids, &weights, Some(0)), 0);
+    }
+
+    #[test]
+    fn miner_weight_total_is_nonzero_when_any_miner_scores() {
+        let uids = [0u16, 1, 2, 3];
+        let weights = [52_428u16, 0, 7, 0];
+        assert_eq!(miner_weight_total(&uids, &weights, Some(0)), 7);
+    }
+
+    #[test]
+    fn miner_weight_total_without_an_owner_sums_every_weight() {
+        let uids = [1u16, 2, 3];
+        assert_eq!(miner_weight_total(&uids, &[0, 0, 0], None), 0);
+        assert_eq!(miner_weight_total(&uids, &[0, 5, 0], None), 5);
+    }
 }

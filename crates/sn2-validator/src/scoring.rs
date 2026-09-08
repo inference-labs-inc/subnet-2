@@ -363,6 +363,40 @@ mod tests {
         assert!((owner_ratio - 0.8).abs() < 0.01);
     }
 
+    /// A restart can restore the sample windows that gate scoring without
+    /// restoring the delivered work those weights are computed from. Every
+    /// miner then clears PERFORMANCE_MIN_SAMPLES and still scores 0.0, the
+    /// weight total is zero, normalization is skipped, and the owner is left
+    /// as the only nonzero entry: the whole emission burns. The weight setter
+    /// rejects a commit in this shape rather than publishing it.
+    #[test]
+    fn compute_throughput_weights_owner_only_when_work_is_absent() {
+        let mgr = test_manager();
+        let mut snap = HashMap::new();
+        for uid in [1u16, 2, 3] {
+            snap.insert(uid, (0.0, 1, PERFORMANCE_MIN_SAMPLES));
+        }
+        let (uids, weights) = mgr.compute_throughput_weights(
+            &[0, 1, 2, 3],
+            &snap,
+            Some(0),
+            &empty_regions(),
+            &empty_set(),
+            &empty_set(),
+        );
+        let miner_total: u64 = uids
+            .iter()
+            .zip(&weights)
+            .filter(|(uid, _)| **uid != 0)
+            .map(|(_, &w)| w as u64)
+            .sum();
+        assert_eq!(miner_total, 0, "no miner can score without delivered work");
+        assert!(
+            weights[0] > 0,
+            "the owner is the only nonzero entry, which burns the epoch"
+        );
+    }
+
     #[test]
     fn compute_throughput_weights_below_min_samples_is_zero() {
         let mgr = test_manager();
