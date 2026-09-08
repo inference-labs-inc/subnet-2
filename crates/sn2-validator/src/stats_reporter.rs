@@ -272,6 +272,7 @@ impl StatsReporter {
                 let direction = match e.direction {
                     CapDirection::Ramp => "ramp",
                     CapDirection::Backoff => "backoff",
+                    CapDirection::PressureTrim => "pressure_trim",
                     CapDirection::Evict => "evict",
                     CapDirection::Rehab => "rehab",
                 };

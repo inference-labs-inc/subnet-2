@@ -56,6 +56,10 @@ const MAX_BUFFERED_CAP_EVENTS: usize = 4096;
 pub enum CapDirection {
     Ramp,
     Backoff,
+    /// Global trim applied under host memory pressure, distinct from the
+    /// controller's demand-tracking backoff so pressure activity is
+    /// attributable in capacity telemetry.
+    PressureTrim,
     #[allow(dead_code)]
     Evict,
     Rehab,
@@ -110,7 +114,14 @@ const UNIT_REFERENCE_MIN_SAMPLES: usize = 8;
 const DELIVERED_WORK_FALLBACK_FLOOR: f64 = 1.0;
 const REL_SPEED_WINDOW: usize = 64;
 
-const RESTORED_CAP_MAX: usize = 32;
+/// Upper clamp on adaptive caps restored from disk. The clamp exists to
+/// bound damage from stale persisted state, but since caps became
+/// knee-targeted a persisted value is a measured equilibrium, and clamping
+/// a large fleet to a small constant on every validator restart forces tens
+/// of minutes of fleet-wide re-ramping at the step cadence. Sized above any
+/// knee depth observed in production while still bounding a corrupt or
+/// ancient snapshot.
+const RESTORED_CAP_MAX: usize = 512;
 
 fn window_ttl() -> Duration {
     Duration::from_secs(VERIFICATION_WINDOW_BLOCKS * BLOCK_TIME_SECS)
@@ -442,7 +453,7 @@ impl PerformanceTracker {
                 self.cap_events.push(CapEvent {
                     uid: *uid,
                     hotkey,
-                    direction: CapDirection::Backoff,
+                    direction: CapDirection::PressureTrim,
                     cap_from: *cap,
                     cap_to: new_cap,
                     success_rate: 0.0,
@@ -814,6 +825,21 @@ impl PerformanceTracker {
         times[times.len() / 2]
     }
 
+    /// Whether the miner's completion bins span at least one full rate
+    /// window, so the delivered-rate estimate reflects sustained delivery
+    /// rather than the first seconds after a validator restart. Bins are
+    /// in-memory only: after a restart the estimate starts near zero and
+    /// takes a window to warm, during which a restored equilibrium cap
+    /// would otherwise be trimmed toward a meaningless target.
+    fn rate_window_warm(&self, uid: u16, now: Instant) -> bool {
+        let window_len = CAPACITY_RATE_BIN_SECS * CAPACITY_RATE_WINDOW_BINS as u64;
+        self.completion_bins
+            .get(&uid)
+            .and_then(|bins| bins.front())
+            .map(|(start, _)| now.duration_since(*start).as_secs() >= window_len)
+            .unwrap_or(false)
+    }
+
     fn update_adaptive_cap(&mut self, uid: u16, hotkey: &str, now: Instant) {
         let due = self
             .cap_last_adjusted
@@ -827,6 +853,7 @@ impl PerformanceTracker {
             return;
         }
         self.cap_last_adjusted.insert(uid, now);
+        let warm = self.rate_window_warm(uid, now);
         let rate = self.delivered_rate_estimate(uid, now);
         let uncongested = self.uncongested_service_time(uid);
 
@@ -849,7 +876,7 @@ impl PerformanceTracker {
         let target_cap = target.round() as usize;
         let cap_to = if target_cap > cap_from {
             (cap_from + step).min(target_cap)
-        } else if (cap_from as f64) > target * (1.0 + CAPACITY_TARGET_DEADBAND) {
+        } else if warm && (cap_from as f64) > target * (1.0 + CAPACITY_TARGET_DEADBAND) {
             cap_from.saturating_sub(step).max(target_cap).max(1)
         } else {
             cap_from
@@ -1578,6 +1605,54 @@ mod tests {
         tracker.reset_uid(1, "hk");
         let remaining = tracker.drain_cap_events();
         assert!(remaining.iter().all(|e| e.hotkey == "hk_new"));
+    }
+
+    #[test]
+    fn restored_caps_preserve_measured_equilibria() {
+        let dir = std::env::temp_dir().join(format!("sn2_perf_clamp_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("performance_tracker.json");
+        let mut tracker = PerformanceTracker::new_with_persistence(path.clone());
+        tracker.record_keyed(5, "hk", true, 2.0, false, "A");
+        tracker.record_keyed(6, "hk2", true, 2.0, false, "A");
+        tracker.adaptive_caps.insert(5, 400);
+        tracker.adaptive_caps.insert(6, 100_000);
+        tracker.save();
+        let restored = PerformanceTracker::new_with_persistence(path.clone());
+        assert_eq!(
+            restored.adaptive_caps.get(&5).copied(),
+            Some(400),
+            "a knee-targeted equilibrium must survive a validator restart"
+        );
+        assert_eq!(
+            restored.adaptive_caps.get(&6).copied(),
+            Some(RESTORED_CAP_MAX),
+            "corrupt or ancient snapshots stay bounded"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn restored_cap_holds_through_rate_warmup() {
+        let mut tracker = test_tracker();
+        tracker.adaptive_caps.insert(1, 300);
+        let base = Instant::now();
+        // Under one rate window of history: the delivered-rate estimate is
+        // still warming, so a restored equilibrium cap must not be trimmed
+        // toward the not-yet-meaningful target.
+        let mid = drive_rate(&mut tracker, 1, 2, 60, base);
+        assert_eq!(
+            tracker.cap_snapshot().get(&1).copied(),
+            Some(300),
+            "cap must hold while the rate window warms"
+        );
+        // Once the window is warm, genuine low demand tracks the cap down.
+        drive_rate(&mut tracker, 1, 2, 600, mid + Duration::from_secs(1));
+        let cap = tracker.cap_snapshot().get(&1).copied().unwrap_or(0);
+        assert!(
+            cap < 300,
+            "cap {cap} must track demand once the estimate is warm"
+        );
     }
 
     #[test]
