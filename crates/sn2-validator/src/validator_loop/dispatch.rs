@@ -94,6 +94,28 @@ impl ValidatorLoop {
         self.refresh_dispatch_cache_if_stale(&queryable_uids).await;
         let adaptive_timeout = self.dispatch_cache.adaptive_timeout;
 
+        // A retry is only steered away from the miner that failed it while
+        // some other miner can actually take work this round. Registry
+        // eligibility alone is too broad a guard: with every alternative at
+        // capacity, deferring the retry buys nothing but latency, since the
+        // failed miner is the only one with a free slot. The avoidance
+        // check fires inside the failed miner's own slot loop, so requiring
+        // more than one uid with free capacity guarantees an alternative.
+        let uids_with_free_slots = queryable_uids
+            .iter()
+            .filter(|uid| {
+                let cap = self
+                    .dispatch_cache
+                    .capacities
+                    .get(uid)
+                    .copied()
+                    .unwrap_or(1);
+                let active = self.miner_active_count.get(uid).copied().unwrap_or(0);
+                active < cap
+            })
+            .count();
+        let avoid_last_failed = uids_with_free_slots > 1;
+
         for uid in queryable_uids {
             if dispatch_budget == 0 {
                 break;
@@ -114,7 +136,7 @@ impl ValidatorLoop {
                 let active = self.miner_active_count.get(&uid).copied().unwrap_or(0);
                 let was_at_capacity = active + 1 >= cap;
 
-                let mut dispatched = match self.select_request(uid).await {
+                let mut dispatched = match self.select_request(uid, avoid_last_failed).await {
                     Some(d) => d,
                     None => break,
                 };
@@ -200,7 +222,20 @@ impl ValidatorLoop {
         self.dispatch_cache.api_eligible = self.compute_api_eligible_from_uids(queryable_uids);
         self.dispatch_cache.authenticated = {
             let guard = self.miner_client.read().await;
-            guard.authenticated_hotkeys().await
+            let mut authenticated = guard.authenticated_hotkeys().await;
+            if let Ok(stats) = guard.connection_stats().await {
+                // Axon IPs are IPv4-only per is_valid_ip, so plain ip:port
+                // matches the transport's address key format.
+                let addr_of: HashMap<&str, String> = self
+                    .config
+                    .metagraph
+                    .neurons
+                    .iter()
+                    .map(|n| (n.hotkey.as_str(), format!("{}:{}", n.axon_ip, n.axon_port)))
+                    .collect();
+                retain_live_hotkeys(&mut authenticated, &stats, &addr_of);
+            }
+            authenticated
         };
         self.dispatch_cache.refreshed_at = Some(Instant::now());
     }
@@ -230,8 +265,19 @@ impl ValidatorLoop {
             .collect()
     }
 
-    async fn select_request(&mut self, uid: u16) -> Option<DispatchedRequest> {
+    async fn select_request(
+        &mut self,
+        uid: u16,
+        avoid_last_failed: bool,
+    ) -> Option<DispatchedRequest> {
         if let Some(rwr) = self.rwr_queue.pop_front() {
+            // A retry goes to any miner but the one that just failed it, so a
+            // request rescheduled off a dead or broken peer cannot burn its
+            // whole retry budget there before another miner sees it.
+            if avoid_last_failed && rwr.last_failed_uid == Some(uid) {
+                self.rwr_queue.push_back(rwr);
+                return None;
+            }
             let circuit = match self.circuit_store.ensure_circuit(&rwr.circuit_id).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -299,6 +345,13 @@ impl ValidatorLoop {
                     .map(|d| (d, RunSource::Benchmark))
             })
         {
+            if avoid_last_failed && dslice.last_failed_uid == Some(uid) {
+                match queue_source {
+                    RunSource::Api => self.api_dslice_queue.push_back(dslice),
+                    RunSource::Benchmark => self.stacked_dslice_queue.push_back(dslice),
+                }
+                return None;
+            }
             let inputs_json = match sn2_types::decode_msgpack_to_json(&dslice.inputs) {
                 Ok(v) => v,
                 Err(e) => {
@@ -511,5 +564,78 @@ impl ValidatorLoop {
                 is_valid_ip(&n.axon_ip)
             })
             .collect()
+    }
+}
+
+/// Drops hotkeys whose transport connection is already closed from the
+/// reachable set. The authenticated set reflects registry bindings, which
+/// outlive a dead connection until the next registry prune (up to a minute);
+/// during that window a restarted miner would otherwise stay in dispatch
+/// rotation and every request routed to it would fail inside the transport,
+/// debiting the miner and burning retries. Permissive on absent stats
+/// entries so a transient miss can never stall dispatch.
+fn retain_live_hotkeys(
+    authenticated: &mut HashSet<String>,
+    stats: &HashMap<String, String>,
+    addr_of: &HashMap<&str, String>,
+) {
+    authenticated.retain(|hk| {
+        let addr = match addr_of.get(hk.as_str()) {
+            Some(a) => a,
+            None => return true,
+        };
+        match stats.get(&format!("connection_{addr}")) {
+            Some(status) => status == "active",
+            None => true,
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retain_live_hotkeys;
+    use std::collections::{HashMap, HashSet};
+
+    fn setup() -> (HashSet<String>, HashMap<&'static str, String>) {
+        let authenticated: HashSet<String> = ["hk_live", "hk_dead", "hk_unknown"]
+            .map(String::from)
+            .into();
+        let addr_of: HashMap<&str, String> = [
+            ("hk_live", "1.1.1.1:8000".to_string()),
+            ("hk_dead", "2.2.2.2:8000".to_string()),
+            ("hk_unknown", "3.3.3.3:8000".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        (authenticated, addr_of)
+    }
+
+    #[test]
+    fn closed_connections_are_dropped_and_active_kept() {
+        let (mut authenticated, addr_of) = setup();
+        let stats: HashMap<String, String> = [
+            ("connection_1.1.1.1:8000", "active"),
+            (
+                "connection_2.2.2.2:8000",
+                "closed(ApplicationClosed { .. })",
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        retain_live_hotkeys(&mut authenticated, &stats, &addr_of);
+        assert!(authenticated.contains("hk_live"));
+        assert!(!authenticated.contains("hk_dead"));
+        // No stats entry for this address: keep, never stall dispatch.
+        assert!(authenticated.contains("hk_unknown"));
+    }
+
+    #[test]
+    fn hotkey_without_metagraph_addr_is_kept() {
+        let (mut authenticated, _) = setup();
+        let addr_of: HashMap<&str, String> = HashMap::new();
+        let stats: HashMap<String, String> = HashMap::new();
+        retain_live_hotkeys(&mut authenticated, &stats, &addr_of);
+        assert_eq!(authenticated.len(), 3);
     }
 }
